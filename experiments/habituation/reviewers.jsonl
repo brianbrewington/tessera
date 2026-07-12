@@ -1,0 +1,7 @@
+# The reviewer roster. `run.py --roster reviewers.jsonl` runs every enabled entry.
+# Adding a reviewer is ONE line here — no code change. `# `-prefixed lines are ignored.
+# Fields: label, model, endpoint, api(ollama|openai), size, quant, host, enabled.
+{"label": "30b", "model": "qwen3-coder:30b",        "endpoint": "http://127.0.0.1:11435",       "api": "ollama", "size": "30B-A3B", "quant": "q4", "host": "linux-x299 (2x RTX 6000, via SSH tunnel)", "enabled": true}
+{"label": "80b", "model": "qwen3-coder-next:q8_0",  "endpoint": "http://127.0.0.1:11434",       "api": "ollama", "size": "80B-A3B", "quant": "q8", "host": "mac-studio (M2 Ultra)", "enabled": true}
+# Example: a tiny Qwen on a Jetson later (llama.cpp / vLLM speak the OpenAI api). Flip enabled -> true when it exists:
+{"label": "jetson-tiny", "model": "qwen2.5-coder:1.5b", "endpoint": "http://192.168.86.50:8080/v1", "api": "openai", "size": "1.5B", "quant": "q4", "host": "jetson (the size-ladder floor)", "enabled": false}

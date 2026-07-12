@@ -1,0 +1,35 @@
+## I LIKE
+
+- **`§1–§2` define a falsifiable product bet.** “Apt surprise or fail” is a strong north star because it prevents shipping a pretty graph that does nothing cognitively useful.
+- **`§3` names one writable authority and a narrow contract.** That seam is exactly how you avoid hidden coupling; the API verbs (`upsert/link/query/reinforce/decay/prune`) are concrete enough to test, not just architectural rhetoric.
+- **`§4` keeps semantic and Hebbian signals separate.** Preserving `semanticWeight` vs `hebbianWeight` protects future interpretability (“similar” vs “co-activated”) and will matter when users ask “why am I seeing this edge?”
+- **`§5` puts cheap debloat before expensive LLM verification.** That ordering is operationally sane; with even 10k nodes, naive candidate verification can explode into days of model calls.
+- **`§6` prioritizes inspectability (`click edge -> reason`).** This is a trust multiplier: users can challenge the graph instead of being forced to accept hidden ranking logic.
+- **`§7` bakes in anti-morass lessons as constraints, not lore.** Turning scars into checklist items is excellent team hygiene, especially early when architecture debt forms fastest.
+- **`§8` is candid about unresolved load-bearing choices.** Explicit debate framing keeps optionality real and reduces “quiet defaults” that become accidental permanent architecture.
+
+## I WISH
+
+- **I wish `§3` “Graph Store as sole writable authority” were hardened with concurrency semantics, not just module boundaries.** Stronger version: add per-node/edge `version` and an append-only mutation log (`event_id`, `actor`, `cause`) so simultaneous `reinforce/decay/link` operations cannot silently clobber each other; this also gives deterministic replay when a dream run goes weird.
+- **I wish `§3` two deployables had a “single-process local mode” requirement.** Stronger version: keep logical separation, but ship v1 with one command that runs engine+viewer together for dev/test; otherwise you inherit distributed failure modes (port drift, schema skew, startup ordering) before product risk is retired.
+- **I wish `§7` checklist items were each tied to a CI gate and a failure artifact.** Stronger version: every anti-morass rule maps to one automated check (architecture test, contract test, lint, or invariant test) and one dashboard metric; “enforced” should mean “merge blocked with evidence.”
+- **I wish `§8.1` (sqlite-vec vs dedicated vector DB) were decided by benchmark gates up front.** Stronger version: define thresholds now (e.g., at 100k nodes: p95 top-k latency `<150ms`, ingest `<2s/1k chunks`, recall@10 target), and predefine the migration trigger when those are missed; avoid religious DB debates later.
+- **I wish `§8.3` (wire-on-use vs auto-connect) used an explicit edge lifecycle.** Stronger version: `proposed -> tentative -> durable` edges, where ingest/background connector can create `proposed`, but only interaction evidence or citation grounding promotes to `durable`; this avoids hairballing without giving up discovery.
+- **I wish `§8.4` minimal Resonator included one anti-popularity correction in v1.** Stronger version: keep degree+decay, but normalize by type or expected degree so frequent generic nodes don’t dominate. Failure scenario: a broad `CONCEPT` linked everywhere becomes perpetual topography, burying rarer high-value nodes.
+- **I wish `§8.5` lucid-extract had a quarantine path to prevent graph pollution while preserving serendipity.** Stronger version: dream-invented nodes enter as `HYPOTHESIS` with TTL + low initial strength; promote only if they receive external evidence/provenance or repeated independent resurfacing.
+- **I wish `§8.6` schema-first had a staged adoption plan with cost controls.** Stronger version: if you keep protobuf, require `buf`-based breaking-change checks and generated-type ownership; if you don’t need a second runtime in first 6–8 weeks, start with JSON Schema + strict validators, then graduate to protobuf at the first true multi-language boundary.
+- **I wish `§5` Connector economics were budgeted explicitly.** Stronger version: add an LLM-call budget per run (e.g., max 500 verifications), deterministic prefilters, and priority queues by information gain; at 10k nodes with top-k=20, you can easily generate ~100k undirected candidates, which is not LLM-verifiable naively.
+- **I wish `§2` success criteria included quantitative reliability, not just “at least one apt surprise.”** Stronger version: define a small eval protocol (e.g., 20 dream runs, blind-rated by user, target apt-surprise hit rate `>=30%`, false-weird rate `<20%`) so progress is measurable week to week.
+
+## I WONDER
+
+- **I wonder if `§4` needs an explicit `EVIDENCE` node type** (or equivalent object) to support future epistemic zoom: quote/procedure/result triples are structurally different from `SOURCE` and `QUOTE`, and you’ll likely want to attach reproducibility metadata.
+- **I wonder if `§4` is missing `DECISION` and `ACTION/TASK` types.** Many knowledge graphs fail because they store ideas but not commitments; this pair makes the system useful for “what changed because we learned this?”
+- **I wonder whether `MEMORY` in `§4` over-compresses event semantics.** A distinct `EVENT` type could separate “something happened at time t” from “someone recorded memory m about it,” which becomes crucial when memories conflict.
+- **I wonder if CLAIM needs edge types beyond `RELATED_TO` in `§4`** (e.g., `SUPPORTS`, `REFUTES`, `DEPENDS_ON`) to make contradiction views and epistemic zoom tractable without overloading free-text reasons.
+- **I wonder whether `SESSION` unification in `§4` is right at the storage layer but too collapsed at behavior layer.** Possible shape: one `EPISODE` base type, but separate invariants for `dream` vs `conversation` (cast policy, decay profile, admissible outputs, promotion rules) so mode-specific quality controls stay enforceable.
+- **I wonder if PATTERN nodes in `§4/§5` should be treated as materialized views with lineage** (which cluster/version generated this pattern), not just first-class nodes; otherwise stale pattern summaries may drift from source neighborhoods.
+- **I wonder if `§8.3` and `§8.5` could share a single “novelty budget” control.** Example: cap total new edges/nodes introduced per ingest+dream cycle, with spillover queued for review; this limits runaway growth while preserving exploration.
+- **I wonder whether `§8.1` should include hybrid retrieval early** (local exact + sampled ANN) to avoid premature DB migration while still testing scale behavior under realistic latency.
+- **I wonder if the map should encode uncertainty visually from day one (`§6` + `§4 CLAIM`).** Even a simple confidence tint/edge style could prevent users from over-trusting dream-induced structure.
+- **I wonder if v1 should include a tiny “red team” dream harness (`§5`, `§8.5`)** that intentionally tries to induce degenerate loops/pollution so you can test circuit-breakers before real users do.
