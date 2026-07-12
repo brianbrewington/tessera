@@ -181,3 +181,68 @@ rendering owner · ⑩ refactor-in-place.
 Write the **Graph Store spec first** (the contract: status lifecycle, two-tier index, `promote`, `get_tile`),
 review it (all four reviewers), build with tests, then Ingest + a trivial viewer to see real nodes, then
 Connector, Resonator, Dream. Prove the loop end-to-end on the ~65-note corpus before widening.
+
+## 10. v3.1 delta — path as overlay, synthesis via guided-Dream, audit via frame-debt (FLEET-HARDENED)
+
+*Status: **fleet-reviewed 5-0; reframe adopted, contract-delta rewritten to the cheaper decomposition the fleet forced.**
+Brief + full reviews: `reviews/path-dependence-delta.md`. Five reviewers (Codex 5.3-high, Grok 4.5-xhigh, Qwen-30b,
+Qwen-80b, blind-Claude) converged independently: **the converge/synthesize/audit reframe is sound; every move as first
+proposed reached for a heavier contract surface than its goal required.** blind-Claude deepest again (the prune/τ,
+interpolant-`expert_surprise`, and sign-flipped-decay catches below were its alone). Origin: Brian's path-dependence
+twist + EXP-006 + his correction that the "bubble" is also the click ("it was the path that made linear systems click").*
+
+**The reframe (adopted, unchanged).** The filter bubble and *the click* are the **same mechanism** — path-dependent
+convergence onto a frame — differing only in whether the frame is **true** (fits the world) or merely **comfortable**
+(fits history). We *want* convergence; that's understanding. North star: **manufacture the click, then keep it honest.**
+The three moves stand — **converge / synthesize / audit** — each now taking the lighter contract surface:
+
+1. **Move 1 — path is a highlight OVERLAY on stable geography, not a prominence rewrite.** *(Unanimous load-bearing
+   fix.)* The `S_raw` pyramid ships unchanged and path-agnostic — **tile membership never depends on path**, so the map
+   stays legible and `get_tile`'s signature is untouched. Path becomes a *separate* additive read **`get_heat(path_context)`**
+   — a personalized-PPR overlay via **Andersen–Chung–Lang local-push** (`O(1/αε)`, sublinear; RWR-from-seed was never the
+   intractable part) — rendered as *glow over stable geography, never re-tiling it*. This is the faithful Google-Maps
+   reading (history highlights a stable base map; it does not move the roads). Kills the flicker (a fixed top-N budget
+   turns a continuous score-shift into a discrete N-th-boundary swap — the very budget v3 added), keeps `O(tile)` reads,
+   preserves invariant 5. "A minor idea becomes major with the backlinks" is then true *as a highlight* — exactly right.
+   The original `get_tile(…, path_context?)` signature was the tell we were re-ranking geography when we meant to annotate it.
+2. **Move 2 — synthesis is a GUIDED DREAM; bridges are provisional with a real cap.** A generative walk = **the existing
+   Dream seeded with a user-supplied path** instead of a recency seed (the Dream already is walker + ε-teleport + weave +
+   lucid-extract + residue-`proposed`) — so **no new walk verbs.** The archetypal-question transition is a `QUESTION`/
+   `INSIGHT` node from the *existing* `putNode` — **not a `BRIDGE` node type** (§4 keeps `BRIDGE = computed betweenness`;
+   the first draft silently reversed that). Minted under **`origin=dream`** to inherit the *already-hardened* dream
+   promote-gate (N independent resurfacings across distinct run-ids AND grounding contexts; a looping run never
+   self-promotes) **plus: ≥1 grounding that is not the walk that authored it** (critic ≠ generator, Codex). Three
+   proposed-space leaks the promotion-scoped breaker structurally cannot see, each closed: (i) **per-session mint budget
+   counting `proposed` mints**, not just promotions (the breaker is blind to quarantine by construction); (ii)
+   **walk-revisits must not reset a bridge's decay Δt** — else the flywheel keeps its own bridges fresh and `prune` never
+   collects them; (iii) **`expert_surprise` is not the graduation gate for interpolants** — a bridge is synthesized to sit
+   *between* its endpoints, so its embedding-distance surprise is structurally low; gate bridges on the dream-resurfacing
+   rule, not the corrupted metric. Dedup for low-specificity archetypal questions keys on **(endpoint-pair + normalized
+   question)**, since `content_hash`/cosine either false-merge all bridges or admit unbounded near-dups.
+3. **Move 3 — WALK is not a Store primitive.** A pathway = a `SESSION{mode:walk}` node (the mode-strategy runner already
+   exists) with ordinal-tagged member edges, or read straight off the ordered `mutation_log`. A callback = **one new value
+   in the edge `kind` enum, `REFERENCES`** (existing `UNIQUE(from,to,kind,polarity)` gives idempotency). Synthesis = the
+   guided-Dream client above. **The only genuine Store-contract change in the whole delta is the `get_heat` overlay read**
+   — everything else is a client + one enum value. (Burden of proof, per Codex, unmet: no invariant here that
+   ordered-query-plus-existing-writes can't express.)
+4. **Move ε/audit — a falsifiable `frame_debt` meter, dosed by convergence.** *(blind-Claude.)* Decay-τ is not merely
+   insufficient, it's **sign-flipped**: the comfortable frame is the revisited one, so small Δt → high `S_raw` → never
+   flagged, while off-path refuters sit cold, decay, and get `prune`d — *the model deletes the audit's evidence before the
+   audit can see it.* Replace it: per-PATTERN **`frame_debt`** — when an ε-teleport lands an inside→outside-frame edge with
+   `expert_surprise ≥ θ` and the pipeline does *not* incorporate it, **increment `frame_debt` instead of discarding the
+   candidate** (one integer bump on evidence already computed). Rising `frame_debt` under sustained high prominence = "the
+   frame keeps routing around contradictions it's shown" = comfortable-not-true; decay-independent. **Confirmatory audit:**
+   when `frame_debt` crosses threshold, run the **§2 pre-registered blinded eval turned inward** — a critic (≠ the frame's
+   author-model) judges whether the frame's asserted edges or the ε-found ignored edges better fit the corpus; if the
+   ignored set wins, demote/flag. This is the dissertation's change-detection thesis on an idea-frame: *is the frame still
+   predictive, or has the world moved past the 2.5-year-stale tile?* And since Move 1 makes the overlay a measurable
+   vector, **dose ε ∝ overlay concentration** (Gini/entropy of the PPR vector) — more converged frame, more audit — which
+   also dissolves a budget war the first draft missed (under re-tiling, on-path push and off-path ε competed for one fixed
+   tile budget; under the overlay they don't compete).
+
+**Net:** converge/synthesize/audit survives intact; **the contract surface drops to exactly two changes** — a
+`get_heat(path_context)` overlay read and a `REFERENCES` edge-kind value — plus a guided-Dream client and the `frame_debt`
+counter. **What tessera is, restated:** a machine for **manufacturing the click** — constructing the path that crystallizes
+a hidden third node — with an **auditor attached** to keep the crystallized frame honest. Not a map you browse; a crucible
+for abstractions. **Open before spec-fold:** does `get_heat` live in the Store or the Resonator? is `frame_debt` a PATTERN
+field or its own table? — for the next gate.

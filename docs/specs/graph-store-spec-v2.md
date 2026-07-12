@@ -1,7 +1,8 @@
 # Spec — Graph Store v2 (hardened by the full-fleet gate)
 
 *Isolated implementation spec — **build from this alone.** v2 folds the four-reviewer gate (Codex, Grok,
-blind-Claude, local; raw in `reviews/`) into v1. Tests are **part of the spec** (§7) — the reviewers' demonstrated
+blind-Claude, local; raw in `reviews/`) into v1. **v2.1 (2026-07-12)** folds `plan-v3.md §10` — the path-overlay /
+guided-Dream / frame-debt delta (fleet 5-0) — into §3, §4, §6, and new §11. Tests are **part of the spec** (§7) — the reviewers' demonstrated
 failing sequences ARE the tests (the flipside of demonstrate-don't-describe). Decisions locked with Brian:
 tiling = **(A) fixed budget per tile** + **upward K-promotion** (§6); Embedder = injected *and* accepts a
 pre-computed vector (§8.2); `get_tile` = compute-on-read over a top-2N cache (§6, §8.3).*
@@ -27,12 +28,13 @@ only). One validated decode path (Zod) at every boundary — heavily tested, non
 
 - **`nodes`**: `id, type(+subtype), origin('user'|'connector'|'dream'|'ingest'), text, content_hash, strength,
   timestamp, provenance(json), metadata(json), status('proposed'|'durable'), pinned(bool), version(int)`.
-  For SOURCE: `last_observed, observation_budget` (separate from `strength`). **`origin` is on the node** (v1
-  keyed a rule on a field the verb couldn't see).
+  For SOURCE: `last_observed, observation_budget` (separate from `strength`). For PATTERN: `frame_debt(int,
+  default 0)` — the audit counter (§11). **`origin` is on the node** (v1 keyed a rule on a field the verb couldn't see).
 - **`layout`**: `node_id, x, y, tile_id, zoom_min, version` — written only via `putLayout` (Resonator client).
   Nodes have coordinates so `get_tile(bbox)` means something.
 - **`edges`**: `id, from_id, to_id, kind, polarity, semantic_weight(immutable), hebbian_weight, status, version`.
-  **UNIQUE `(from_id, to_id, kind, polarity)`** — edges are idempotent (v1 had none).
+  `kind` ∈ {RELATED · ORIGINATED_FROM · APPEARED_IN · HEBBIAN_ASSOC · RESONATES_WITH · **REFERENCES** (v3.1 —
+  back-ref/callback edge a walk lays down)}. **UNIQUE `(from_id, to_id, kind, polarity)`** — edges are idempotent (v1 had none).
 - **`edge_assertions`**: `id, edge_id, reason, origin, grounding(json), expert_surprise(int, Store-computed),
   status, version`.
 - **Vectors — four tiers, split by kind (never co-mingled):** `vec_node_quarantine`, `vec_node_shared`,
@@ -69,7 +71,8 @@ Every mutating verb takes `{actor, cause}` (mandatory — v1 dropped it on some)
   endpoint nodes durable** (else a durable edge cites untrusted/prunable endpoints). Grounding by origin:
   `connector` → citation 3-layer check; `user` → immediate; `dream` → **N independent resurfacings keyed on
   distinct dream-run ids AND distinct grounding contexts within a decay window** (a looping run must never
-  self-promote). **User writes go through `promoteNode` too** — no `origin=user` durable shortcut (v1's shortcut
+  self-promote), AND **≥1 grounding source not authored by the minting session** (critic ≠ generator — closes the
+  guided-Dream self-grounding runaway, §11). **User writes go through `promoteNode` too** — no `origin=user` durable shortcut (v1's shortcut
   left user notes out of `shared`, invisible to retrieval).
 
 **Mutation:**
@@ -87,7 +90,8 @@ Every mutating verb takes `{actor, cause}` (mandatory — v1 dropped it on some)
 - `getTile(zoom, bbox, {includeProposed?}) → Subgraph` — serves the **pre-computed pyramid** (§6): top-N durable
   nodes by rank within the tile, **induced edges only** (drop edges to nodes outside the tile, or return
   id-only ghost stubs — never a dangling edge). `includeProposed` returns dashed nodes under a **separate small
-  cap** (they never starve the durable budget).
+  cap** (they never starve the durable budget). **Path-agnostic by contract (v3.1):** tile membership never depends
+  on a walk/path — personalized highlighting is a separate Resonator read (`get_heat`, §11), never a `getTile` argument.
 - `getNode/getEdges/query/export`.
 
 **Lifecycle / ops:**
@@ -187,6 +191,8 @@ The `.db` file is the portable source of truth, but a live WAL + vector tables n
   exposes the write; name the contract.
 - Exact `K` (promotion width) and `N` (shown budget) per zoom — tune empirically; pre-register defaults.
 - `content_hash` normalization (whitespace/markdown) policy — pin it so idempotency is stable across ingesters.
+- **`normalized question` policy for bridge dedup (§11 rule 4)** — pin the normalization (case/whitespace/stop-question-words)
+  alongside `content_hash` so interpolant idempotency is stable; the `bridge-dedup-key` test (§11) guards it.
 
 ## 10. First implementation slice
 
@@ -195,3 +201,64 @@ chicken-and-egg test; (2) `promoteNode` atomic + breaker (no-brick test); (3) `p
 idempotency + prune-cascade; (4) `reinforce`/`decay` commutative + version-conflict; (5) layout + `getTile` +
 pyramid-election; (6) mutation_log + replay-at-different-wallclock; (7) backup/restore round-trip. Prove the
 chicken-and-egg + no-brick + replay tests green before widening — they're the load-bearing three.
+
+## 11. Path overlay, guided-Dream synthesis & the frame-debt audit (v3.1)
+
+*Folds `plan-v3.md §10` (fleet 5-0). Store contract surface added: **one edge kind (`REFERENCES`, §3)** and **one
+PATTERN field (`frame_debt`, §3)**. The path-context overlay (`get_heat`) lives in the **Resonator, not the Store**
+(Brian: transient/dependent — a read-side lens); the generative walk is a **guided Dream** (a Dream client, not new
+Store verbs). Not in the v1 first slice (§10) — it lands after the Dream exists — but the schema seam (enum value +
+field) ships from the start so no migration is needed later.*
+
+**Path is highlight, not geography (the Store stays path-agnostic).** `getTile` serves the path-agnostic `S_raw`
+pyramid unchanged (§6). Personalized prominence is a **Resonator read `get_heat(path_context) → {node_id: heat}`** —
+an Andersen–Chung–Lang local-push personalized-PageRank (`O(1/αε)`, sublinear, session-scoped, **never persisted**)
+rendered as glow over stable tiles. Membership never shifts with the path (no flicker — a fixed top-N budget would
+turn a continuous score-shift into a discrete N-th-boundary swap); the overlay only re-emphasizes already-visible
+nodes. Bubble-strength is then measurable = concentration (Gini/entropy) of the heat vector → the Resonator doses ε
+∝ concentration (more converged frame, more audit; and on-path emphasis never competes with off-path ε for tile budget).
+
+**Generative walk = guided Dream (no new Store verbs).** A "creative pathway" is the existing Dream seeded with a
+user-supplied path instead of a recency seed; its residue lands `proposed` under `origin=dream` and graduates
+through the **existing hardened promote-gate** (§4) — now requiring **≥1 non-self grounding**. The archetypal-question
+transition is a `QUESTION`/`INSIGHT` node via `putNode` (BRIDGE stays computed — §4 anti-sprawl). The back-ref/callback
+is a `REFERENCES` edge. The saved pathway is a `SESSION{mode:walk}` node with ordinal-tagged member edges (or read off
+the ordered `mutation_log`).
+
+**Four proposed-space safety rules the promotion-scoped breaker structurally cannot see (Store-enforced):**
+1. **Per-session proposed-mint budget** — cap `proposed` nodes minted per walk/session. The breaker meters
+   *promotions* and is blind to quarantine by construction; a length-L guided dream must not mint O(L) unbounded bridges.
+2. **A walk-revisit must not reset a proposed bridge's decay Δt** — else the walk→bridge→prominence flywheel keeps
+   its own spawn fresh and `prune` never collects it. Traversal reinforces *durable* structure, not a proposed
+   synthesized node's τ-clock.
+3. **`expert_surprise` is not the graduation gate for synthesized (interpolant) nodes** — a bridge is built to sit
+   *between* its endpoints, so its embedding-distance surprise is structurally low; bridges graduate on the
+   resurfacing rule only, never on the corrupted surprise metric.
+4. **Bridge dedup keys on `(endpoint-pair + normalized question)`**, not `content_hash`/cosine — low-specificity
+   archetypal text otherwise either false-merges all bridges into one or admits unbounded near-dups.
+
+**The frame-debt audit (`frame_debt` on PATTERN).** Decay-τ is *sign-flipped* for staleness — it keeps the
+revisited/comfortable frame fresh (small Δt → high `S_raw` → never flagged) while the off-path evidence that would
+refute it goes cold, decays, and is `prune`d (the model deletes the audit's evidence before the audit can see it).
+Replace it with an evidence counter: when an ε-teleport proposes an **inside-frame → outside-frame** edge with
+`expert_surprise ≥ θ` and the pipeline does **not** incorporate it, **increment that PATTERN's `frame_debt`** (do not
+discard the candidate). Rising `frame_debt` under sustained high prominence = the frame is routing around
+contradictions it has been shown = comfortable-not-true. **Confirmatory:** when `frame_debt` crosses threshold,
+trigger the §2 pre-registered *blinded* eval inward — a critic (≠ the frame's author-model) judges whether the
+frame's asserted edges or the ignored ε-found edges better fit the corpus; if the ignored set wins, demote/flag the
+PATTERN. The Store exposes the `frame_debt` increment + read; the Resonator/audit client runs the confirmatory eval.
+
+**Tests to add (§7-style, when this lands):**
+- **heat-membership-invariance:** `get_heat(path)` changes node heat, but `getTile` membership for the same bbox is
+  identical with and without any path — geography never flickers.
+- **guided-dream-no-runaway:** a length-L guided dream over a chain mints ≤ the per-session budget of `proposed`
+  bridges; none self-promote (non-self grounding enforced); re-walking a proposed bridge does not extend its τ
+  (`prune` still collects it).
+- **interpolant-not-gated-by-surprise:** a synthesized between-endpoints node with low `expert_surprise` still
+  graduates iff it meets the resurfacing rule (surprise is not its gate).
+- **frame-debt-monotone:** an ε-proposed inside→outside edge with `expert_surprise ≥ θ` that the pipeline ignores
+  increments `frame_debt`; decay does not reset it; threshold-crossing triggers the blinded eval.
+- **bridge-dedup-key:** two archetypal-question mints over the **same endpoint-pair** with paraphrased text (a
+  noisy/upgraded embedder) dedup to **one** node under the `(endpoint-pair + normalized question)` key — not two,
+  and not a false-merge of bridges over *different* endpoint-pairs. *(Mirror of `dedup-noisy-embedder`, §7, for the
+  interpolant key.)*

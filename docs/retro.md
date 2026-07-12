@@ -90,6 +90,88 @@ Name: **tessera** (pronounced, deliberately, *tes-SER-uh*) — one tile of a lar
   The first real multi-agent workload tessera orchestrates could be its own continued development (the study's
   own mirror). Sits with the destination layer (watcher / proactive memory); explicitly NOT v1 scope.
 
+## Path-dependence & the generative walk — RESOLVED (2026-07-12; fleet 5-0)
+
+**The twist (Brian).** Prominence is **path-dependent** — the Google-Maps mechanism (search-history / place-visits
+decide what gets highlighted), pointed at idea-space. There's context-free prominence, but also path-dependent:
+*"a minor idea on first inspection becomes major with the backlinks."* A second idea rode in with it: a walk
+doesn't only traverse, it **crafts content** — a transition handle can be an archetypal question bridging to a new
+domain; a back-ref is a new edge.
+
+**The reframe that dissolved the bubble worry (Brian's correction — the load-bearing move).** Claude flagged
+path-dependence as a filter-bubble risk. Brian corrected it: that narrowing is *also what a good book / good
+academic understanding DOES* — a better abstraction, a tighter frame, a usable pattern. *"You have no idea how my
+world changed after linear systems clicked for me… but it was the path that made it work."* So **the bubble and the
+click are the same mechanism** — path-dependent convergence onto a frame — differing only in whether the frame is
+**true** (fits the world) or merely **comfortable** (fits history). We *want* convergence; that's understanding.
+North star restated: **manufacture the click, then keep it honest.** Three moves: **converge / synthesize / audit.**
+
+**Grounded in prior art + a convergence.** The "hidden third node" = `embeddings_experiment` EXP-005/EXP-006:
+stretching a closure path forces the LLM to *synthesize* an intermediate concept, not relay — the generative
+fraction rises with cycle length. The archetypal-question transition IS that synthesized third node. **And the
+collapse Brian and blind-Claude reached independently: the generative walk is just the Dream seeded with a
+user-supplied path.** The walk and the dream were always one mechanism. (Felt signal: the design confirming its own
+coherence — the person carrying the vision and a cold reviewer landing on the same reduction.)
+
+**Fleet re-review — 5-0** (brief + full reviews in `reviews/path-dependence-delta.md`). Codex 5.3-high, Grok
+4.5-xhigh, Qwen-30b (box), Qwen-80b (Mac), blind-Claude — independent, convergent: **reframe sound; the
+contract-delta as first drafted reached for a heavier surface than its goal required.** blind-Claude deepest again
+(the sign-flipped-decay, interpolant-corrupted-`expert_surprise`, and prune-defeated-by-flywheel catches were its
+alone). The cheaper decomposition, adopted:
+- **Move 1 — path = highlight OVERLAY, not a prominence rewrite.** `S_raw` pyramid stays path-agnostic (`getTile`
+  signature untouched); path context is a separate additive `get_heat(path_context)` (Andersen–Chung–Lang
+  local-push PPR, `O(1/αε)`), glow over stable geography. Kills flicker + intractability. Faithful Maps reading:
+  history highlights a stable base map, it doesn't move the roads.
+- **Move 2 — synthesis = guided Dream; bridges provisional.** No new walk verbs; archetypal question = QUESTION/
+  INSIGHT node (NOT a BRIDGE type — §4 keeps BRIDGE computed); `origin=dream` inherits the hardened promote-gate +
+  **≥1 non-self grounding**; per-session proposed-mint budget; walk-revisits don't reset a bridge's Δt;
+  `expert_surprise` NOT the gate for interpolants; bridge dedup on (endpoint-pair + normalized question).
+- **Move 3 — WALK is not a Store primitive.** pathway = `SESSION{mode:walk}` + ordinal edges / `mutation_log`;
+  callback = `REFERENCES` edge kind. Only genuine Store change = the overlay read + the enum value.
+- **Move ε/audit — `frame_debt` meter.** Decay-τ is *sign-flipped* (keeps the comfortable frame fresh, prunes its
+  refuters — "deletes the audit's evidence before the audit can see it"). Per-PATTERN `frame_debt`: an ε-landed
+  inside→outside edge with `expert_surprise ≥ θ` that the pipeline ignores **increments** the counter instead of
+  being discarded. Rising debt + sustained prominence = comfortable-not-true → run the §2 blinded eval inward. Dose
+  ε ∝ overlay concentration. This is the dissertation's change-detection turned on an idea-frame (the 2.5-year-stale
+  Cushing tile).
+
+**Placement (Brian).** `get_heat` → **Resonator** (transient/dependent — a read-side lens, not durable state).
+`frame_debt` → **PATTERN field**. **Net contract surface = two changes** (`REFERENCES` edge kind + `frame_debt`
+PATTERN field) + the Resonator overlay + the guided-Dream client. Folded into `plan-v3.md §10` and
+`graph-store-spec-v2` §3/§4/§6 + new §11 (not in the v1 first slice — lands after Dream exists — but the schema seam
+ships from the start).
+
+## Build — Phases 1–4 (2026-07-12): Graph Store → ingest → connector → viewer, each gated
+
+**First real code, clean-room from the specs.** TypeScript, SQLite + sqlite-vec (better-sqlite3),
+Zod decode path, vitest; Node 25 (tsx for scripts). Built in four gated phases — each:
+**implement → tests green → light review gate (Codex 5.3-high + Qwen-30b) → next**, honoring the
+FIRM REQUIREMENT that every implementation is reviewed before "done."
+
+- **P1 Graph Store core** (`src/store/graphStore.ts`, `db/ddl.ts`, `schema.ts`, `embedder.ts`): full
+  v2.1 schema (incl. `REFERENCES` + `frame_debt`), `putNode` (dedup content_hash-primary +
+  cosine-secondary, **inside `BEGIN IMMEDIATE` → TOCTOU-safe**), two-tier node vec index, atomic
+  `promoteNode` (quarantine→shared copy), `querySimilar`. Gate caught: an **unverified cosine
+  formula** (empirically probed sqlite-vec = euclidean L2, `cos=1−d²/2` confirmed and *pinned by a
+  test*); a cross-connection TOCTOU (fixed structurally); replay-grade log + SOURCE fields folded
+  now to avoid a later migration.
+- **P2 Edges + traversal**: `putEdge` (idempotent on (from,to,kind,polarity); polarity `''` not
+  NULL; assertion-per-call; **Store-computed `expert_surprise`**; reason→assert-quarantine),
+  `getEdges`/`getNeighbors`/`getSubgraph` (induced-edges BFS). Gate: `polarity NOT NULL DEFAULT ''`
+  + strict Zod (reject a laundered surprise/strength).
+- **P3 Ingest + connector**: recursive markdown adapter (frontmatter + prior suggested-connections
+  stripped) → proposed CONCEPT nodes; analytic connector (quarantine kNN → proposed RELATED edges,
+  canonicalized pairs, idempotent).
+- **P4 Viewer**: self-contained force-directed Canvas (`viewer/template.html`) + exporter
+  (`scripts/export-viewer.ts`) — glow nodes, degree-tiered labels, click-to-focus-and-traverse,
+  hover-edge-for-why. Gate: drag-vs-click fix (compare to mousedown, not last move).
+
+**Result: a real, walkable graph of the 66 attention notes** (`scripts/build-graph.ts` → live
+`embeddinggemma`): 66 nodes, 29 analytic edges. **17 tests green, types clean.** This is the
+**analytic MAP only** — no dream, no prominence-pyramid, no path-dependence/`get_heat`/`frame_debt`
+yet (all speced, next slices). Gate footguns already logged for the promote-breaker /
+`promoteAssertion` / prune-cascade slice.
+
 ## Data model / node taxonomy (decided 2026-07-11)
 
 Full taxonomy in `plan-v1.md` §4. Node types: PERSON, AGENT, PROJECT, GOAL / CONCEPT (+subtypes

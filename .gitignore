@@ -14,6 +14,9 @@ __pycache__/
 # experiment outputs (regenerable; don't bloat the remote)
 experiments/**/results/
 
+# generated viewer (regenerable from viewer/template.html + the db via export-viewer)
+viewer/tessera.html
+
 # research papers — kept local, NOT pushed (avoid repo bloat)
 papers/
 docs/papers/

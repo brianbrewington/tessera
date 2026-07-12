@@ -1,0 +1,27 @@
+{
+  "name": "tessera",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A zoomable, prominence-ranked map of idea-space with a generative dream engine.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

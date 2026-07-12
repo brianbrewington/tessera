@@ -15,6 +15,7 @@ outside secondary source. Keep that line intact when these become CLAIM nodes.
 | `book-chapters-and-titles.md` | Brian | Working chapter list & title candidates for *The Attention Line*. |
 | `reading-list.md` | Brian | Curated short reading list — the formal core, failure canon, channel-side design. |
 | `thread-summary-attention-allocation.md` | Brian & Claude | The reviewability-experiment thread: pivot from proxy-repair to a theory of the saturating channel. |
+| `immune-system-as-adversarial-attention.md` | Brian & Claude | Session synthesis: the immune system reconstructed from first principles as an adversarial attention machine. Brian's verbatim quotes preserved; teaching moves marked. Chapter-seed + reading guide for the 4 immunology papers. |
 | `gemini-commentary-attention-architecture.md` | Gemini (not Brian) | Outside research/lit-review synthesis over the above. Secondary source. |
 
 *Captured 2026-07-12 from a Google Drive export. The `.docx` originals were `.md` wrapped by
