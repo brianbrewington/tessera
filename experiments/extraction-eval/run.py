@@ -50,6 +50,7 @@ def chat_ollama(endpoint, model, content, timeout=900):
 def chat_openai(endpoint, model, content, timeout=900):
     url = endpoint.rstrip("/") + "/chat/completions"
     body = {"model": model, "temperature": 0, "stream": False,
+            "response_format": {"type": "json_object"},   # JSON mode — parity with ollama format:json
             "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -57,8 +58,10 @@ def chat_openai(endpoint, model, content, timeout=900):
 
 
 def chat_claude(model, content, timeout=900):
-    r = subprocess.run(["claude", "-p", "--model", model or "sonnet",
-                        "--system-prompt", "Return only the requested JSON.", content],
+    # no extra system prompt (the user prompt already demands JSON) — keep parity with the others.
+    # NOTE: claude-cli has no temperature flag, so it isn't deterministic like the temp-0 local models;
+    # treat the claude "ceiling" as a reference, not a like-for-like determinism comparison.
+    r = subprocess.run(["claude", "-p", "--model", model or "sonnet", content],
                        capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError(f"claude cli rc={r.returncode}: {r.stderr[:200]}")
@@ -76,16 +79,29 @@ def chat(rev, content):
     raise ValueError(f"unknown api {api!r}")
 
 
+def _as_list(v):
+    # a model may return a bare string for a field; wrap it (NOT iterate its characters)
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip() for x in v if str(x).strip()]
+
+
 def parse(raw):
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not m:
-        return {"concrete": [], "abstract": [], "_parse_error": True}
+    d = None
     try:
-        d = json.loads(m.group())
-        return {"concrete": [str(x).strip() for x in (d.get("concrete") or []) if str(x).strip()],
-                "abstract": [str(x).strip() for x in (d.get("abstract") or []) if str(x).strip()]}
+        d = json.loads(raw)                      # whole string first (constrained backends)
     except Exception:  # noqa: BLE001
+        m = re.search(r"\{.*\}", raw, re.DOTALL)  # else salvage the first balanced-ish object
+        if m:
+            try:
+                d = json.loads(m.group())
+            except Exception:  # noqa: BLE001
+                d = None
+    if not isinstance(d, dict):
         return {"concrete": [], "abstract": [], "_parse_error": True}
+    return {"concrete": _as_list(d.get("concrete")), "abstract": _as_list(d.get("abstract"))}
 
 
 def main():
