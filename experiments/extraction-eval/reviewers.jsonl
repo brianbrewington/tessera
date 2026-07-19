@@ -1,0 +1,7 @@
+# Extractor roster for E1 (tiny-vs-large extraction validity). One line per model; `# `-prefixed lines ignored.
+# Fields: label, model, endpoint, api(ollama|openai|claude), size, family, host, enabled.
+{"label":"tiny-gemma","model":"gemma3:4b","endpoint":"http://127.0.0.1:11434","api":"ollama","size":"4B","family":"google","host":"mac-studio","enabled":true}
+{"label":"tiny-qwen","model":"qwen3:4b","endpoint":"http://127.0.0.1:11434","api":"ollama","size":"4B","family":"qwen","host":"mac-studio","enabled":true}
+{"label":"large-qwen32","model":"qwen3:32b","endpoint":"http://127.0.0.1:11435","api":"ollama","size":"32B","family":"qwen","host":"linux-x299 (ssh -L 11435:127.0.0.1:11434)","enabled":true}
+{"label":"large-llama70","model":"llama3.3:70b","endpoint":"http://127.0.0.1:11434","api":"ollama","size":"70B","family":"meta","host":"mac-studio","enabled":false}
+{"label":"ceiling-claude","model":"sonnet","endpoint":"","api":"claude","size":"frontier","family":"anthropic","host":"claude-cli","enabled":false}
