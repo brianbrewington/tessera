@@ -32,7 +32,7 @@ const DB = positional[1] ?? `${here}/../data/personas.db`;
 const useStub = embFlag === "stub" || process.env.TESSERA_EMBEDDER === "stub";
 // The Ollama embed model is configurable (TESSERA_EMBED_MODEL) — installs vary (embeddinggemma vs
 // nomic-embed-text); both are 768-dim so the vec tables match either way.
-const embModel = process.env.TESSERA_EMBED_MODEL ?? "embeddinggemma";
+const embModel = process.env.TESSERA_EMBED_MODEL || "embeddinggemma"; // || not ??: also fall back on empty string
 const embedder: Embedder = useStub ? new StubEmbedder(768) : new OllamaEmbedder(768, embModel);
 console.log(`embedder: ${useStub ? "StubEmbedder(768) [offline]" : `OllamaEmbedder(${embModel})`}`);
 
