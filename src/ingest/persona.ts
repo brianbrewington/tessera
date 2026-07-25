@@ -91,15 +91,16 @@ export function parsePersona(raw: string): PersonaDoc {
   };
   for (const line of answersSection.split("\n")) {
     const qm = line.match(/^\s*Q:\s*(.*)$/);
-    const am = line.match(/^\s*A:\s*(.*)$/);
     if (qm) {
       flush();
       curQ = qm[1]!.trim();
       curA = [];
-    } else if (am && curQ !== null) {
-      curA.push(am[1]!);
-    } else if (curQ !== null && curA.length > 0) {
-      curA.push(line); // continuation of a multi-line answer
+    } else if (curQ !== null) {
+      // Everything between this Q: and the next Q: is the answer. Strip a leading "A:" marker if present
+      // (cohort_expand format); otherwise the line IS answer content — some corpora omit the A: prefix and
+      // write the answer directly under the question. Blank lines inside are preserved as paragraph breaks.
+      const am = line.match(/^\s*A:\s*(.*)$/);
+      curA.push(am ? am[1]! : line);
     }
   }
   flush();
@@ -176,9 +177,14 @@ function sourceKey(source: string): string {
   return createHash("sha256").update(source).digest("hex").slice(0, 8);
 }
 
+// Real embedders have a bounded context (nomic-embed-text / embeddinggemma ~2048 tokens); the full
+// bio + 22 answers is 10-15k chars and overflows it (Ollama returns 500). Cap at a token-safe slice —
+// bio + early answers is more than enough SUBSTANCE to compare personas for near-duplicate resonance.
+export const MAX_EMBED_CHARS = 6000;
+
 /** The text a persona is EMBEDDED on — its substance, so resonance compares content. */
 function embedText(doc: PersonaDoc): string {
-  return [doc.bio, ...doc.answers.map((qa) => `${qa.q} ${qa.a}`)].join("\n");
+  return [doc.bio, ...doc.answers.map((qa) => `${qa.q} ${qa.a}`)].join("\n").slice(0, MAX_EMBED_CHARS);
 }
 
 /**

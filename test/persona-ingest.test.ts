@@ -55,6 +55,19 @@ describe("persona parser", () => {
     expect(doc.answers[2]!.a).toContain("paragraph break inside it");
   });
 
+  it("parses answers written WITHOUT an A: prefix (a real corpus variant)", () => {
+    const raw = [
+      "PROFILE: Xolani Test", "TYPE: Farmer", "AGE: 70", "COUNTRY: South Africa", "GENDER: Female",
+      "", "BIO:", "A life on the land.", "", "ANSWERS:", "",
+      "Q: First question?", "The answer with no A prefix, several words.", "",
+      "Q: Second question?", "Another bare answer here.",
+    ].join("\n");
+    const doc = parsePersona(raw);
+    expect(doc.answers.length).toBe(2);
+    expect(doc.answers[0]!.a).toContain("no A prefix");
+    expect(doc.answers[1]!.q).toBe("Second question?");
+  });
+
   it("rejects a doc that parses to zero answers (hollow node)", () => {
     const raw = "PROFILE: X\nTYPE: Y\nAGE: 5\nCOUNTRY: Z\nGENDER: M\n\nBIO:\nhi there\n\nANSWERS:\nnothing parseable here";
     expect(() => parsePersona(raw)).toThrow(); // answers.min(1)

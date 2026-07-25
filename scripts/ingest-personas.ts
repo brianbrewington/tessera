@@ -30,8 +30,11 @@ const DIR = positional[0] ?? `${here}/../test/fixtures/personas`;
 const DB = positional[1] ?? `${here}/../data/personas.db`;
 
 const useStub = embFlag === "stub" || process.env.TESSERA_EMBEDDER === "stub";
-const embedder: Embedder = useStub ? new StubEmbedder(768) : new OllamaEmbedder(768, "embeddinggemma");
-console.log(`embedder: ${useStub ? "StubEmbedder(768) [offline]" : "OllamaEmbedder(embeddinggemma)"}`);
+// The Ollama embed model is configurable (TESSERA_EMBED_MODEL) — installs vary (embeddinggemma vs
+// nomic-embed-text); both are 768-dim so the vec tables match either way.
+const embModel = process.env.TESSERA_EMBED_MODEL ?? "embeddinggemma";
+const embedder: Embedder = useStub ? new StubEmbedder(768) : new OllamaEmbedder(768, embModel);
+console.log(`embedder: ${useStub ? "StubEmbedder(768) [offline]" : `OllamaEmbedder(${embModel})`}`);
 
 mkdirSync(dirname(DB), { recursive: true });
 for (const suffix of ["", "-wal", "-shm"]) rmSync(DB + suffix, { force: true });
