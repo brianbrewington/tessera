@@ -53,7 +53,9 @@ export const PersonaDoc = z
     country: z.string().min(1),
     gender: z.string().min(1),
     bio: z.string().min(1),
-    answers: z.array(z.object({ q: z.string().min(1), a: z.string().min(1) })),
+    // .min(1): a persona that parses to zero answers is a hollow node (a broken parse or a
+    // header-only doc) — reject at the boundary rather than ingesting substance-free.
+    answers: z.array(z.object({ q: z.string().min(1), a: z.string().min(1) })).min(1),
   })
   .strict();
 export type PersonaDoc = z.infer<typeof PersonaDoc>;
@@ -72,13 +74,35 @@ export function parsePersona(raw: string): PersonaDoc {
   // BIO is everything between the BIO: marker and the ANSWERS: marker.
   const bio = text.match(/^BIO:\s*\n([\s\S]*?)\n\s*ANSWERS:\s*$/m)?.[1]?.trim();
 
-  // ANSWERS: split the trailing block on blank lines, parse each Q:/A: pair.
+  // ANSWERS: parse EVERY Q:/A: pair. Robust to both blank-line-separated pairs (the hand-authored
+  // fixtures) and consecutive pairs with multi-line answers (what cohort_expand actually emits). The old
+  // blank-line split + `$`-anchored regex collapsed a consecutive block into a single answer. Line-based:
+  // a "Q:" line opens a pair, the next "A:" line starts the answer, and any following non-Q/non-A lines
+  // (including blank lines inside a multi-paragraph answer) continue it until the next "Q:".
   const answersSection = text.split(/^ANSWERS:\s*$/m)[1] ?? "";
   const answers: { q: string; a: string }[] = [];
-  for (const block of answersSection.split(/\n\s*\n/)) {
-    const m = block.match(/Q:\s*([\s\S]+?)\s*\nA:\s*([\s\S]+?)\s*$/);
-    if (m) answers.push({ q: m[1]!.trim(), a: m[2]!.trim() });
+  let curQ: string | null = null;
+  let curA: string[] = [];
+  const flush = () => {
+    if (curQ !== null) {
+      const a = curA.join("\n").trim();
+      if (a) answers.push({ q: curQ, a });
+    }
+  };
+  for (const line of answersSection.split("\n")) {
+    const qm = line.match(/^\s*Q:\s*(.*)$/);
+    const am = line.match(/^\s*A:\s*(.*)$/);
+    if (qm) {
+      flush();
+      curQ = qm[1]!.trim();
+      curA = [];
+    } else if (am && curQ !== null) {
+      curA.push(am[1]!);
+    } else if (curQ !== null && curA.length > 0) {
+      curA.push(line); // continuation of a multi-line answer
+    }
   }
+  flush();
 
   return PersonaDoc.parse({
     name,
@@ -186,7 +210,9 @@ export async function ingestPersona(
       origin: "ingest",
       text: `${d.name} [${sourceKey(source)}]`,
       provenance: { source },
-      metadata: { name: d.name, type: d.personaType, age: d.age, country: d.country, gender: d.gender },
+      // bio carried in metadata so the viewer can show persona SUBSTANCE in the panel (the node text is
+      // the "<name> [<sourceKey>]" dedup uniquifier, not display content).
+      metadata: { name: d.name, type: d.personaType, age: d.age, country: d.country, gender: d.gender, bio: d.bio },
     },
     m,
     personVec,

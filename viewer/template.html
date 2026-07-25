@@ -73,6 +73,11 @@ document.getElementById('counts').textContent = personCount
   ? personCount+' personas · '+conceptCount+' concept hubs · '+resCount+' resonances'
   : nodes.length+' ideas · '+edges.length+' connections';
 
+// Escape user/model-controlled strings before ANY innerHTML interpolation. Persona TYPE/COUNTRY/GENDER
+// and motif/group text are model-generated — treat as hostile (a persona "TYPE: <img onerror=...>" must
+// not execute). textContent paths (title, body, tooltip, chips) need no escaping.
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 // Fixed colours for the persona groups (stable across exports); palette fallback for
 // anything else (e.g. the corpus viewer's noteTypes).
 const GROUP_COLORS = { PERSON:'#7aa2f7', country:'#9ece6a', persona_type:'#e0af68', motif:'#bb9af7' };
@@ -89,7 +94,7 @@ function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Mat
   const order = ['PERSON','country','persona_type','motif'];
   groups.sort((a,b)=>{ const ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || (a<b?-1:1); });
   const L = document.getElementById('legend');
-  L.innerHTML = groups.map(g=>'<div class="row"><span class="dot" style="background:'+colorFor({group:g})+'"></span>'+g+'</div>').join('')
+  L.innerHTML = groups.map(g=>'<div class="row"><span class="dot" style="background:'+colorFor({group:g})+'"></span>'+esc(g)+'</div>').join('')
     + (resCount ? '<div class="row" style="margin-top:6px"><span class="ln" style="border-color:#f7768e"></span>resonates with</div>' : '');
 })();
 
@@ -204,9 +209,10 @@ function select(n){ selected=n; alpha=Math.max(alpha,0.35);
   document.getElementById('ptitle').textContent = n.label||n.id;
   const mbox=document.getElementById('pmeta'), md=n.meta||{};
   if(n.type==='PERSON'){ const rows=[['type',md.type],['age',md.age],['country',md.country],['gender',md.gender]].filter(r=>r[1]!=null);
-    mbox.innerHTML = rows.map(r=>'<span class="kv"><b>'+r[0]+'</b>'+r[1]+'</span>').join(''); }
-  else mbox.innerHTML = '<span class="kv"><b>hub</b>'+(md.field||n.group||'concept')+' · '+n.deg+' personas</span>';
-  document.getElementById('pbody').textContent = (n.text||'').slice(0,900);
+    mbox.innerHTML = rows.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join(''); }
+  else mbox.innerHTML = '<span class="kv"><b>hub</b>'+esc(md.field||n.group||'concept')+' · '+n.deg+' personas</span>';
+  // show persona SUBSTANCE (bio) in the panel, not the "<name> [hash]" dedup uniquifier
+  document.getElementById('pbody').textContent = (md.bio || n.text || '').slice(0,900);
   const nb = edges.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a, reason:e.reason }));
   const box=document.getElementById('pneighbors'); box.innerHTML='';
   nb.sort((a,b)=>b.node.deg-a.node.deg).forEach(({node})=>{ const c=document.createElement('span');

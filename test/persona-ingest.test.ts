@@ -37,6 +37,28 @@ describe("persona parser", () => {
   it("throws on a malformed doc (missing AGE)", () => {
     expect(() => parsePersona("PROFILE: X\nTYPE: Y\nCOUNTRY: Z\nGENDER: M\n\nBIO:\nhi\n\nANSWERS:\n")).toThrow();
   });
+
+  it("parses CONSECUTIVE Q/A (no blank lines) and multi-line answers — the cohort_expand format", () => {
+    // cohort_expand emits pairs back-to-back, answers spanning multiple lines/paragraphs. The old
+    // blank-line split + `$`-anchored regex collapsed all of these into a SINGLE answer. Regression guard.
+    const raw = [
+      "PROFILE: Test Person", "TYPE: Farmer", "AGE: 40", "COUNTRY: South Africa", "GENDER: Female",
+      "", "BIO:", "A short bio paragraph about a life.", "", "ANSWERS:", "",
+      "Q: First question?", "A: First answer, line one.", "still part of the first answer.",
+      "Q: Second question?", "A: Second answer.",
+      "Q: Third question?", "A: Third answer with a", "", "paragraph break inside it.",
+    ].join("\n");
+    const doc = parsePersona(raw);
+    expect(doc.answers.length).toBe(3); // NOT 1
+    expect(doc.answers[0]!.a).toContain("still part of the first answer");
+    expect(doc.answers[1]!.q).toBe("Second question?");
+    expect(doc.answers[2]!.a).toContain("paragraph break inside it");
+  });
+
+  it("rejects a doc that parses to zero answers (hollow node)", () => {
+    const raw = "PROFILE: X\nTYPE: Y\nAGE: 5\nCOUNTRY: Z\nGENDER: M\n\nBIO:\nhi there\n\nANSWERS:\nnothing parseable here";
+    expect(() => parsePersona(raw)).toThrow(); // answers.min(1)
+  });
 });
 
 describe("persona -> graph mapping", () => {
