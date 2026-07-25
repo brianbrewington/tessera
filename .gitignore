@@ -38,3 +38,4 @@ docs/papers/
 *.swp
 .idea/
 .vscode/
+graphs/
