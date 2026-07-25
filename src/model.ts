@@ -10,8 +10,8 @@ export class Node {
   get type(): string { return this.rec.type; }
   get subtype(): string | null { return this.rec.subtype; }
   /** Display name: metadata.name (personas/entities) else the node text. */
-  get name(): string { return (this.rec.metadata?.name as string) ?? this.rec.text; }
-  get description(): string { return (this.rec.metadata?.description as string) ?? ""; }
+  get name(): string { return this.rec.name ?? (this.rec.metadata?.name as string) ?? this.rec.text; }
+  get description(): string { return this.rec.description ?? (this.rec.metadata?.description as string) ?? ""; }
   get strength(): number { return this.rec.strength; }
   isPerson(): this is Person { return this.rec.type === "PERSON"; }
 }

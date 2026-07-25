@@ -31,6 +31,8 @@ export const PutNodeInput = z.object({
   subtype: z.string().optional(),
   origin: Origin,
   text: z.string().min(1),
+  name: z.string().optional(),
+  description: z.string().optional(),
   provenance: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   pinned: z.boolean().optional(),
@@ -43,6 +45,8 @@ export interface NodeRecord {
   subtype: string | null;
   origin: Origin;
   text: string;
+  name: string | null;
+  description: string | null;
   contentHash: string;
   strength: number;
   timestamp: number;

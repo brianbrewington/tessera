@@ -14,12 +14,13 @@ export function exportViewer(db: string, out: string): number {
   const store = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
   const nodes = store.allNodes().map((n) => ({
     id: n.id,
-    label: (n.metadata?.name as string | undefined) ?? (n.metadata?.title as string | undefined) ?? n.text.slice(0, 40),
+    label: n.name ?? (n.metadata?.name as string | undefined) ?? (n.metadata?.title as string | undefined) ?? n.text.slice(0, 40),
     type: n.type,
     group: n.subtype ?? (n.metadata?.noteType as string | undefined) ?? n.type,
     text: n.text,
     strength: n.strength,
-    meta: n.metadata ?? null,
+    // fold the first-class name/description columns into the viewer's meta bag (panel reads md.name/description)
+    meta: { ...(n.metadata ?? {}), name: n.name, description: n.description },
   }));
   const edges = store.allEdges().map((e) => ({
     from: e.from,

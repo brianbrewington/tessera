@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   type         TEXT NOT NULL,
   subtype      TEXT,
   origin       TEXT NOT NULL,
-  text         TEXT NOT NULL,
+  text         TEXT NOT NULL,                       -- pure identity/dedup basis (mapper-constructed)
+  name         TEXT,                                -- first-class display name (decoupled from identity)
+  description  TEXT,                                -- first-class self-contained description
   content_hash TEXT NOT NULL,
   strength     REAL NOT NULL DEFAULT 1,
   timestamp    INTEGER NOT NULL,

@@ -21,7 +21,7 @@ function defaultEmbedder(): Embedder {
 }
 
 export class Graph {
-  private constructor(readonly name: string, readonly store: GraphStore) {}
+  private constructor(readonly name: string, readonly store: GraphStore, readonly embedder: Embedder) {}
 
   /** Open (creating if absent) a named graph. Pass an embedder for tests (defaults to Ollama). */
   static open(name: string, embedder?: Embedder): Graph {
@@ -30,7 +30,13 @@ export class Graph {
     if (!existsSync(metaPath(name))) {
       writeFileSync(metaPath(name), JSON.stringify({ name, created: new Date().toISOString() }, null, 1));
     }
-    return new Graph(name, new GraphStore({ path: dbPath(name), embedder: embedder ?? defaultEmbedder() }));
+    const emb = embedder ?? defaultEmbedder();
+    return new Graph(name, new GraphStore({ path: dbPath(name), embedder: emb }), emb);
+  }
+
+  /** Wrap an existing store + embedder as a Graph (tests use an in-memory store). */
+  static attach(store: GraphStore, embedder: Embedder, name = "test"): Graph {
+    return new Graph(name, store, embedder);
   }
 
   static list(): { name: string; nodes?: number }[] {

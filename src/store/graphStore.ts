@@ -45,6 +45,7 @@ function fromBlob(b: Buffer): Float32Array {
 
 type NodeRow = {
   id: string; type: string; subtype: string | null; origin: string; text: string;
+  name: string | null; description: string | null;
   content_hash: string; strength: number; timestamp: number; provenance: string | null;
   metadata: string | null; status: string; pinned: number; frame_debt: number; version: number;
 };
@@ -56,6 +57,8 @@ function hydrate(r: NodeRow): NodeRecord {
     subtype: r.subtype,
     origin: r.origin as Origin,
     text: r.text,
+    name: r.name,
+    description: r.description,
     contentHash: r.content_hash,
     strength: r.strength,
     timestamp: r.timestamp,
@@ -147,10 +150,19 @@ export class GraphStore {
       }
 
       if (dupId) {
-        const before = this.db.prepare("SELECT strength, version FROM nodes WHERE id = ?").get(dupId) as
-          | { strength: number; version: number }
-          | undefined;
-        this.db.prepare("UPDATE nodes SET strength = strength + 1, version = version + 1 WHERE id = ?").run(dupId);
+        const before = this.db
+          .prepare("SELECT strength, version, name, description FROM nodes WHERE id = ?")
+          .get(dupId) as { strength: number; version: number; name: string | null; description: string | null } | undefined;
+        // reinforce: bump strength; keep the RICHER description (longer non-empty); fill name only if empty.
+        // Never clobber a good value with a thinner later mention.
+        const mergedName = before?.name || inp.name || null;
+        const mergedDesc =
+          inp.description && (!before?.description || inp.description.length > before.description.length)
+            ? inp.description
+            : (before?.description ?? null);
+        this.db
+          .prepare("UPDATE nodes SET strength = strength + 1, version = version + 1, name = ?, description = ? WHERE id = ?")
+          .run(mergedName, mergedDesc, dupId);
         this.log(m, at, "reinforce", dupId, before, { strength: (before?.strength ?? 0) + 1 });
         return { id: dupId, reinforced: true };
       }
@@ -158,8 +170,8 @@ export class GraphStore {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO nodes (id, type, subtype, origin, text, content_hash, strength, timestamp, provenance, metadata, status, pinned, frame_debt, version)
-           VALUES (@id, @type, @subtype, @origin, @text, @content_hash, 1, @timestamp, @provenance, @metadata, 'proposed', @pinned, 0, 1)`,
+          `INSERT INTO nodes (id, type, subtype, origin, text, name, description, content_hash, strength, timestamp, provenance, metadata, status, pinned, frame_debt, version)
+           VALUES (@id, @type, @subtype, @origin, @text, @name, @description, @content_hash, 1, @timestamp, @provenance, @metadata, 'proposed', @pinned, 0, 1)`,
         )
         .run({
           id,
@@ -167,6 +179,8 @@ export class GraphStore {
           subtype: inp.subtype ?? null,
           origin: inp.origin,
           text: inp.text,
+          name: inp.name ?? null,
+          description: inp.description ?? null,
           content_hash: hash,
           timestamp: at,
           provenance: inp.provenance ? JSON.stringify(inp.provenance) : null,
@@ -295,16 +309,23 @@ export class GraphStore {
           .run(edgeId, inp.from, inp.to, inp.kind, pol, inp.semanticWeight ?? 0);
       }
 
-      const assertionId = randomUUID();
-      this.db
-        .prepare(
-          `INSERT INTO edge_assertions (id, edge_id, reason, origin, grounding, expert_surprise, status, version)
-           VALUES (?, ?, ?, ?, NULL, ?, 'proposed', 1)`,
-        )
-        .run(assertionId, edgeId, inp.reason, inp.origin, surprise);
-      this.db
-        .prepare("INSERT INTO vec_assert_quarantine (assert_id, embedding) VALUES (?, ?)")
-        .run(assertionId, toBlob(rvec));
+      // Assertion idempotency: if this exact reason already backs this edge, reuse it — don't insert a
+      // duplicate assertion or its vector on re-ingest. Bounds unbounded edge_assertions/vec growth.
+      const dupAssert = this.db
+        .prepare("SELECT id FROM edge_assertions WHERE edge_id = ? AND reason = ?")
+        .get(edgeId, inp.reason) as { id: string } | undefined;
+      const assertionId = dupAssert?.id ?? randomUUID();
+      if (!dupAssert) {
+        this.db
+          .prepare(
+            `INSERT INTO edge_assertions (id, edge_id, reason, origin, grounding, expert_surprise, status, version)
+             VALUES (?, ?, ?, ?, NULL, ?, 'proposed', 1)`,
+          )
+          .run(assertionId, edgeId, inp.reason, inp.origin, surprise);
+        this.db
+          .prepare("INSERT INTO vec_assert_quarantine (assert_id, embedding) VALUES (?, ?)")
+          .run(assertionId, toBlob(rvec));
+      }
 
       this.log(m, at, created ? "putEdge" : "reinforceEdge", edgeId, null, {
         edgeId,
