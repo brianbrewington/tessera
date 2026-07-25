@@ -17,15 +17,19 @@ const store = new GraphStore({ path: DB, embedder: new StubEmbedder(768) });
 
 const nodes = store.allNodes().map((n) => ({
   id: n.id,
-  label: (n.metadata?.title as string | undefined) ?? n.text.slice(0, 40),
+  // persona display name (metadata.name) > note title > text snippet.
+  label: (n.metadata?.name as string | undefined) ?? (n.metadata?.title as string | undefined) ?? n.text.slice(0, 40),
   type: n.type,
-  group: (n.metadata?.noteType as string | undefined) ?? n.type,
+  // group drives colour: persona subtype (country / persona_type / motif) > noteType > type.
+  group: n.subtype ?? (n.metadata?.noteType as string | undefined) ?? n.type,
   text: n.text,
   strength: n.strength,
+  meta: n.metadata ?? null, // {name,type,age,country,gender} for PERSON; {field} for CONCEPT
 }));
 const edges = store.allEdges().map((e) => ({
   from: e.from,
   to: e.to,
+  kind: e.kind, // RESONATES_WITH rendered distinctly (near-duplicate personas)
   w: e.hebbianWeight,
   reason: store.edgeReason(e.id) ?? "",
 }));

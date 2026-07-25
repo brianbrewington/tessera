@@ -30,6 +30,14 @@
   #tip { position:fixed; pointer-events:none; background:#0d111a; border:1px solid #26304a;
     border-radius:6px; padding:6px 9px; font-size:12px; color:#d6dbe6; max-width:320px; display:none; z-index:5; }
   #help { position:fixed; bottom:12px; left:16px; color:var(--dim); font-size:11px; pointer-events:none; }
+  #legend { position:fixed; bottom:12px; right:16px; background:rgba(13,17,26,.82); border:1px solid #1c2432;
+    border-radius:8px; padding:9px 11px; font-size:11px; color:var(--dim); max-width:220px; }
+  #legend .row { display:flex; align-items:center; gap:7px; margin:3px 0; }
+  #legend .dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+  #legend .ln { width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
+  #pmeta { margin:2px 0 4px; }
+  #pmeta .kv { display:inline-block; margin:0 8px 6px 0; color:#c3c9d6; }
+  #pmeta .kv b { color:var(--dim); font-weight:600; text-transform:uppercase; font-size:10px; letter-spacing:.06em; margin-right:4px; }
 </style>
 </head>
 <body>
@@ -37,8 +45,10 @@
 <div id="hud"><h1>TESSERA</h1><div class="sub" id="counts"></div></div>
 <div id="tip"></div>
 <div id="help">scroll = zoom · drag = pan · click node = focus &amp; walk · hover edge = why</div>
+<div id="legend"></div>
 <div id="panel"><span class="close" id="pclose">×</span>
   <div class="type" id="ptype"></div><h2 id="ptitle"></h2>
+  <div id="pmeta"></div>
   <div class="body" id="pbody"></div>
   <div class="nlabel">connections</div><div id="pneighbors"></div>
 </div>
@@ -56,13 +66,32 @@ const byId = new Map(nodes.map(n=>[n.id,n]));
 const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) })).filter(e=>e.a&&e.b);
 for(const e of edges){ e.a.deg++; e.b.deg++; }
 const maxDeg = Math.max(1, ...nodes.map(n=>n.deg));
-document.getElementById('counts').textContent = nodes.length+' ideas · '+edges.length+' connections';
+const personCount = nodes.filter(n=>n.type==='PERSON').length;
+const conceptCount = nodes.length - personCount;
+const resCount = edges.filter(e=>e.kind==='RESONATES_WITH').length;
+document.getElementById('counts').textContent = personCount
+  ? personCount+' personas · '+conceptCount+' concept hubs · '+resCount+' resonances'
+  : nodes.length+' ideas · '+edges.length+' connections';
 
-// color by noteType/type
-const palette = ['#7aa2f7','#bb9af7','#7dcfff','#9ece6a','#e0af68','#f7768e','#2ac3de','#ff9e64'];
-const typeColor = new Map(); let ci=0;
+// Fixed colours for the persona groups (stable across exports); palette fallback for
+// anything else (e.g. the corpus viewer's noteTypes).
+const GROUP_COLORS = { PERSON:'#7aa2f7', country:'#9ece6a', persona_type:'#e0af68', motif:'#bb9af7' };
+const palette = ['#7dcfff','#f7768e','#2ac3de','#ff9e64','#c0caf5','#73daca'];
+const typeColor = new Map(Object.entries(GROUP_COLORS)); let ci=0;
 function colorFor(n){ const k=n.group||n.type||'x'; if(!typeColor.has(k)) typeColor.set(k, palette[ci++%palette.length]); return typeColor.get(k); }
-function radius(n){ return 4 + 9*Math.sqrt(n.deg/maxDeg); }
+// Sized by degree: an over-connected concept hub (a trope) renders large; so does a
+// prominent, highly-linked persona.
+function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Math.sqrt(n.deg/maxDeg); }
+
+// Legend — the groups present plus the resonance edge.
+(function buildLegend(){
+  const groups = [...new Set(nodes.map(n=>n.group||n.type))];
+  const order = ['PERSON','country','persona_type','motif'];
+  groups.sort((a,b)=>{ const ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || (a<b?-1:1); });
+  const L = document.getElementById('legend');
+  L.innerHTML = groups.map(g=>'<div class="row"><span class="dot" style="background:'+colorFor({group:g})+'"></span>'+g+'</div>').join('')
+    + (resCount ? '<div class="row" style="margin-top:6px"><span class="ln" style="border-color:#f7768e"></span>resonates with</div>' : '');
+})();
 
 // --- force layout ---
 let alpha = 1;
@@ -98,8 +127,11 @@ function draw(){
   for(const e of edges){
     const [ax,ay]=toScreen(e.a.x,e.a.y), [bx,by]=toScreen(e.b.x,e.b.y);
     const on = e===hoverEdge || (focusSet && (e.a===selected||e.b===selected));
-    ctx.strokeStyle = on ? '#7aa2f7' : (focusSet ? '#1a2130' : 'rgba(120,140,180,'+(0.12+0.5*(e.w||1)/4)+')');
-    ctx.lineWidth = on ? 2 : 1;
+    const reson = e.kind==='RESONATES_WITH'; // near-duplicate personas — draw distinctly
+    ctx.strokeStyle = on ? '#ffffff'
+      : (focusSet ? (reson?'#3a2a44':'#1a2130')
+      : (reson ? 'rgba(247,118,142,0.30)' : 'rgba(120,140,180,'+(0.10+0.4*(e.w||1)/4)+')'));
+    ctx.lineWidth = on ? 2 : (reson ? 1.3 : 1);
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
   // nodes
@@ -170,6 +202,10 @@ function select(n){ selected=n; alpha=Math.max(alpha,0.35);
   panel.classList.add('open');
   document.getElementById('ptype').textContent = (n.group||n.type||'')+(n.deg?(' · '+n.deg+' links'):'');
   document.getElementById('ptitle').textContent = n.label||n.id;
+  const mbox=document.getElementById('pmeta'), md=n.meta||{};
+  if(n.type==='PERSON'){ const rows=[['type',md.type],['age',md.age],['country',md.country],['gender',md.gender]].filter(r=>r[1]!=null);
+    mbox.innerHTML = rows.map(r=>'<span class="kv"><b>'+r[0]+'</b>'+r[1]+'</span>').join(''); }
+  else mbox.innerHTML = '<span class="kv"><b>hub</b>'+(md.field||n.group||'concept')+' · '+n.deg+' personas</span>';
   document.getElementById('pbody').textContent = (n.text||'').slice(0,900);
   const nb = edges.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a, reason:e.reason }));
   const box=document.getElementById('pneighbors'); box.innerHTML='';
