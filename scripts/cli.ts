@@ -37,7 +37,8 @@ async function main(): Promise<void> {
       try {
         for (const f of files) {
           const r = await ingestFile(graph, extractor, f);
-          console.log(`ingested "${r.title}": ${r.chunks} chunk(s) -> ${r.entities} entities, ${r.edges} edges`);
+          const warn = r.parseFailures || r.emptyChunks ? `  (! ${r.parseFailures} parse-fail, ${r.emptyChunks} empty)` : "";
+          console.log(`ingested "${r.title}": ${r.chunks} chunk(s) -> ${r.entities} entities, ${r.edges} edges${warn}`);
         }
       } finally {
         graph.close();

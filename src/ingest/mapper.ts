@@ -28,23 +28,21 @@ export async function mapExtraction(
   for (const e of ex.entities) {
     const key = norm(e.name);
     if (!key) continue;
-    let id = known.get(key);
-    if (!id) {
-      const { type, subtype } = toStoreType(e.type);
-      const vec = await embedder.embed(`${e.name.trim()}. ${e.description}`.slice(0, 2000)); // embed CONTENT
-      const put = await store.putNode(
-        { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name, source), name: e.name.trim(), description: e.description },
-        meta,
-        vec,
-      );
-      id = put.id;
-      known.set(key, id);
-      entityCount++;
-    }
-    here.set(key, id);
-    // provenance: this entity appeared in this chunk (idempotent — same edge/reason won't duplicate).
+    const { type, subtype } = toStoreType(e.type);
+    const vec = await embedder.embed(`${e.name.trim()}. ${e.description}`.slice(0, 2000)); // embed CONTENT, not identity
+    // Always putNode: the store dedups by identity (content_hash of the identity string) and reinforce-merges
+    // the richer description each mention. nearDupMerge:false so similar content never collapses distinct ids
+    // (place\tjava vs concept\tjava; source-qualified people). Homographs of different TYPES become distinct
+    // nodes here; relation wiring below is name-based (an inherent ambiguity for same-name/different-type).
+    const put = await store.putNode(
+      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name, source), name: e.name.trim(), description: e.description },
+      meta, vec, { nearDupMerge: false },
+    );
+    if (!put.reinforced) entityCount++;
+    here.set(key, put.id);
+    known.set(key, put.id);
     await store.putEdge(
-      { from: id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin: "ingest" },
+      { from: put.id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin: "ingest" },
       meta,
     );
   }

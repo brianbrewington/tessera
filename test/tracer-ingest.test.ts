@@ -96,6 +96,47 @@ describe("mapExtraction", () => {
     expect(store.allNodes().filter((n) => n.type === "PERSON").length).toBe(2);
   });
 
+  it("type-blind homographs split: PLACE Java and CONCEPT Java become two nodes", async () => {
+    store = new GraphStore({ path: ":memory:", embedder: emb });
+    const ch = await mkChunk(store);
+    // Same name, different types, IDENTICAL descriptions — only the type-in-identity + nearDupMerge:false
+    // keep them apart (a cosine near-dup merge would have collapsed them).
+    await mapExtraction(store, emb, meta,
+      { entities: [{ name: "Java", type: "PLACE", description: "an island" }, { name: "Java", type: "CONCEPT", description: "an island" }], relations: [] },
+      "doc.md", new Map(), { id: ch, label: "c1" });
+    const javas = store.allNodes().filter((n) => n.name === "Java");
+    expect(javas.length).toBe(2); // NOT collapsed by cosine near-dup
+    expect(new Set(javas.map((n) => n.subtype)).size).toBe(2); // place + concept — the type-in-identity split
+  });
+
+  it("within a doc, a later richer mention upgrades the description (node-reuse via known)", async () => {
+    store = new GraphStore({ path: ":memory:", embedder: emb });
+    const known = new Map<string, string>();
+    const c1 = await mkChunk(store, "c1");
+    const c2 = await mkChunk(store, "c2");
+    await mapExtraction(store, emb, meta,
+      { entities: [{ name: "De Doorns", type: "PLACE", description: "a town" }], relations: [] },
+      "doc.md", known, { id: c1, label: "c1" });
+    await mapExtraction(store, emb, meta,
+      { entities: [{ name: "De Doorns", type: "PLACE", description: "a farming town in the Hex River Valley" }], relations: [] },
+      "doc.md", known, { id: c2, label: "c2" });
+    const places = store.allNodes().filter((n) => n.name === "De Doorns");
+    expect(places.length).toBe(1); // reused across chunks in one doc
+    expect(places[0]!.description).toContain("Hex River Valley"); // richer won within the doc
+  });
+
+  it("type-conflict guard: a colliding-identity node of a different type never clobbers name/description", async () => {
+    store = new GraphStore({ path: ":memory:", embedder: emb });
+    // Force an identity collision (same `text`) across store types — the store must keep the original, not overwrite.
+    await store.putNode({ type: "CONCEPT", origin: "ingest", text: "collide", name: "Original", description: "the good description" }, meta);
+    await store.putNode({ type: "PERSON", origin: "ingest", text: "collide", name: "Impostor", description: "" }, meta);
+    const nodes = store.allNodes().filter((n) => n.text === "collide");
+    expect(nodes.length).toBe(1); // deduped on identity
+    expect(nodes[0]!.type).toBe("CONCEPT"); // original type preserved
+    expect(nodes[0]!.name).toBe("Original"); // not clobbered
+    expect(nodes[0]!.description).toBe("the good description");
+  });
+
   it("assertion idempotency: same edge+reason inserts one assertion", async () => {
     store = new GraphStore({ path: ":memory:", embedder: emb });
     const a = (await store.putNode({ type: "CONCEPT", origin: "ingest", text: "a", name: "A", description: "" }, meta)).id;

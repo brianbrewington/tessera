@@ -28,8 +28,13 @@ export const Extraction = z.object({
 });
 export type Extraction = z.infer<typeof Extraction>;
 
+export interface ExtractResult {
+  extraction: Extraction;
+  parsed: boolean; // false = the model's reply couldn't be parsed (distinct from a genuinely empty chunk)
+}
+
 export interface Extractor {
-  extract(text: string): Promise<Extraction>;
+  extract(text: string): Promise<ExtractResult>;
 }
 
 // Ported from docs/history/memory-agent/system-design.md:327-396 (LightRAG) + graphrag-integration-
@@ -78,25 +83,29 @@ export function firstJsonObject(text: string): string | null {
   return null;
 }
 
-/** Parse + validate an extraction reply. Never throws — returns empty on unparseable output. */
-export function parseExtraction(raw: string): Extraction {
+/** Parse + validate an extraction reply. Never throws — reports `parsed:false` on unparseable output so a
+ *  silent parse failure is distinguishable from a genuinely empty chunk. */
+export function parseExtraction(raw: string): ExtractResult {
   const js = firstJsonObject(raw);
-  if (!js) return { entities: [], relations: [] };
+  if (!js) return { extraction: { entities: [], relations: [] }, parsed: false };
   let obj: unknown;
-  try { obj = JSON.parse(js); } catch { return { entities: [], relations: [] }; }
-  const parsed = Extraction.safeParse(obj);
-  if (!parsed.success) return { entities: [], relations: [] };
+  try { obj = JSON.parse(js); } catch { return { extraction: { entities: [], relations: [] }, parsed: false }; }
+  const p = Extraction.safeParse(obj);
+  if (!p.success) return { extraction: { entities: [], relations: [] }, parsed: false };
   // Keep only relations whose endpoints were actually extracted (drop hallucinated dangling edges).
-  const names = new Set(parsed.data.entities.map((e) => e.name));
+  const names = new Set(p.data.entities.map((e) => e.name));
   return {
-    entities: parsed.data.entities,
-    relations: parsed.data.relations.filter((r) => names.has(r.source) && names.has(r.target)),
+    extraction: {
+      entities: p.data.entities,
+      relations: p.data.relations.filter((r) => names.has(r.source) && names.has(r.target)),
+    },
+    parsed: true,
   };
 }
 
 export class LlmExtractor implements Extractor {
   constructor(private chat: Chat, private opts: { temperature?: number } = {}) {}
-  async extract(text: string): Promise<Extraction> {
+  async extract(text: string): Promise<ExtractResult> {
     const raw = await this.chat.complete(EXTRACTION_SYSTEM, text, { temperature: this.opts.temperature ?? 0.4 });
     return parseExtraction(raw);
   }

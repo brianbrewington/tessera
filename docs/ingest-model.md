@@ -9,13 +9,14 @@ identity policy** by constructing each node's `text` (the dedup basis) and its f
 | node | `text` (identity/dedup key) | `name` (display) | `description` / retrieval | notes |
 |---|---|---|---|---|
 | **SOURCE** (1 per doc) | `source\t<path>` | doc title | — (path in provenance) | keyed by PATH, not title |
-| **CHUNK** (1 per chunk) | `chunk\t<sha256(rawtext)>` | short label (first ~60 chars) | **raw chunk text** (embedded) | **NEW — the RAG retrieval unit** |
+| **CHUNK** (1 per chunk) | `chunk\t<sourceKey>\t<sha256(rawtext)[:16]>` | short label (first ~60 chars) | **raw chunk text** (embedded) | **NEW — the RAG retrieval unit** |
 | **Hub entity** (PLACE/ORG/CONCEPT/PRODUCT/EVENT/TECHNOLOGY/CODE/FILE) | `<type>\t<normalized name>` | name | description | shared across docs → trope hubs |
 | **Identity entity** (PERSON) | `<type>\t<normalized name>\t<sourceKey>` | name | description | distinct instances never merge |
 
 - `sourceKey = sha256(source path).slice(0,8)` (matches `persona.ts`). `normalized = trim().toLowerCase()`.
 - Same identity string → same GUID (dedup/reinforce). Different → new GUID.
-- **CHUNK identity = hash of its raw text** → re-ingesting the same doc reinforces the same chunks (idempotent).
+- **CHUNK identity = source + hash of its raw text** → re-ingesting the same doc reinforces the same chunks
+  (idempotent); the same text in a *different* doc is a distinct chunk (source-qualified).
 
 ## Edges (provenance + relations)
 | edge | kind | reason (names both endpoints) |

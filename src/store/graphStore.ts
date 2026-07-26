@@ -130,6 +130,7 @@ export class GraphStore {
     input: PutNodeInput,
     meta: Meta,
     vector?: Float32Array,
+    opts: { nearDupMerge?: boolean } = {},
   ): Promise<{ id: string; reinforced: boolean }> {
     const inp = PutNodeInput.parse(input);
     const m = Meta.parse(meta);
@@ -144,25 +145,33 @@ export class GraphStore {
       let dupId: string | undefined = (
         this.db.prepare("SELECT id FROM nodes WHERE content_hash = ?").get(hash) as { id: string } | undefined
       )?.id;
-      if (!dupId) {
+      // Secondary near-dup merge is content-based; identity-controlled callers (ingest) pass
+      // nearDupMerge:false so content_hash(identity string) is the SOLE identity key — distinct
+      // identities with similar CONTENT (two docs same title; "place\tjava" vs "concept\tjava") must
+      // NOT collapse. The content embedding is for RAG/similarity, not identity.
+      if (!dupId && opts.nearDupMerge !== false) {
         const near = this.knnNodes("vec_node_quarantine", vec, 1);
         if (near.length && near[0]!.cosine > DEDUP_COSINE) dupId = near[0]!.node_id;
       }
 
       if (dupId) {
         const before = this.db
-          .prepare("SELECT strength, version, name, description FROM nodes WHERE id = ?")
-          .get(dupId) as { strength: number; version: number; name: string | null; description: string | null } | undefined;
-        // reinforce: bump strength; keep the RICHER description (longer non-empty); fill name only if empty.
-        // Never clobber a good value with a thinner later mention.
-        const mergedName = before?.name || inp.name || null;
-        const mergedDesc =
-          inp.description && (!before?.description || inp.description.length > before.description.length)
+          .prepare("SELECT strength, version, type, name, description FROM nodes WHERE id = ?")
+          .get(dupId) as { strength: number; version: number; type: string; name: string | null; description: string | null } | undefined;
+        // reinforce: bump strength; keep the RICHER description; fill name only if empty. On a TYPE CONFLICT
+        // (only reachable via nearDupMerge cosine — content_hash includes the type-prefixed identity), refuse
+        // to merge name/description and log it — never clobber across types.
+        const typeConflict = !!before && before.type !== inp.type;
+        const mergedName = typeConflict ? (before?.name ?? null) : (before?.name || inp.name || null);
+        const mergedDesc = typeConflict
+          ? (before?.description ?? null)
+          : inp.description && (!before?.description || inp.description.length > before.description.length)
             ? inp.description
             : (before?.description ?? null);
         this.db
           .prepare("UPDATE nodes SET strength = strength + 1, version = version + 1, name = ?, description = ? WHERE id = ?")
           .run(mergedName, mergedDesc, dupId);
+        if (typeConflict) this.log(m, at, "typeConflict", dupId, { type: before?.type }, { attemptedType: inp.type });
         this.log(m, at, "reinforce", dupId, before, { strength: (before?.strength ?? 0) + 1 });
         return { id: dupId, reinforced: true };
       }
@@ -195,6 +204,8 @@ export class GraphStore {
         subtype: inp.subtype ?? null,
         origin: inp.origin,
         text: inp.text,
+        name: inp.name ?? null,
+        description: inp.description ?? null,
         content_hash: hash,
         status: "proposed",
         embedding_b64: embeddingB64,

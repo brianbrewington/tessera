@@ -1,7 +1,7 @@
 // Ingest orchestrator (per docs/ingest-model.md): open graph -> read adapter -> chunk -> per chunk
 // {CHUNK node (raw text, embedded = the RAG unit) -> ORIGINATED_FROM the SOURCE; extract -> map entities,
-// each APPEARED_IN this chunk}. SOURCE is keyed by PATH. Reports badChunks (zero-yield) so a silently-empty
-// run is visible, not a false success.
+// each APPEARED_IN this chunk}. SOURCE is keyed by PATH; SOURCE/CHUNK use nearDupMerge:false so similar
+// content never collapses distinct identities. Reports parse failures vs empty chunks (fail-loud).
 import type { Graph } from "../graph.js";
 import type { Extractor } from "../extract/extractor.js";
 import type { Meta } from "../schema.js";
@@ -10,13 +10,16 @@ import { chunk as splitChunks } from "./chunker.js";
 import { mapExtraction } from "./mapper.js";
 import { sourceIdentity, chunkIdentity } from "../extract/identity.js";
 
+const IDENTITY = { nearDupMerge: false } as const; // ingest owns identity via content_hash; no cosine merge
+
 export interface IngestResult {
   source: string;
   title: string;
   chunks: number;
   entities: number;
   edges: number;
-  badChunks: number; // chunks that yielded nothing (parse failure or genuinely empty) — a health signal
+  parseFailures: number; // chunks whose model reply couldn't be parsed
+  emptyChunks: number; // chunks that parsed but extracted nothing
 }
 
 export async function ingestFile(graph: Graph, extractor: Extractor, path: string): Promise<IngestResult> {
@@ -32,12 +35,12 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
       text: sourceIdentity(doc.source), name: doc.title, description: `Document: ${doc.title}`,
       provenance: { path: doc.source },
     },
-    meta, srcVec,
+    meta, srcVec, IDENTITY,
   );
 
   const chunks = splitChunks(doc.text);
   const known = new Map<string, string>();
-  let entities = 0, edges = 0, badChunks = 0;
+  let entities = 0, edges = 0, parseFailures = 0, emptyChunks = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     const c = chunks[i]!;
@@ -50,19 +53,20 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
         text: chunkIdentity(doc.source, c.text), name: label, description: c.text,
         provenance: { path: doc.source, index: i },
       },
-      meta, cvec,
+      meta, cvec, IDENTITY,
     );
     await graph.store.putEdge(
       { from: chunkNode.id, to: src.id, kind: "ORIGINATED_FROM", reason: `${label} is from ${doc.title}`, origin: "ingest" },
       meta,
     );
 
-    const ex = await extractor.extract(c.text);
-    if (ex.entities.length === 0 && ex.relations.length === 0) badChunks++;
-    const r = await mapExtraction(graph.store, graph.embedder, meta, ex, doc.source, known, { id: chunkNode.id, label });
+    const { extraction, parsed } = await extractor.extract(c.text);
+    if (!parsed) parseFailures++;
+    else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
+    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, doc.source, known, { id: chunkNode.id, label });
     entities += r.entityCount;
     edges += r.edgeCount;
   }
 
-  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, badChunks };
+  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks };
 }
