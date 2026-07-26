@@ -18,6 +18,31 @@ denser.
 (`alpha = clamp(0.16 × zoom, 0.045, 0.30)`, width `0.7px`), firming up as you zoom in. It helps, but it treats
 all edges equally — it doesn't encode which edges *matter*.
 
+## The governing principle — visual bandwidth
+
+*The through-line for every decision below, and it applies to labels as much as edges. Stated here so the design
+traces back to a principle, not to taste.*
+
+A graph view has a fixed **visual bandwidth**: at any instant the eye resolves only so many marks before the field
+turns to noise, and that budget **does not grow when the graph does** — a 1,000-edge graph gets the same bandwidth
+as a 50-edge one. So the design's job is not to *draw the data*; it is to *spend the bandwidth* — on the structure
+that carries meaning, and on nothing else. This is Tufte's data-ink ratio and his war on chartjunk, carried from
+the static page to an interactive map: call the enemy **mapjunk** (Brian's coinage) — every low-rank edge and
+redundant label drawn at full strength is ink spent on noise, and it costs you the signal you came for.
+
+The sharpest consequence unifies two things that look separate — **naming**. "Give the whole cluster one name" (a
+community label) and "keep this single node's name" (a landmark) are **not two mechanisms. They are one prominence
+budget at different zoom levels** (Brian's framing). At any tile, rank everything by *local* prominence and spend a
+fixed label budget: zoomed out the budget is tiny, so one name covers the mass and only the two or three most
+prominent nodes punch through as landmarks; zoom in and the budget grows, more individuals earn their names, and the
+group label dissolves into its members. Church-in-Kansas: a node keeps its name not because it is globally important
+but because it is the most prominent thing *in its own neighborhood*. Group-naming and landmark-naming are the same
+rule run at different budgets — and the same logic governs edges, where at altitude only the arterial links survive
+the budget and the capillaries fade until you zoom close enough to afford them.
+
+So this brief and the (later) semantic-zoom brief are one question asked of two mark types: **what does the finite
+bandwidth buy at this zoom, and what should quietly step aside?**
+
 ## What exists (unchanged, design around it)
 
 A single self-contained HTML file renders the graph on an HTML `<canvas>` (no SVG/DOM per edge — there can be
