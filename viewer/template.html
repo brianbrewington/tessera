@@ -575,7 +575,7 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
   scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
     const x=el('span','x','×'); x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
     c.onclick=()=>restoreScene(s); box.appendChild(c); });
-  const add=el('span','add','+ save view'); add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
+  const add=el('span','add','+'); add.title='save this view as a scene'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
     add.replaceWith(inp); inp.focus();
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
     inp.addEventListener('blur', ()=> saveScene(inp.value)); };
