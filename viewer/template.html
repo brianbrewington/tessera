@@ -44,13 +44,13 @@
 <canvas id="c"></canvas>
 <div id="hud"><h1>TESSERA</h1><div class="sub" id="counts"></div></div>
 <div id="tip"></div>
-<div id="help">scroll = zoom · drag = pan · click node = focus &amp; walk · hover edge = why</div>
+<div id="help">scroll = zoom · drag = pan · click = focus · right-click = inspect · hover edge = why · h = show/hide provenance</div>
 <div id="legend"></div>
 <div id="panel"><span class="close" id="pclose">×</span>
   <div class="type" id="ptype"></div><h2 id="ptitle"></h2>
   <div id="pmeta"></div>
   <div class="body" id="pbody"></div>
-  <div class="nlabel">connections</div><div id="pneighbors"></div>
+  <div class="nlabel" id="pnlabel">connections</div><div id="pneighbors"></div>
 </div>
 <script>
 const GRAPH = /*__GRAPH_DATA__*/ {nodes:[],edges:[]};
@@ -58,62 +58,70 @@ const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 let W, H, DPR = Math.min(devicePixelRatio||1, 2);
 function resize(){ W=innerWidth; H=innerHeight; cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px'; ctx.setTransform(DPR,0,0,DPR,0,0); }
 addEventListener('resize', resize); resize();
+const $=id=>document.getElementById(id);
 
-// --- model ---
+// Escape model/user-controlled strings before ANY innerHTML interpolation (a name like "<img onerror=…>"
+// must not execute). textContent paths (title, body, tooltip, chips) need no escaping.
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// --- model (positions seeded on a ring, then settled) ---
 const nodes = GRAPH.nodes.map((n,i)=>({ ...n,
   x: Math.cos(i)*220 + (i%7-3)*30, y: Math.sin(i)*220 + (i%5-2)*30, vx:0, vy:0, deg:0 }));
 const byId = new Map(nodes.map(n=>[n.id,n]));
 const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) })).filter(e=>e.a&&e.b);
-for(const e of edges){ e.a.deg++; e.b.deg++; }
-const maxDeg = Math.max(1, ...nodes.map(n=>n.deg));
-const personCount = nodes.filter(n=>n.type==='PERSON').length;
-const conceptCount = nodes.length - personCount;
-const resCount = edges.filter(e=>e.kind==='RESONATES_WITH').length;
-document.getElementById('counts').textContent = personCount
-  ? personCount+' personas · '+conceptCount+' concept hubs · '+resCount+' resonances'
-  : nodes.length+' ideas · '+edges.length+' connections';
 
-// Escape user/model-controlled strings before ANY innerHTML interpolation. Persona TYPE/COUNTRY/GENDER
-// and motif/group text are model-generated — treat as hostile (a persona "TYPE: <img onerror=...>" must
-// not execute). textContent paths (title, body, tooltip, chips) need no escaping.
-function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// Provenance nodes (the document + its chunks) are PRESENT in the data but hidden by default — they're the
+// RAG substrate, not the semantic map. Press 'h' to reveal them (and their APPEARED_IN/ORIGINATED_FROM edges).
+const isProv = n => n.type==='SOURCE' && (n.group==='chunk' || n.group==='document');
+let showProv = false;
+let NODES=[], EDGES=[], maxDeg=1;
+function rebuild(){
+  const vis = new Set(nodes.filter(n=>showProv||!isProv(n)));
+  NODES = [...vis];
+  EDGES = edges.filter(e=>vis.has(e.a)&&vis.has(e.b));
+  for(const n of NODES) n.deg=0;
+  for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
+  maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
+  settle(); buildLegend(); updateCounts();
+}
+function updateCounts(){
+  const people = NODES.filter(n=>n.type==='PERSON').length;
+  $('counts').textContent = people+' people · '+(NODES.length-people)+' other · '+EDGES.length+' links'+(showProv?' · +provenance':'');
+}
 
-// Fixed colours for the persona groups (stable across exports); palette fallback for
-// anything else (e.g. the corpus viewer's noteTypes).
-const GROUP_COLORS = { PERSON:'#7aa2f7', country:'#9ece6a', persona_type:'#e0af68', motif:'#bb9af7' };
-const palette = ['#7dcfff','#f7768e','#2ac3de','#ff9e64','#c0caf5','#73daca'];
-const typeColor = new Map(Object.entries(GROUP_COLORS)); let ci=0;
-function colorFor(n){ const k=n.group||n.type||'x'; if(!typeColor.has(k)) typeColor.set(k, palette[ci++%palette.length]); return typeColor.get(k); }
-// Sized by degree: an over-connected concept hub (a trope) renders large; so does a
-// prominent, highly-linked persona.
+// --- colour: coarse buckets, deliberately few. Person vs. the rest, because 7 shades of one hue don't read.
+// Add a bucket to `bucket()` when a group EARNS its own colour (place is the obvious next candidate). ---
+const NODE_COLORS = { person:'#e0af68', place:'#9ece6a', org:'#7dcfff', other:'#7f8aa3' };
+function bucket(n){ return n.type==='PERSON' ? 'person' : 'other'; } // e.g. add: n.group==='place'?'place':…
+function colorFor(n){ return NODE_COLORS[bucket(n)] || NODE_COLORS.other; }
 function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Math.sqrt(n.deg/maxDeg); }
 
-// Legend — the groups present plus the resonance edge.
-(function buildLegend(){
-  const groups = [...new Set(nodes.map(n=>n.group||n.type))];
-  const order = ['PERSON','country','persona_type','motif'];
-  groups.sort((a,b)=>{ const ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || (a<b?-1:1); });
-  const L = document.getElementById('legend');
-  L.innerHTML = groups.map(g=>'<div class="row"><span class="dot" style="background:'+colorFor({group:g})+'"></span>'+esc(g)+'</div>').join('')
-    + (resCount ? '<div class="row" style="margin-top:6px"><span class="ln" style="border-color:#f7768e"></span>resonates with</div>' : '');
-})();
+function buildLegend(){
+  const label = { person:'person', place:'place', org:'organization', other:'everything else' };
+  const order = ['person','place','org','other'];
+  const present = [...new Set(NODES.map(bucket))].sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+  const hasReson = EDGES.some(e=>e.kind==='RESONATES_WITH');
+  $('legend').innerHTML = present.map(g=>'<div class="row"><span class="dot" style="background:'+NODE_COLORS[g]+'"></span>'+esc(label[g]||g)+'</div>').join('')
+    + (hasReson ? '<div class="row" style="margin-top:6px"><span class="ln" style="border-color:#f7768e"></span>resonates with</div>' : '');
+}
 
-// --- force layout ---
-let alpha = 1;
-function tick(){
-  const kRep = 5200, kSpring = 0.045, rest = 90, grav = 0.012;
-  for(let i=0;i<nodes.length;i++){ const a=nodes[i];
-    for(let j=i+1;j<nodes.length;j++){ const b=nodes[j];
-      let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy||0.01, d=Math.sqrt(d2);
-      const f=kRep/d2, fx=f*dx/d, fy=f*dy/d;
-      a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy; }
-    a.vx -= a.x*grav; a.vy -= a.y*grav;
+// --- force layout: settle ONCE (here / on toggle), then FREEZE. Moving nodes only induced churn, so the
+// layout is static after this — pan & zoom move the camera, not the graph. ---
+function settle(){
+  const kRep=5200, kSpring=0.045, rest=90, grav=0.012;
+  for(const n of NODES){ n.vx=0; n.vy=0; }
+  for(let it=0; it<500; it++){
+    const alpha = Math.max(0.03, Math.pow(0.992, it));
+    for(let i=0;i<NODES.length;i++){ const a=NODES[i];
+      for(let j=i+1;j<NODES.length;j++){ const b=NODES[j];
+        let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy||0.01, d=Math.sqrt(d2);
+        const f=kRep/d2, fx=f*dx/d, fy=f*dy/d; a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy; }
+      a.vx-=a.x*grav; a.vy-=a.y*grav;
+    }
+    for(const e of EDGES){ let dx=e.b.x-e.a.x, dy=e.b.y-e.a.y, d=Math.hypot(dx,dy)||0.01;
+      const f=kSpring*(d-rest), fx=f*dx/d, fy=f*dy/d; e.a.vx+=fx; e.a.vy+=fy; e.b.vx-=fx; e.b.vy-=fy; }
+    for(const n of NODES){ n.x+=n.vx*alpha; n.y+=n.vy*alpha; n.vx*=0.82; n.vy*=0.82; }
   }
-  for(const e of edges){ let dx=e.b.x-e.a.x, dy=e.b.y-e.a.y, d=Math.hypot(dx,dy)||0.01;
-    const f=kSpring*(d-rest), fx=f*dx/d, fy=f*dy/d;
-    e.a.vx+=fx; e.a.vy+=fy; e.b.vx-=fx; e.b.vy-=fy; }
-  for(const n of nodes){ if(n===dragNode) continue; n.x+=n.vx*alpha; n.y+=n.vy*alpha; n.vx*=0.82; n.vy*=0.82; }
-  alpha *= 0.995; if(alpha<0.03) alpha=0.03;
 }
 
 // --- camera ---
@@ -121,26 +129,23 @@ let scale=1, ox=W/2, oy=H/2;
 function toScreen(x,y){ return [x*scale+ox, y*scale+oy]; }
 function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 
-// --- interaction state ---
-let hoverNode=null, hoverEdge=null, selected=null, dragNode=null, panning=false, lastX=0, lastY=0, downX=0, downY=0;
+// --- interaction state (no node dragging) ---
+let hoverNode=null, hoverEdge=null, selected=null, panning=false, lastX=0, lastY=0, downX=0, downY=0;
 
 function draw(){
-  tick();
   ctx.clearRect(0,0,W,H);
-  const focusSet = selected ? new Set([selected.id, ...edges.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
-  // edges
-  for(const e of edges){
+  const focusSet = selected ? new Set([selected.id, ...EDGES.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
+  for(const e of EDGES){
     const [ax,ay]=toScreen(e.a.x,e.a.y), [bx,by]=toScreen(e.b.x,e.b.y);
     const on = e===hoverEdge || (focusSet && (e.a===selected||e.b===selected));
-    const reson = e.kind==='RESONATES_WITH'; // near-duplicate personas — draw distinctly
+    const reson = e.kind==='RESONATES_WITH';
     ctx.strokeStyle = on ? '#ffffff'
       : (focusSet ? (reson?'#3a2a44':'#1a2130')
-      : (reson ? 'rgba(247,118,142,0.30)' : 'rgba(120,140,180,'+(0.10+0.4*(e.w||1)/4)+')'));
+      : (reson ? 'rgba(247,118,142,0.30)' : 'rgba(120,140,180,'+(0.10+0.4*Math.min(1,(e.w||1)/4))+')'));
     ctx.lineWidth = on ? 2 : (reson ? 1.3 : 1);
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
-  // nodes
-  for(const n of nodes){
+  for(const n of NODES){
     const [x,y]=toScreen(n.x,n.y), rr=radius(n);
     const dim = focusSet && !focusSet.has(n.id);
     const col = colorFor(n);
@@ -152,77 +157,101 @@ function draw(){
     if(n===selected||n===hoverNode){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,rr,0,7); ctx.stroke(); }
     ctx.globalAlpha=1;
   }
-  // labels: top-degree always, plus hover/selected; occlusion via simple degree gating
   ctx.font='12px -apple-system,sans-serif'; ctx.textAlign='center';
   const showLabel = n => n===hoverNode || n===selected || n.deg >= Math.max(2, maxDeg*0.5) || (focusSet&&focusSet.has(n.id)&&scale>0.7);
-  for(const n of nodes){ if(!showLabel(n)) continue;
-    if(focusSet && !focusSet.has(n.id)) continue;
-    const [x,y]=toScreen(n.x,n.y);
-    const t = (n.label||'').slice(0,34);
+  for(const n of NODES){ if(!showLabel(n)) continue; if(focusSet && !focusSet.has(n.id)) continue;
+    const [x,y]=toScreen(n.x,n.y); const t=(n.label||'').slice(0,34);
     ctx.fillStyle='rgba(11,14,20,0.75)'; const w=ctx.measureText(t).width;
     ctx.fillRect(x-w/2-4, y+radius(n)+3, w+8, 15);
     ctx.fillStyle='#e6e9ef'; ctx.fillText(t, x, y+radius(n)+14);
   }
   requestAnimationFrame(draw);
 }
-draw();
 
-// --- hit testing ---
+// --- hit testing (visible nodes/edges only) ---
 function nodeAt(px,py){ let best=null,bd=1e9;
-  for(const n of nodes){ const [x,y]=toScreen(n.x,n.y); const d=Math.hypot(px-x,py-y); if(d<radius(n)+6 && d<bd){bd=d;best=n;} }
+  for(const n of NODES){ const [x,y]=toScreen(n.x,n.y); const d=Math.hypot(px-x,py-y); if(d<radius(n)+6 && d<bd){bd=d;best=n;} }
   return best; }
 function edgeAt(px,py){ let best=null,bd=7;
-  for(const e of edges){ const [ax,ay]=toScreen(e.a.x,e.a.y),[bx,by]=toScreen(e.b.x,e.b.y);
+  for(const e of EDGES){ const [ax,ay]=toScreen(e.a.x,e.a.y),[bx,by]=toScreen(e.b.x,e.b.y);
     const dx=bx-ax,dy=by-ay,L2=dx*dx+dy*dy||1; let t=((px-ax)*dx+(py-ay)*dy)/L2; t=Math.max(0,Math.min(1,t));
     const cx=ax+t*dx, cy=ay+t*dy, d=Math.hypot(px-cx,py-cy); if(d<bd){bd=d;best=e;} }
   return best; }
 
-const tip=document.getElementById('tip');
+const tip=$('tip');
 cv.addEventListener('mousemove', ev=>{
   const px=ev.clientX, py=ev.clientY;
-  if(dragNode){ [dragNode.x,dragNode.y]=toWorld(px,py); return; }
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
   if(hoverEdge && hoverEdge.reason){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
-    tip.textContent = (hoverEdge.a.label)+'  ↔  '+(hoverEdge.b.label)+'   —   '+hoverEdge.reason; }
+    tip.textContent=(hoverEdge.a.label)+'  ↔  '+(hoverEdge.b.label)+'   —   '+hoverEdge.reason; }
   else if(hoverNode){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px'; tip.textContent=hoverNode.label; }
   else tip.style.display='none';
-  cv.style.cursor = (hoverNode||hoverEdge)?'pointer':'grab';
+  cv.style.cursor=(hoverNode||hoverEdge)?'pointer':'grab';
 });
-cv.addEventListener('mousedown', ev=>{ const n=nodeAt(ev.clientX,ev.clientY);
-  if(n){ dragNode=n; } else { panning=true; cv.classList.add('dragging'); }
-  lastX=ev.clientX; lastY=ev.clientY; downX=ev.clientX; downY=ev.clientY; });
-addEventListener('mouseup', ev=>{
-  const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // vs. mousedown, not last move
-  if(dragNode && !moved) select(dragNode);
-  else if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); n?select(n):deselect(); }
-  dragNode=null; panning=false; cv.classList.remove('dragging'); });
+cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
+addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
+  const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
+  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n) select(n); else { const e=edgeAt(ev.clientX,ev.clientY); e?inspectEdge(e):deselect(); } }
+  panning=false; cv.classList.remove('dragging'); });
+// right-click = deep inspect (node or edge)
+cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
+  if(n){ inspectNode(n); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) inspectEdge(e); });
 cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev.clientX,ev.clientY);
-  scale *= ev.deltaY<0?1.1:0.9; scale=Math.max(0.15,Math.min(6,scale));
-  ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
+  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.15,Math.min(6,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
-// --- panel / traversal ---
-const panel=document.getElementById('panel');
-function select(n){ selected=n; alpha=Math.max(alpha,0.35);
-  panel.classList.add('open');
-  document.getElementById('ptype').textContent = (n.group||n.type||'')+(n.deg?(' · '+n.deg+' links'):'');
-  document.getElementById('ptitle').textContent = n.label||n.id;
-  const mbox=document.getElementById('pmeta'), md=n.meta||{};
-  if(n.type==='PERSON'){ const rows=[['type',md.type],['age',md.age],['country',md.country],['gender',md.gender]].filter(r=>r[1]!=null);
-    mbox.innerHTML = rows.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join(''); }
-  else mbox.innerHTML = '<span class="kv"><b>hub</b>'+esc(md.field||n.group||'concept')+' · '+n.deg+' personas</span>';
-  // show substance: a persona bio, or an entity's description, else the node text. No clip — the panel
-  // .body scrolls (max-height + overflow:auto), so long bios are readable instead of cut mid-sentence.
-  document.getElementById('pbody').textContent = (md.bio || md.description || n.text || '');
-  const nb = edges.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a, reason:e.reason }));
-  const box=document.getElementById('pneighbors'); box.innerHTML='';
-  nb.sort((a,b)=>b.node.deg-a.node.deg).forEach(({node})=>{ const c=document.createElement('span');
-    c.className='chip'; c.textContent=node.label||node.id; c.onclick=()=>{ select(node); centerOn(node); }; box.appendChild(c); });
+// --- panel: light focus (left-click) + deep inspect (right-click) ---
+const panel=$('panel');
+function neighborsOf(n){ return EDGES.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a, reason:e.reason, kind:e.kind })); }
+function provenanceOf(n){ return edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b.label).filter(Boolean); }
+function chips(box, list, onpick){ list.forEach(node=>{ const c=document.createElement('span'); c.className='chip';
+  c.textContent=node.label||node.id; c.onclick=()=>onpick(node); box.appendChild(c); }); }
+
+// left-click: focus the neighbourhood + brief detail, and let you walk via the connection chips
+function select(n){ selected=n; panel.classList.add('open');
+  $('ptype').textContent=(n.group||n.type||'')+(n.deg?(' · '+n.deg+' links'):'');
+  $('ptitle').textContent=n.label||n.id;
+  $('pmeta').innerHTML='';
+  $('pbody').textContent=((n.meta&&(n.meta.description||n.meta.bio))||n.text||'');
+  $('pnlabel').textContent='connections';
+  const box=$('pneighbors'); box.innerHTML='';
+  chips(box, neighborsOf(n).sort((a,b)=>b.node.deg-a.node.deg).map(x=>x.node), node=>{ select(node); centerOn(node); });
+}
+// right-click a node: everything — id/identity/strength/degree, full description, provenance, neighbours by kind + reason
+function inspectNode(n){ selected=n; panel.classList.add('open');
+  $('ptype').textContent=(n.group?(n.type+' / '+n.group):n.type)+' · inspect';
+  $('ptitle').textContent=n.label||n.id;
+  const md=n.meta||{}, prov=provenanceOf(n);
+  const kv=[['id',n.id],['strength',n.strength],['degree',n.deg],['identity',n.text]].filter(r=>r[1]!=null);
+  $('pmeta').innerHTML=kv.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join('');
+  $('pbody').textContent=(md.description||md.bio||n.text||'')+(prov.length?('\n\nappears in:\n· '+prov.join('\n· ')):'');
+  $('pnlabel').textContent='connections';
+  const box=$('pneighbors'); box.innerHTML='';
+  const nb=neighborsOf(n);
+  [...new Set(nb.map(x=>x.kind))].forEach(k=>{ const h=document.createElement('div'); h.className='nlabel'; h.textContent=k; box.appendChild(h);
+    nb.filter(x=>x.kind===k).forEach(({node,reason})=>{ const row=document.createElement('div'); row.style.margin='0 0 7px';
+      const c=document.createElement('span'); c.className='chip'; c.textContent=node.label||node.id; c.onclick=()=>{ inspectNode(node); centerOn(node); }; row.appendChild(c);
+      if(reason){ const r=document.createElement('div'); r.style.cssText='color:#8b93a7;font-size:11px;margin:3px 2px 0'; r.textContent=reason; row.appendChild(r); }
+      box.appendChild(row); }); });
+}
+// right-click an edge: endpoints, kind, weight, and EVERY assertion reason
+function inspectEdge(e){ selected=null; panel.classList.add('open');
+  $('ptype').textContent=e.kind+' edge · inspect';
+  $('ptitle').textContent=(e.a.label||e.a.id)+'  ↔  '+(e.b.label||e.b.id);
+  const kv=[['kind',e.kind],['weight',e.w],['polarity',e.polarity]].filter(r=>r[1]!=null);
+  $('pmeta').innerHTML=kv.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join('');
+  const reasons=(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]);
+  $('pbody').textContent=reasons.length?reasons.map((r,i)=>(reasons.length>1?(i+1)+'. ':'')+r).join('\n\n'):'(no reason recorded)';
+  $('pnlabel').textContent='endpoints';
+  const box=$('pneighbors'); box.innerHTML='';
+  chips(box, [e.a,e.b], node=>{ inspectNode(node); centerOn(node); });
 }
 function deselect(){ selected=null; panel.classList.remove('open'); }
 function centerOn(n){ ox=W/2-n.x*scale; oy=H/2-n.y*scale; }
-document.getElementById('pclose').onclick=deselect;
-addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); });
+$('pclose').onclick=deselect;
+addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); } });
+
+rebuild(); draw();
 </script>
 </body>
 </html>

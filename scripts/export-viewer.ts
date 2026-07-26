@@ -27,7 +27,8 @@ export function exportViewer(db: string, out: string): number {
     to: e.to,
     kind: e.kind,
     w: e.hebbianWeight,
-    reason: store.edgeReason(e.id) ?? "",
+    reason: store.edgeReason(e.id) ?? "", // latest — for the hover tooltip
+    reasons: store.edgeReasons(e.id), // ALL assertions — for the right-click deep-inspect
   }));
   store.close();
 
