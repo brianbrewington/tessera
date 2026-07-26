@@ -182,6 +182,26 @@ describe("Connector — evaluate (two gates, diverse families; geometry discarde
     expect(verdict.checkerSpecific).toBe(false);
     expect(verdict.survived).toBe(false);
   });
+
+  it("rejects an ANCHORED reason that restates an endpoint name (de-anchoring is enforced, not just prompted)", async () => {
+    // a.name = "Klipgat Farm", b.name = "Cabernet Label" — the reason names both endpoints.
+    const v = new StubChat('{"related": true, "reason": "Klipgat Farm supplies the grapes Cabernet Label bottles"}');
+    const c = new StubChat('{"specific": true}'); // would pass — but the anchor gate fires first and the checker must not save it
+    const verdict = await evaluateCandidate(a, actx, b, bctx, { verifier: v, checker: c });
+    expect(verdict.related).toBe(true);
+    expect(verdict.bannedPhrase).toBe(false);
+    expect(verdict.anchored).toBe(true);
+    expect(verdict.survived).toBe(false);
+  });
+
+  it("lets a de-anchored reason through even when it shares a NON-distinctive token with an endpoint", async () => {
+    // "wine" appears in b's description but not its name; the reason names neither "Klipgat"/"Farm" nor "Cabernet"/"Label".
+    const v = new StubChat('{"related": true, "reason": "one grows the grapes the other bottles as wine"}');
+    const c = new StubChat('{"specific": true}');
+    const verdict = await evaluateCandidate(a, actx, b, bctx, { verifier: v, checker: c });
+    expect(verdict.anchored).toBe(false);
+    expect(verdict.survived).toBe(true);
+  });
 });
 
 describe("Connector — runConnector (dry-run vs commit)", () => {
@@ -209,5 +229,24 @@ describe("Connector — runConnector (dry-run vs commit)", () => {
       expect(call.reason).not.toMatch(/cos=/); // geometry discarded, not laundered into the reason
       expect(call.reason.length).toBeGreaterThan(0);
     }
+  });
+
+  it("refuses a same-family verifier+checker in the CORE (diversity is load-bearing), overridable by allowSameFamily", async () => {
+    const store = fixture();
+    const v = new StubChat('{"related": true, "reason": "share a seasonal grape-harvest labour pool"}');
+    const c = new StubChat('{"specific": true}');
+    const cfg = { k: 6, floor: 0.75, cap: 50, commit: false, verifier: v, checker: c, verifierModel: "qwen2.5:14b", checkerModel: "qwen2.5:7b" };
+    await expect(runConnector(store, cfg)).rejects.toThrow(/SAME family/);
+    const run = await runConnector(store, { ...cfg, allowSameFamily: true }); // explicit escape hatch
+    expect(run.counts.evaluated).toBe(2);
+  });
+
+  it("clamps a runaway cap in the core: a negative cap yields zero candidates, not slice(0,-1)=all-but-one", async () => {
+    const store = fixture();
+    const v = new StubChat('{"related": true, "reason": "share a seasonal grape-harvest labour pool"}');
+    const c = new StubChat('{"specific": true}');
+    const run = await runConnector(store, { k: 6, floor: 0.75, cap: -1, commit: true, verifier: v, checker: c });
+    expect(run.counts.evaluated).toBe(0);
+    expect(store.putEdgeCalls.length).toBe(0);
   });
 });

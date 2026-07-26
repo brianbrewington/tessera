@@ -55,6 +55,26 @@ cosine-at-creation is EXACTLY what we disabled (`nearDupMerge:false`) because it
   a real corpus. Then the Connector runs on an already-clean node set (dedup precedes it — that's the ordering).
 Composes with the item below + KI-3.
 
+## Connector — before the first REAL-corpus run (cross-review fast-follows, Codex + Fable)
+The merge-blocking findings are fixed (de-anchor gate now enforced via `reasonIsAnchored`, cap clamped in the
+core, `measureCosineDistribution` stride-sampled, same-family refused in `runConnector`). These three are safe to
+defer only because the Connector won't run on a real corpus until creation-time dedup lands (above) — do them
+first when it does:
+- **kNN slots eaten by provenance vectors.** `propose` fetches `k+1` from `vec_node_quarantine`, but chunks and
+  documents live in that same index, and an entity's nearest neighbors prominently include its own chunks — so
+  real-entity recall is silently unpredictable (visible only as a large `blockedSelfOrProvenance`). Over-fetch
+  (`k×3`-ish) or filter provenance in the query, not after. (Behavior change — re-baseline the propose tests.)
+- **No transport-error handling mid-run.** `OllamaChat.complete` throws on network/non-OK; the evaluate loop has no
+  try/catch, so one flaky call late in a run loses every paid-for verdict, and in `--commit` can leave edges
+  committed with no sidecar. Wrap per-candidate; persist partial progress.
+- **Parse-failure folded into `verifierNo`.** A malformed/undelivered reply is counted as "verifier said no,"
+  skewing the reject-rate-by-band curve (the geometry≠quality test). Give it its own counter.
+- **`buildNodeContext` trusts any `APPEARED_IN` target as a chunk** without a `subtype` check — benign today (motif
+  hubs have null description) but a described hub would be fed to the verifier as a source excerpt. One check.
+- **Watch (store policy, not the Connector):** `graphStore.putEdge` stores `expert_surprise = f(endpoint-cosine)`
+  on every committed assertion — geometry re-enters as a stored per-assertion score. Harmless until something
+  downstream ranks by surprise; if it does, geometry is back in the deciding seat through the side door.
+
 ## Cross-persona dedup + resonance tuning
 Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~0.92 (0.85 catastrophically
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,

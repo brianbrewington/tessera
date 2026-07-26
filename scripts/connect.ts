@@ -39,13 +39,14 @@ function numFlag(args: string[], name: string, dflt: number): number {
 export async function connectCli(args: string[]): Promise<void> {
   const graphArg = args.find((a) => !a.startsWith("--") && !/^[0-9.]+$/.test(a));
   if (!graphArg) {
-    console.error("usage: connect <graphname|path/to/graph.db> [--commit] [--floor 0.75] [--k 6] [--cap 50]");
+    console.error("usage: connect <graphname|path/to/graph.db> [--commit] [--floor 0.75] [--k 6] [--cap 50] [--allow-same-family]");
     process.exit(1);
   }
   const commit = args.includes("--commit");
+  const allowSameFamily = args.includes("--allow-same-family");
   const floor = numFlag(args, "--floor", 0.75);
   const k = numFlag(args, "--k", 6);
-  const cap = Math.min(numFlag(args, "--cap", 50), 50); // §3.3 hard ceiling: never exceed 50/run
+  const cap = Math.max(0, Math.min(numFlag(args, "--cap", 50), 50)); // §3.3 hard ceiling; floor at 0 so --cap -1 can't slice(0,-1)
 
   const { db, mineDir } = resolveGraphDir(graphArg);
   if (!existsSync(db)) {
@@ -55,9 +56,10 @@ export async function connectCli(args: string[]): Promise<void> {
 
   const verifierModel = process.env.TESSERA_VERIFY_MODEL || "qwen2.5:14b";
   const checkerModel = process.env.TESSERA_CHECK_MODEL || "gemma3:12b";
-  if (family(verifierModel) === family(checkerModel)) {
-    console.warn(`⚠  verifier (${verifierModel}) and checker (${checkerModel}) are the SAME family — diversity is load-bearing; set TESSERA_CHECK_MODEL to a different family.`);
+  if (family(verifierModel) === family(checkerModel) && allowSameFamily) {
+    console.warn(`⚠  verifier (${verifierModel}) and checker (${checkerModel}) are the SAME family — running anyway (--allow-same-family). Diversity is load-bearing; prefer a different-family TESSERA_CHECK_MODEL.`);
   }
+  // (else, same-family without the override: runConnector refuses in the core — the rule is enforced there.)
 
   // Dry-run needs no embedder (no writes); commit embeds each de-anchored reason on putEdge.
   const embedder = commit ? new OllamaEmbedder(768, process.env.TESSERA_EMBED_MODEL || "nomic-embed-text") : new StubEmbedder(768);
@@ -74,6 +76,7 @@ export async function connectCli(args: string[]): Promise<void> {
       floor,
       cap,
       commit,
+      allowSameFamily,
       verifier: new OllamaChat(verifierModel),
       checker: new OllamaChat(checkerModel),
       verifierModel,
@@ -100,6 +103,7 @@ export async function connectCli(args: string[]): Promise<void> {
         related: c.verdict.related,
         reason: c.verdict.reason,
         bannedPhrase: c.verdict.bannedPhrase,
+        anchored: c.verdict.anchored,
         checkerSpecific: c.verdict.checkerSpecific,
         survived: c.verdict.survived,
       },
@@ -107,8 +111,9 @@ export async function connectCli(args: string[]): Promise<void> {
   };
   writeFileSync(sidecar, JSON.stringify(out, null, 2));
 
-  console.log("\n--- node-vector cosine distribution (all entity pairs) ---");
   const d = run.cosineDistribution;
+  const scope = d.sampled ? `deterministic ${d.nodesConsidered}-of-${d.nodesWithVectors}-node sample` : "all entity pairs";
+  console.log(`\n--- node-vector cosine distribution (${scope}) ---`);
   console.log(`pairs=${d.pairs}  p5=${d.p5}  p25=${d.p25}  median=${d.median}  p75=${d.p75}  p95=${d.p95}  p99=${d.p99}  max=${d.max}`);
   for (const b of d.bands) console.log(`  ${b.band}  ${b.count}`);
 

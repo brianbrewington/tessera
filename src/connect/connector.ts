@@ -58,6 +58,33 @@ const BANNED_RE = new RegExp(
   "i",
 );
 
+// §3.3 hard ceiling: a single Connector run never proposes/commits more than this. Enforced in the
+// CORE (propose + runConnector), not just the CLI — a non-CLI caller must not be able to exceed it.
+export const HARD_CAP = 50;
+
+// De-anchoring is the Connector's headline property, and it is ENFORCED here, not just requested in the
+// prompt: a reason must state the RELATIONSHIP, never restate an endpoint's name (a repeated name anchors
+// retrieval to the node instead of the KIND of link). Mirrors scripts/ingest-report.ts tokenize/namesEndpoint
+// — kept in sync across the src<-scripts boundary the same way CONNECTOR_BANNED_PHRASES mirrors the extractor.
+// "named" = the reason contains the full contiguous name OR a DISTINCTIVE whole-word token of it (a token the
+// OTHER endpoint does not share) — whole-word kills substring collisions ("farm" in "farmworkers"); the
+// distinctive filter kills shared family tokens ("the Cloete family" naming neither Cloete).
+const tokenize = (s: string): string[] => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+function namesEndpoint(reasonWords: Set<string>, reasonLower: string, name: string, otherTokens: Set<string>): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n) return false;
+  if (reasonLower.includes(n)) return true; // exact contiguous name (also the only path for short <3-char tokens)
+  return tokenize(n).some((t) => t.length >= 3 && !otherTokens.has(t) && reasonWords.has(t));
+}
+// A reason is anchored if it names EITHER endpoint. Exposed for the runner/tests.
+export function reasonIsAnchored(reason: string, nameA: string, nameB: string): boolean {
+  const reasonLower = reason.toLowerCase();
+  const reasonWords = new Set(tokenize(reason));
+  const aTokens = new Set(tokenize(nameA));
+  const bTokens = new Set(tokenize(nameB));
+  return namesEndpoint(reasonWords, reasonLower, nameA, bTokens) || namesEndpoint(reasonWords, reasonLower, nameB, aTokens);
+}
+
 const isProvenance = (n: NodeRecord): boolean => n.subtype === "document" || n.subtype === "chunk";
 
 // --- Node context: document membership (for same-doc blocking) + one provenance chunk (for the verifier).
@@ -134,7 +161,7 @@ export async function propose(
 ): Promise<ProposeResult> {
   const k = opts.k ?? 6;
   const floor = opts.floor ?? 0.75;
-  const cap = opts.cap ?? 50;
+  const cap = Math.max(0, Math.min(opts.cap ?? HARD_CAP, HARD_CAP)); // clamp in core: a negative cap (slice(0,-1) = all-but-one) or a caller above 50 must not slip through
 
   // Blocked-pair set: canonical key of every existing RELATED edge (both proposed and durable).
   const related = new Set<string>();
@@ -263,8 +290,9 @@ export interface Verdict {
   related: boolean; // gate 1: verifier says a statable relationship exists
   reason: string; // the verifier's de-anchored reason ("" if not related)
   bannedPhrase: boolean; // gate 2a: reason hit the mechanical ban list
+  anchored: boolean; // gate 2a′: reason restated an endpoint name (de-anchoring violated)
   checkerSpecific: boolean; // gate 2b: second-family checker judged it specific
-  survived: boolean; // landed = related && reason && !bannedPhrase && checkerSpecific
+  survived: boolean; // landed = related && reason && !bannedPhrase && !anchored && checkerSpecific
   verifierRaw?: string;
   checkerRaw?: string;
 }
@@ -292,13 +320,21 @@ export async function evaluateCandidate(
   const reason = related && typeof vj?.reason === "string" ? vj.reason.trim() : "";
 
   if (!related || !reason) {
-    return { related, reason, bannedPhrase: false, checkerSpecific: false, survived: false, verifierRaw };
+    return { related, reason, bannedPhrase: false, anchored: false, checkerSpecific: false, survived: false, verifierRaw };
   }
 
   // Gate 2a — mechanical vagueness ban (cheap, deterministic, from the scorecard list).
   const bannedPhrase = BANNED_RE.test(reason.toLowerCase());
   if (bannedPhrase) {
-    return { related, reason, bannedPhrase: true, checkerSpecific: false, survived: false, verifierRaw };
+    return { related, reason, bannedPhrase: true, anchored: false, checkerSpecific: false, survived: false, verifierRaw };
+  }
+
+  // Gate 2a′ — de-anchor enforcement (the headline property): reject a reason that restates either
+  // endpoint's name. The prompt asks for de-anchored reasons; this is what actually enforces it, so an
+  // anchored reason like "Klipgat Farm supplies the grapes Cabernet Label bottles" cannot land.
+  const anchored = reasonIsAnchored(reason, nameOf(a), nameOf(b));
+  if (anchored) {
+    return { related, reason, bannedPhrase: false, anchored: true, checkerSpecific: false, survived: false, verifierRaw };
   }
 
   // Gate 2b — a SECOND-family model screens the reason for vagueness (diversity is load-bearing:
@@ -311,6 +347,7 @@ export async function evaluateCandidate(
     related,
     reason,
     bannedPhrase: false,
+    anchored: false,
     checkerSpecific,
     survived: checkerSpecific,
     verifierRaw,
@@ -324,6 +361,9 @@ export async function evaluateCandidate(
 
 export interface CosineDistribution {
   pairs: number;
+  nodesConsidered: number; // entity vectors actually paired (== nodesWithVectors unless sampled)
+  nodesWithVectors: number; // entity vectors present in the graph
+  sampled: boolean; // true if a deterministic subset was paired to bound the O(n^2) cost
   p5: number;
   p25: number;
   median: number;
@@ -334,13 +374,28 @@ export interface CosineDistribution {
   bands: { band: string; count: number }[];
 }
 
-// Full pairwise cosine over entity-node quarantine vectors (§5: measure it before trusting any floor).
+// Full pairwise cosine over entity-node quarantine vectors is O(n^2 · d) time and O(n^2) memory — on a
+// real graph (tens of thousands of entities) that OOMs/hangs before a single candidate is proposed. So
+// this is a DIAGNOSTIC (§5: measure the distribution before trusting any floor), and diagnostics must not
+// be able to kill the run: above MAX_DISTRIBUTION_NODES we pair a deterministic stride-sample instead.
+// The percentiles are estimates then (flagged `sampled`), which is all a distribution sanity-check needs.
+const MAX_DISTRIBUTION_NODES = 1500; // 1500^2/2 ≈ 1.1M dot products — bounded, seconds not minutes.
 export function measureCosineDistribution(store: ConnectorStore): CosineDistribution {
-  const nodes = store.allNodes().filter((n) => !isProvenance(n));
-  const vecs: Float32Array[] = [];
+  const nodes = store
+    .allNodes()
+    .filter((n) => !isProvenance(n))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)); // deterministic sample selection
+  const all: Float32Array[] = [];
   for (const n of nodes) {
     const v = store.vectorOf(n.id, "quarantine");
-    if (v) vecs.push(v);
+    if (v) all.push(v);
+  }
+  const sampled = all.length > MAX_DISTRIBUTION_NODES;
+  let vecs = all;
+  if (sampled) {
+    const stride = all.length / MAX_DISTRIBUTION_NODES;
+    vecs = [];
+    for (let i = 0; i < MAX_DISTRIBUTION_NODES; i++) vecs.push(all[Math.floor(i * stride)]!);
   }
   const cs: number[] = [];
   for (let i = 0; i < vecs.length; i++) {
@@ -359,7 +414,7 @@ export function measureCosineDistribution(store: ConnectorStore): CosineDistribu
     const hi = bandEdges[i + 1]!;
     return { band: `[${lo.toFixed(2)},${hi.toFixed(2)})`, count: cs.filter((x) => x >= lo && x < hi).length };
   });
-  return { pairs: cs.length, p5: q(0.05), p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), p99: q(0.99), max: q(1), bands };
+  return { pairs: cs.length, nodesConsidered: vecs.length, nodesWithVectors: all.length, sampled, p5: q(0.05), p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), p99: q(0.99), max: q(1), bands };
 }
 
 // Band a cosine into the reject-rate buckets (floor-anchored, 0.05 wide).
@@ -392,6 +447,7 @@ export interface ConnectorCounts {
   verifierYes: number;
   verifierNo: number;
   bannedPhraseRejected: number;
+  anchoredRejected: number;
   vaguenessRejected: number;
   survived: number;
   committed: number;
@@ -399,6 +455,7 @@ export interface ConnectorCounts {
 
 export interface ConnectorRunConfig extends ProposeOptions, Evaluators {
   commit?: boolean;
+  allowSameFamily?: boolean; // escape hatch for the load-bearing diverse-family rule (visible, opt-in)
   onProgress?: (msg: string) => void;
 }
 
@@ -414,9 +471,21 @@ export interface ConnectorRun {
 export async function runConnector(store: ConnectorStore, cfg: ConnectorRunConfig): Promise<ConnectorRun> {
   const k = cfg.k ?? 6;
   const floor = cfg.floor ?? 0.75;
-  const cap = cfg.cap ?? 50;
+  const cap = Math.max(0, Math.min(cfg.cap ?? HARD_CAP, HARD_CAP)); // §3.3 ceiling enforced in core, not only the CLI
   const commit = cfg.commit ?? false;
   const log = cfg.onProgress ?? ((): void => {});
+
+  // Diversity is load-bearing (§4): K copies of one model family share a blind spot, so a same-family
+  // verifier+checker is not a valid two-gate. Enforced in the CORE, not just the CLI — refuse unless the
+  // caller explicitly opts out. Skipped when either model is unspecified (stubs/tests can't declare a family).
+  if (cfg.verifierModel && cfg.checkerModel && !cfg.allowSameFamily) {
+    const fam = (m: string): string => m.toLowerCase().match(/^[a-z]+/)?.[0] ?? m;
+    if (fam(cfg.verifierModel) === fam(cfg.checkerModel)) {
+      throw new Error(
+        `verifier (${cfg.verifierModel}) and checker (${cfg.checkerModel}) are the SAME family — diversity is load-bearing (§4). Set a different-family checker (TESSERA_CHECK_MODEL), or pass allowSameFamily to override.`,
+      );
+    }
+  }
 
   log("measuring node-vector cosine distribution…");
   const cosineDistribution = measureCosineDistribution(store);
@@ -435,6 +504,7 @@ export async function runConnector(store: ConnectorStore, cfg: ConnectorRunConfi
     verifierYes: 0,
     verifierNo: 0,
     bannedPhraseRejected: 0,
+    anchoredRejected: 0,
     vaguenessRejected: 0,
     survived: 0,
     committed: 0,
@@ -452,7 +522,8 @@ export async function runConnector(store: ConnectorStore, cfg: ConnectorRunConfi
     if (verdict.related) counts.verifierYes++;
     else counts.verifierNo++;
     if (verdict.related && verdict.bannedPhrase) counts.bannedPhraseRejected++;
-    if (verdict.related && !verdict.bannedPhrase && !verdict.checkerSpecific) counts.vaguenessRejected++;
+    if (verdict.related && !verdict.bannedPhrase && verdict.anchored) counts.anchoredRejected++;
+    if (verdict.related && !verdict.bannedPhrase && !verdict.anchored && !verdict.checkerSpecific) counts.vaguenessRejected++;
     if (verdict.survived) counts.survived++;
     evaluated.push({ ...c, band: bandOf(c.cosine, floor), verdict });
   }
@@ -479,7 +550,8 @@ export async function runConnector(store: ConnectorStore, cfg: ConnectorRunConfi
         { from: e.from, to: e.to, kind: "RELATED", reason: e.verdict.reason, origin: "connector" },
         { actor: "connector", cause: "hardened-connector-pass" },
       );
-      if (r.created || !r.created) counts.committed++; // reinforcement still counts as a landed assertion
+      void r; // reinforcement of an existing edge still counts as a landed assertion
+      counts.committed++;
     }
     log(`committed ${counts.committed} proposed edge(s) as origin:connector status:proposed`);
   }
