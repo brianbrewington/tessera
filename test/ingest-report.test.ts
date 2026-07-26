@@ -46,9 +46,10 @@ describe("ingest scorecard", () => {
     // one provenance chunk (must be excluded from entity metrics)
     await store.putNode({ type: "SOURCE", subtype: "chunk", origin: "ingest", text: "chunk\tk\t1", name: "c1", description: "raw" }, meta);
 
-    // Good reason: names both endpoints only by TOKEN ("Charnel", "Klipgat Farm") — not the full "Charnel Cloete".
+    // ANCHORED reason: restates both endpoint names (the old style we're moving away from) — not de-anchored.
     await store.putEdge({ from: charnel, to: farm, kind: "RELATED", reason: "Charnel picks grapes seasonally at Klipgat Farm", origin: "ingest" }, meta);
-    // Bad reason on a DISTINCT pair (so it's a second edge, not another assertion): banned phrase, names neither.
+    // On a DISTINCT pair (second edge): names NEITHER endpoint, so de-anchored — but ALSO vague, so banned. The
+    // two metrics are orthogonal: de-anchored doesn't imply good; you want de-anchored AND non-vague.
     await store.putEdge({ from: charnel, to: synergy, kind: "RELATED", reason: "the two are associated with each other", origin: "ingest" }, meta);
     store.close();
 
@@ -58,8 +59,9 @@ describe("ingest scorecard", () => {
     expect(sc.entities).toBe(3); // charnel, farm, synergy — NOT the doc/chunk provenance nodes
     expect(sc.entitiesPerDoc).toBe(3);
     expect(sc.relatedReasons).toBe(2); // one assertion per edge
-    expect(sc.bothEndpointsNamed).toBe(1); // only the token-named reason; the banned one misses the person
-    expect(sc.bannedPhraseReasons.length).toBe(1); // "associated with"
+    expect(sc.reasonsPerEdge).toBe(1); // 2 reasons / 2 edges
+    expect(sc.deAnchoredReasons).toBe(1); // the one naming neither endpoint (the anchored "Charnel…Klipgat" doesn't count)
+    expect(sc.bannedPhraseReasons.length).toBe(1); // "associated with" — de-anchored yet still vague
     expect(sc.buzzwordHubs.map((h) => h.name)).toContain("Synergy");
   });
 });

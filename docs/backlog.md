@@ -48,6 +48,18 @@ two-gate LLM-verify. Reuse `analysis/entity_resolution.py` (fix its greedy-centr
 entity gets two nodes and never dedups. Pick one identity contract (the mapper's is the reviewed one) and route
 `persona.ts` through it, or explicitly namespace the two so the divergence is intentional, not accidental.
 
+## Discovered (not imposed) edge taxonomy — hierarchical, from the explanations themselves (Brian)
+Today every extracted semantic link is one kind — `RELATED` — distinguished only by its prose reason. The idea:
+**don't hand-author an edge-type enum — discover the taxonomy bottom-up** by clustering the (now de-anchored)
+reason embeddings across the whole graph. De-anchoring is the enabler: a reason carries the KIND of relationship,
+not the two nodes, so "attended the same college", "shares a hobby", "is kin to" cluster regardless of who's
+involved. The taxonomy is **hierarchical** — shallow/generic (`RELATED`) at the top, deepening to specific typed
+relations (`ATTENDED_SAME_COLLEGE`, `CO_AUTHORED_WITH`) as clusters sharpen; an assertion gets typed by which
+cluster its reason lands in, and stays `RELATED` if it clusters with nothing. Composes with **multi-facet edges**
+(one edge owns many typed assertions) and reuses the `embeddings_experiments` clustering + two-gate-verify
+discipline (naive thresholds over-merge). Do this AFTER de-anchored reasons accumulate at real corpus scale —
+clusters need volume to form. Let the corpus vote on the type list, don't impose it.
+
 ## Idempotent + cheap re-ingest (chunk-hash extraction memo)
 Live re-ingest of one doc is idempotent for everything the system *controls* (SOURCE/CHUNK/PERSON identity all
 reinforce, zero duplication), but the entities/edges still churn because extraction runs at temp 0.4 and returns

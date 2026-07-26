@@ -43,9 +43,11 @@ Each stage is a small module behind a seam:
 - **Extractor** (`src/extract/extractor.ts`): a `Chat`-backed `Extractor` returning Zod-validated
   `{entities:[{name,type,description}], relations:[{source,target,reason}]}`. The prompt (ported from
   `docs/history`) enforces: typed entities incl. single-mention proper names, multi-word names kept whole,
-  **NEGATIVE_CONSTRAINTS** (drop buzzwords/abstractions/empty-shells), and the **CRITICAL EDGE RULE** —
-  every relation reason must *name both endpoints*. Output is JSON (not LightRAG's delimiter format) for
-  robust TS parsing; a brace-balanced extractor tolerates chatty models; dangling relations are dropped.
+  **NEGATIVE_CONSTRAINTS** (drop buzzwords/abstractions/empty-shells), and the **CRITICAL EDGE RULE** — a
+  relation reason must carry the *specific relationship* (action/role/fact) and **NOT restate the endpoint
+  names** (they're structure; restating them anchors the embedding to those two nodes instead of the kind of
+  link). Output is JSON (not LightRAG's delimiter format) for robust TS parsing; a brace-balanced extractor
+  tolerates chatty models; dangling relations are dropped.
 - **Graph-mapper** (`src/ingest/mapper.ts`): entity → a typed node whose **`text` is the entity name** (so
   same-named entities dedup into ONE shared hub via the store's content_hash — the trope signal); the
   description goes in metadata. Relation → a `RELATED` edge whose reason becomes the `edge_assertion`. New

@@ -59,12 +59,12 @@ Output ONLY a JSON object — no markdown fence, no prose:
 
 ## RELATIONS
 - source, target: entity names exactly as extracted above.
-- reason: a concise explanation that EXPLICITLY NAMES BOTH ENDPOINTS. This is the single most important rule — edge reasons are the primary retrieval signal.
-  GOOD: "Charnel Cloete picks grapes seasonally at Klipgat Farm near De Doorns"; "Klipgat Farm grows Cabernet and Chardonnay for a mid-tier wine brand sold mostly in Johannesburg".
-  BAD (NEVER produce): "related concept", "uses this", "connected", "is part of", "associated with".
-- Every important entity should connect to at least 2 others when the text supports it. Decompose N-ary relationships into binary pairs. Relations are undirected unless the text is clearly directional.
+- reason: the SPECIFIC nature of the relationship — the action, role, or fact that links the two — as a standalone phrase. This is the single most important rule. Do NOT restate the source/target names in the reason: the graph already records WHICH two are linked, so repeating their names adds no information and anchors retrieval to those two nodes instead of the KIND of relationship. Name a THIRD party or concrete detail only when it is essential.
+  GOOD (specific — and note, NO endpoint names): "picks grapes seasonally as hired harvest labour"; "grows Cabernet and Chardonnay for a mid-tier wine brand sold mostly in Johannesburg".
+  BAD (NEVER produce — vague, no real relationship): "related concept", "uses this", "connected", "is part of", "associated with".
+- Two entities may share MORE THAN ONE relationship — emit each distinct one as its OWN relation (e.g. two people can be kin AND share a pursuit; a person can both work at and live near a place). Decompose N-ary relationships into binary pairs. Every important entity should connect to at least 2 others when the text supports it. Relations are undirected unless the text is clearly directional.
 
-Third person; name subjects explicitly (never "this document" / "the persona"). Output the JSON object only.`;
+In descriptions, use third person and name subjects explicitly (never "this document" / "the persona"). Output the JSON object only.`;
 
 const norm = (s: string): string => s.trim().toLowerCase();
 

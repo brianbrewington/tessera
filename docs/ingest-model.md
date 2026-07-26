@@ -23,12 +23,17 @@ identity policy** by constructing each node's `text` (the dedup basis) and its f
   (idempotent); the same text in a *different* doc is a distinct chunk (source-qualified).
 
 ## Edges (provenance + relations)
-| edge | kind | reason (names both endpoints) |
+| edge | kind | reason |
 |---|---|---|
 | CHUNK → SOURCE | `ORIGINATED_FROM` | "chunk N of <title>" |
 | entity → CHUNK | `APPEARED_IN` | "<entity> appears in chunk N of <title>" |
-| entity → entity | `RELATED` | the extracted relation reason |
+| entity → entity | `RELATED` | the relationship itself — see below |
 
+- **`RELATED` reasons are de-anchored**: the reason carries the *relationship* (the specific action/role/fact),
+  NOT the two endpoint names — the graph already records which two are linked, so restating them adds no
+  information and anchors the reason's embedding to those nodes instead of the KIND of link. An edge owns MANY
+  such reasons (assertions) — its facets ("is kin to" AND "shares a pursuit"). This is what lets edge-similarity
+  cluster by relationship type later (see backlog: discovered edge taxonomy).
 - **`RELATED` is canonicalized**: undirected, stored `from = min(GUID), to = max(GUID)` (kills the A→B / B→A
   double-edge). ORIGINATED_FROM / APPEARED_IN stay directed (they are directional).
 - **Ambiguous endpoints are dropped, not guessed**: relations carry entity *names*, not types. If a name split

@@ -41,7 +41,7 @@ export interface Scorecard {
   entitiesPerDoc: number; appearancesPerChunk: number;
   typeHistogram: [string, number][]; // "TYPE/subtype" -> count, desc
   topHubs: { name: string; type: string; degree: number; strength: number }[];
-  relatedReasons: number; bothEndpointsNamed: number; bothEndpointsPct: number; // scored per ASSERTION, not per edge
+  relatedReasons: number; deAnchoredReasons: number; deAnchoredPct: number; reasonsPerEdge: number; // per ASSERTION
   bannedPhraseReasons: { reason: string }[];
   buzzwordHubs: { name: string; type: string }[];
   orphanEntities: number; orphanPct: number; // entities with no RELATED edge
@@ -81,9 +81,11 @@ export function report(dbPath: string): Scorecard {
       .sort((a, b) => b.degree - a.degree || b.strength - a.strength)
       .slice(0, 15);
 
-    // Score EVERY assertion reason (an edge can carry several) for: names-both-endpoints (the retrieval signal)
-    // and banned phrases. Denominator = total reasons, so the metric is independent of ingest order.
-    let relatedReasons = 0, bothEndpointsNamed = 0;
+    // Score EVERY assertion reason (an edge can carry several — its facets). Denominator = total reasons, so the
+    // metric is independent of ingest order. The rule (Option A): a reason carries the RELATIONSHIP, not its
+    // endpoints. "De-anchored" = names NEITHER endpoint, so the embedding clusters on the KIND of link, not the
+    // two nodes. Banned phrases (vagueness) are orthogonal — a reason should be de-anchored AND specific.
+    let relatedReasons = 0, deAnchoredReasons = 0;
     const bannedPhraseReasons: { reason: string }[] = [];
     for (const e of related) {
       const aName = nameOf(e.from), bName = nameOf(e.to);
@@ -92,7 +94,7 @@ export function report(dbPath: string): Scorecard {
         relatedReasons++;
         const lower = raw.toLowerCase();
         const words = new Set(tokenize(raw));
-        if (namesEndpoint(words, lower, aName, bTokens) && namesEndpoint(words, lower, bName, aTokens)) bothEndpointsNamed++;
+        if (!namesEndpoint(words, lower, aName, bTokens) && !namesEndpoint(words, lower, bName, aTokens)) deAnchoredReasons++;
         if (BANNED_RE.test(lower)) bannedPhraseReasons.push({ reason: raw });
       }
     }
@@ -110,7 +112,8 @@ export function report(dbPath: string): Scorecard {
       appearancesPerChunk: chunks === 0 ? 0 : Math.round((appearedIn / chunks) * 10) / 10,
       typeHistogram: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]),
       topHubs,
-      relatedReasons, bothEndpointsNamed, bothEndpointsPct: pct(bothEndpointsNamed, relatedReasons),
+      relatedReasons, deAnchoredReasons, deAnchoredPct: pct(deAnchoredReasons, relatedReasons),
+      reasonsPerEdge: related.length === 0 ? 0 : Math.round((relatedReasons / related.length) * 100) / 100,
       bannedPhraseReasons,
       buzzwordHubs,
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
@@ -132,8 +135,9 @@ export function printScorecard(sc: Scorecard): void {
   p("top hubs (by RELATED degree):");
   for (const h of sc.topHubs) p(`  deg ${h.degree.toString().padStart(3)}  x${h.strength}  ${h.name}  [${h.type}]`);
   p("");
-  p(`RELATED reasons naming BOTH endpoints: ${sc.bothEndpointsNamed}/${sc.relatedReasons}  (${sc.bothEndpointsPct}%)  — higher is better`);
-  p(`banned-phrase reasons: ${sc.bannedPhraseReasons.length}  — target 0`);
+  p(`de-anchored reasons (name NEITHER endpoint): ${sc.deAnchoredReasons}/${sc.relatedReasons}  (${sc.deAnchoredPct}%)  — higher is better`);
+  p(`reasons per edge: ${sc.reasonsPerEdge}  — facet richness (>1 = edges carry multiple relationships)`);
+  p(`banned-phrase reasons: ${sc.bannedPhraseReasons.length}  — target 0 (vague; orthogonal to de-anchoring)`);
   for (const b of sc.bannedPhraseReasons.slice(0, 5)) p(`    ! "${b.reason.slice(0, 90)}"`);
   p(`buzzword hubs (NEGATIVE_CONSTRAINTS leaks): ${sc.buzzwordHubs.length}  — target 0`);
   for (const b of sc.buzzwordHubs.slice(0, 10)) p(`    ! ${b.name}  [${b.type}]`);

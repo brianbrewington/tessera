@@ -44,7 +44,7 @@ seams** today — marked ⏳ below.
 |---|---|---|
 | `id` | TEXT PK GUID | |
 | `edge_id` | → `edges(id)` | owner edge |
-| `reason` | TEXT | the human explanation (must name both endpoints) |
+| `reason` | TEXT | the relationship itself (specific action/role/fact) — de-anchored: NOT the endpoint names |
 | `origin` | TEXT | who asserted it |
 | `grounding` | TEXT? | citation/quote (⏳ unused) |
 | `expert_surprise` | INT? | store-computed from endpoint embedding distance |
