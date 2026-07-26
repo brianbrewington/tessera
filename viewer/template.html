@@ -30,9 +30,21 @@
   #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
     border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
   #tip .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); display:block; margin-bottom:3px; }
-  #help{ position:fixed; bottom:12px; left:16px; color:var(--faint); font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; pointer-events:none; }
-  #legend{ position:fixed; bottom:12px; right:16px; background:rgba(13,17,26,.86); border:1px solid var(--line);
+  #legend{ position:fixed; bottom:214px; left:14px; background:rgba(13,17,26,.86); border:1px solid var(--line);
     border-radius:10px; padding:9px 11px; font-size:11px; color:var(--dim); }
+  /* semantic-zoom chrome — kept on the LEFT so it clears the right-side panel */
+  #altrail{ position:fixed; top:62px; left:14px; width:200px; background:rgba(13,17,26,.72); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px 8px 18px; pointer-events:none; }
+  #altrail .r{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:2px 0; opacity:.38; transition:opacity .2s; }
+  #altrail .r.on{ opacity:1; }
+  #altrail .r .sb{ font-family:var(--mono); font-size:8.5px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase; }
+  #altrail .track{ position:absolute; left:9px; top:12px; bottom:12px; width:2px; background:var(--line-2); border-radius:2px; }
+  #altrail .dot{ position:absolute; left:6px; width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); transition:top .25s; }
+  #zcrumb{ position:fixed; top:16px; left:50%; transform:translateX(-50%); font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--dim); background:rgba(13,17,26,.7); border:1px solid var(--line); border-radius:99px; padding:5px 13px; pointer-events:none; }
+  #minimap{ position:fixed; bottom:14px; left:14px; width:268px; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  #minimap .mm-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line); }
+  #minimap canvas{ display:block; background:#080a0f; cursor:crosshair; }
   #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
   #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
@@ -125,9 +137,11 @@
 <body>
 <canvas id="c"></canvas>
 <div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span></div>
+<div id="zcrumb"></div>
+<div id="altrail"><div class="track"></div><div class="dot" id="altdot"></div></div>
 <div id="tip"></div>
-<div id="help">scroll zoom · drag pan · click focus · right-click inspect · h provenance · esc close</div>
 <div id="legend"></div>
+<div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
 <div id="panel">
   <div class="p-head">
     <div class="sq" id="pback" title="back" style="display:none">‹</div>
@@ -168,7 +182,7 @@ function rebuild(){
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
-  settle(); buildLegend(); updateCounts();
+  settle(); computeBounds(); buildLegend(); updateCounts();
 }
 function updateCounts(){
   $('gname').textContent = GRAPH.name || 'graph';
@@ -218,8 +232,63 @@ function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 // --- interaction state (no node dragging) ---
 let hoverNode=null, hoverEdge=null, selected=null, panning=false, lastX=0, lastY=0, downX=0, downY=0;
 
+// --- semantic zoom: typography as altitude. The tier (from camera zoom) sets which nodes label AND how the type
+// reads — tracking is the altimeter (shrinks as you descend), family marks the register (serif=land, sans=
+// settlement, mono=evidence), ink contrast rises as you go lower. Continent cluster-labels are DEFERRED (no
+// clustering pass yet), so the ladder starts at country with landmark punch-through (the prominence budget).
+const FF={serif:'Georgia,ui-serif,serif', sans:'-apple-system,system-ui,sans-serif', mono:'ui-monospace,Menlo,monospace'};
+const TIERS=[
+  {name:'continent', zmax:0.8, deg:22, w:'300', size:27, fam:FF.serif, track:0.30, caps:1, ink:'rgba(230,233,239,.55)', sub:'clusters (soon)'},
+  {name:'country',   zmax:1.4, deg:14, w:'400', size:21, fam:FF.serif, track:0.18, caps:1, ink:'rgba(230,233,239,.85)', sub:'landmarks'},
+  {name:'region',    zmax:2.4, deg:10, w:'600', size:15, fam:FF.sans,  track:0.13, caps:1, ink:'#b9c0d0', sub:'major hubs'},
+  {name:'city',      zmax:4.0, deg:7,  w:'600', size:15, fam:FF.sans,  track:-0.01, title:1, ink:'#e6e9ef', sub:'hubs + type'},
+  {name:'district',  zmax:6.5, deg:2,  w:'500', size:13, fam:FF.sans,  track:0, ink:'#cfd5e4', sub:'all nodes'},
+  {name:'building',  zmax:99,  deg:1,  w:'400', size:12, fam:FF.mono,  track:0.02, ink:'#9aa3b8', sub:'reasons'},
+];
+function tierFor(s){ for(const t of TIERS) if(s<=t.zmax) return t; return TIERS[TIERS.length-1]; }
+const titleCase=s=>String(s||'').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+(function(){ const rail=$('altrail'); TIERS.forEach((t,i)=>{ const r=document.createElement('div'); r.className='r'; r.id='alt'+i;
+  const nm=document.createElement('span'); nm.textContent=t.name; nm.style.cssText='font-family:'+t.fam+';font-size:11px;color:'+t.ink;
+  const sb=document.createElement('span'); sb.className='sb'; sb.textContent=t.sub; r.appendChild(nm); r.appendChild(sb); rail.appendChild(r); }); })();
+let lastTi=-1;
+function updateChrome(ti){ for(let i=0;i<TIERS.length;i++) $('alt'+i).classList.toggle('on', i===ti);
+  const rows=$('altrail').querySelectorAll('.r'); if(rows[ti]) $('altdot').style.top=(rows[ti].offsetTop+rows[ti].offsetHeight/2-4)+'px';
+  $('zcrumb').textContent = TIERS.slice(0, ti+1).map(t=>t.name).join('  ›  ');
+}
+
+// --- minimap: whole graph small, with a live viewport box (click to jump, drag to pan) ---
+let bounds={minX:-300,maxX:300,minY:-300,maxY:300};
+function computeBounds(){ if(!NODES.length) return; let a=1e9,b=-1e9,c=1e9,d=-1e9;
+  for(const n of NODES){ if(n.x<a)a=n.x; if(n.x>b)b=n.x; if(n.y<c)c=n.y; if(n.y>d)d=n.y; }
+  const px=(b-a)*0.06+20, py=(d-c)*0.06+20; bounds={minX:a-px,maxX:b+px,minY:c-py,maxY:d+py}; }
+const mmc=$('mmc'), mmx=mmc.getContext('2d'), MMW=268, MMH=168;
+function mmS(){ return Math.min(MMW/(bounds.maxX-bounds.minX), MMH/(bounds.maxY-bounds.minY)); }
+function toMM(x,y){ const s=mmS(); return [ (x-bounds.minX)*s + (MMW-(bounds.maxX-bounds.minX)*s)/2, (y-bounds.minY)*s + (MMH-(bounds.maxY-bounds.minY)*s)/2 ]; }
+function mmToWorld(px,py){ const s=mmS(); return [ (px-(MMW-(bounds.maxX-bounds.minX)*s)/2)/s+bounds.minX, (py-(MMH-(bounds.maxY-bounds.minY)*s)/2)/s+bounds.minY ]; }
+function drawMinimap(){ mmx.clearRect(0,0,MMW,MMH);
+  for(const n of NODES){ const [x,y]=toMM(n.x,n.y); mmx.fillStyle=colorFor(n); mmx.globalAlpha=.8; mmx.beginPath(); mmx.arc(x,y,n.deg>=10?2:1.2,0,7); mmx.fill(); }
+  mmx.globalAlpha=1;
+  const [wx0,wy0]=toWorld(0,0), [wx1,wy1]=toWorld(W,H); const [mx0,my0]=toMM(wx0,wy0), [mx1,my1]=toMM(wx1,wy1);
+  mmx.fillStyle='rgba(122,162,247,.09)'; mmx.fillRect(mx0,my0,mx1-mx0,my1-my0);
+  mmx.strokeStyle='#7aa2f7'; mmx.lineWidth=1.5; mmx.strokeRect(mx0,my0,mx1-mx0,my1-my0);
+  $('mmzoom').textContent=scale.toFixed(2)+'×';
+}
+let mmDrag=false;
+function mmJump(ev){ const r=mmc.getBoundingClientRect(); const [wx,wy]=mmToWorld(ev.clientX-r.left, ev.clientY-r.top); ox=W/2-wx*scale; oy=H/2-wy*scale; }
+mmc.addEventListener('mousedown', ev=>{ mmDrag=true; mmJump(ev); ev.stopPropagation(); });
+addEventListener('mousemove', ev=>{ if(mmDrag) mmJump(ev); });
+addEventListener('mouseup', ()=>{ mmDrag=false; });
+
 function draw(){
   ctx.clearRect(0,0,W,H);
+  const tier=tierFor(scale), ti=TIERS.indexOf(tier);
+  if(ti>=3){ // city and lower: a faint aligned grid that scales with zoom (a floor to read motion against)
+    const step=96*scale, a=Math.min(0.055, 0.02+(ti-3)*0.018);
+    ctx.strokeStyle='rgba(139,147,167,'+a+')'; ctx.lineWidth=1;
+    const x0=((ox%step)+step)%step, y0=((oy%step)+step)%step; ctx.beginPath();
+    for(let x=x0;x<W;x+=step){ ctx.moveTo(x,0); ctx.lineTo(x,H); }
+    for(let y=y0;y<H;y+=step){ ctx.moveTo(0,y); ctx.lineTo(W,y); } ctx.stroke();
+  }
   const focusSet = selected ? new Set([selected.id, ...EDGES.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
   // Interim edge treatment: fade + thin when zoomed OUT (edges overlap into a hairball at moderate zoom), firm
   // up as you zoom in. The richer language (rank/weight/kind, bundling) is going to Claude Design.
@@ -246,15 +315,24 @@ function draw(){
     if(n===selected||n===hoverNode){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,rr,0,7); ctx.stroke(); }
     ctx.globalAlpha=1;
   }
-  ctx.font='12px -apple-system,sans-serif'; ctx.textAlign='center';
-  const lblFloor = Math.max(2, Math.min(9, maxDeg*0.5)); // one deg-39 subject shouldn't raise the bar so only IT labels
-  const showLabel = n => n===hoverNode || n===selected || n.deg >= lblFloor || (focusSet&&focusSet.has(n.id)&&scale>0.7);
-  for(const n of NODES){ if(!showLabel(n)) continue; if(focusSet && !focusSet.has(n.id)) continue;
-    const [x,y]=toScreen(n.x,n.y); const t=(n.label||'').slice(0,34);
-    ctx.fillStyle='rgba(11,14,20,0.75)'; const w=ctx.measureText(t).width;
-    ctx.fillRect(x-w/2-4, y+radius(n)+3, w+8, 15);
-    ctx.fillStyle='#e6e9ef'; ctx.fillText(t, x, y+radius(n)+14);
+  // labels by tier: which nodes label (degree budget for the altitude) + how the type reads. Landmarks
+  // (hover/selected/focus) always label; viewport-culled + capped so a low altitude doesn't flood.
+  ctx.textAlign='center'; ctx.textBaseline='top'; ctx.font=tier.w+' '+tier.size+'px '+tier.fam;
+  try{ ctx.letterSpacing=(tier.track*tier.size).toFixed(1)+'px'; }catch(e){}
+  const always=n=> n===hoverNode||n===selected||(focusSet&&focusSet.has(n.id));
+  const cands=NODES.filter(n=> !(focusSet&&!focusSet.has(n.id)) && (always(n)||n.deg>=tier.deg))
+    .map(n=>{ const [x,y]=toScreen(n.x,n.y); return {n,x,y}; })
+    .filter(o=> o.x>-60&&o.x<W+60&&o.y>-30&&o.y<H+30)
+    .sort((a,b)=> b.n.deg-a.n.deg).slice(0,90);
+  for(const {n,x,y} of cands){
+    let t=(n.label||''); if(tier.caps) t=t.toUpperCase(); else if(tier.title) t=titleCase(t); if(t.length>44) t=t.slice(0,43)+'…';
+    const by=y+radius(n)+4, w=ctx.measureText(t).width;
+    ctx.fillStyle='rgba(10,12,17,0.66)'; ctx.fillRect(x-w/2-4, by, w+8, tier.size+4);
+    ctx.fillStyle=tier.ink; ctx.fillText(t, x, by+2);
   }
+  try{ ctx.letterSpacing='0px'; }catch(e){} ctx.textBaseline='alphabetic';
+  drawMinimap();
+  if(ti!==lastTi){ updateChrome(ti); lastTi=ti; }
   requestAnimationFrame(draw);
 }
 
@@ -291,7 +369,7 @@ addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
   if(n){ walk=[]; openNode(n,true); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) openEdge(e); });
 cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev.clientX,ev.clientY);
-  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.15,Math.min(6,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
+  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.12,Math.min(8,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
 // --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
 const panel=$('panel'), pscroll=$('pscroll'), pactions=$('pactions'), crumb=$('crumb');
