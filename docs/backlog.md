@@ -72,6 +72,14 @@ cluster its reason lands in, and stays `RELATED` if it clusters with nothing. Co
 discipline (naive thresholds over-merge). Do this AFTER de-anchored reasons accumulate at real corpus scale —
 clusters need volume to form. Let the corpus vote on the type list, don't impose it.
 
+## Distributed "mining" with a fleet of small models  *(vision — see `docs/distributed-mining-ideas.md`)*
+Decompose graph construction into narrow, verifiable micro-tasks (entity-spotting, graph-worthiness filtering,
+edge evidence-verification, dedup/alias checks, reason-kind clustering) and fan them across a fleet of small local
+LLMs (Orin-class proposers/verifiers + the Mac Studio as adjudicator). The win is verification-at-scale + always-on
+background re-mining (the resonator's substrate), NOT "small model does the same job." tessera is well-shaped for
+it (chunk-shardable, deterministic coordinator-owned identity, idempotent memo, scorecard as fitness). First
+experiment: an edge evidence-verification swarm, measured against the scorecard. Full brainstorm in the doc.
+
 ## Prompt-version salt in the chunk memo  *(review 3 — closes a real footgun)*
 The chunk memo keys on chunk content only, so a graph ingested under an OLD prompt keeps its stale extractions
 forever unless someone remembers `--reextract` (e.g. existing persona graphs won't pick up subject-aware
