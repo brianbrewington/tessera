@@ -5,52 +5,134 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>tessera</title>
 <style>
-  :root { --bg:#0b0e14; --fg:#e6e9ef; --dim:#8b93a7; --edge:#2b3346; --accent:#7aa2f7; }
-  * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
-    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow:hidden; }
-  canvas { display:block; cursor:grab; }
-  canvas.dragging { cursor:grabbing; }
-  #hud { position:fixed; top:14px; left:16px; pointer-events:none; }
-  #hud h1 { margin:0; font-size:18px; letter-spacing:.14em; font-weight:600; }
-  #hud .sub { color:var(--dim); font-size:11px; margin-top:2px; }
-  #panel { position:fixed; top:0; right:0; width:340px; max-width:82vw; height:100%;
-    background:rgba(16,20,30,.94); border-left:1px solid #1c2432; padding:20px 20px 24px;
-    overflow-y:auto; transform:translateX(100%); transition:transform .18s ease; }
-  #panel.open { transform:translateX(0); }
-  #panel .type { color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:.1em; }
-  #panel h2 { margin:4px 0 10px; font-size:17px; }
-  #panel .body { color:#c3c9d6; white-space:pre-wrap; max-height:38vh; overflow:auto;
-    border:1px solid #1c2432; border-radius:8px; padding:10px; background:#0d111a; font-size:12px; }
-  #panel .nlabel { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin:16px 0 6px; }
-  #panel .chip { display:inline-block; margin:0 6px 6px 0; padding:5px 9px; border-radius:14px;
-    background:#161c28; border:1px solid #26304a; color:#d6dbe6; cursor:pointer; font-size:12px; }
-  #panel .chip:hover { background:#20293c; border-color:var(--accent); }
-  #panel .close { position:absolute; top:12px; right:14px; color:var(--dim); cursor:pointer; font-size:20px; }
-  #tip { position:fixed; pointer-events:none; background:#0d111a; border:1px solid #26304a;
-    border-radius:6px; padding:6px 9px; font-size:12px; color:#d6dbe6; max-width:320px; display:none; z-index:5; }
-  #help { position:fixed; bottom:12px; left:16px; color:var(--dim); font-size:11px; pointer-events:none; }
-  #legend { position:fixed; bottom:12px; right:16px; background:rgba(13,17,26,.82); border:1px solid #1c2432;
-    border-radius:8px; padding:9px 11px; font-size:11px; color:var(--dim); max-width:220px; }
-  #legend .row { display:flex; align-items:center; gap:7px; margin:3px 0; }
-  #legend .dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
-  #legend .ln { width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
-  #pmeta { margin:2px 0 4px; }
-  #pmeta .kv { display:inline-block; margin:0 8px 6px 0; color:#c3c9d6; }
-  #pmeta .kv b { color:var(--dim); font-weight:600; text-transform:uppercase; font-size:10px; letter-spacing:.06em; margin-right:4px; }
+  /* design tokens (from the Claude Design handoff) */
+  :root{
+    --ground:#0a0c11; --ground-2:#0e1218;
+    --surface:#12161e; --surface-2:#171c26; --surface-3:#1e2531;
+    --line:rgba(230,233,239,.09); --line-2:rgba(230,233,239,.16);
+    --text:#e6e9ef; --dim:#8b93a7; --faint:#5e667b;
+    --accent:#7aa2f7; --person:#e0af68; --tour:#bb9af7; --agent:#7dcfff; --conflict:#f7768e; --ok:#9ece6a;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; background:var(--ground); color:var(--text); font:13px/1.5 var(--font); overflow:hidden; }
+  canvas{ display:block; cursor:grab; }
+  canvas.dragging{ cursor:grabbing; }
+  button{ font-family:inherit; }
+
+  #pill{ position:fixed; top:14px; left:14px; display:flex; align-items:center; gap:9px; height:38px; padding:0 14px;
+    background:rgba(18,22,30,.9); border:1px solid var(--line-2); border-radius:10px; }
+  #pill .dot{ width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  #pill .gname{ font-weight:600; font-size:13px; }
+  #pill .gcount{ font-family:var(--mono); font-size:11px; color:var(--dim); letter-spacing:.04em; }
+
+  #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
+    border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
+  #tip .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); display:block; margin-bottom:3px; }
+  #help{ position:fixed; bottom:12px; left:16px; color:var(--faint); font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; pointer-events:none; }
+  #legend{ position:fixed; bottom:12px; right:16px; background:rgba(13,17,26,.86); border:1px solid var(--line);
+    border-radius:10px; padding:9px 11px; font-size:11px; color:var(--dim); }
+  #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
+  #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+  #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
+
+  /* panel — one component, depths via .deep / .edge */
+  #panel{ position:fixed; top:14px; right:14px; bottom:14px; width:396px; max-width:82vw;
+    display:flex; flex-direction:column; background:rgba(18,22,30,.92); border:1px solid var(--line-2);
+    border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,.5); transform:translateX(calc(100% + 24px));
+    transition:transform .2s ease, width .18s ease; overflow:hidden; }
+  #panel.open{ transform:translateX(0); }
+  #panel.deep{ width:470px; background:rgba(18,22,30,.95); box-shadow:0 16px 55px rgba(0,0,0,.6); }
+  #panel.edge{ width:452px; }
+  .p-head{ display:flex; align-items:center; gap:8px; padding:13px 16px; border-bottom:1px solid var(--line); flex:0 0 auto; }
+  .p-head .crumb{ flex:1 1 auto; min-width:0; font-size:12.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .p-head .crumb b{ color:var(--text); font-weight:500; }
+  .p-head .sq{ width:26px; height:26px; flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+    background:var(--surface-3); border:1px solid var(--line); border-radius:7px; color:var(--dim); cursor:pointer; font-size:14px; }
+  .p-head .sq:hover{ color:var(--text); border-color:var(--line-2); }
+  .p-head .badge{ font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent);
+    background:rgba(122,162,247,.12); border:1px solid rgba(122,162,247,.3); border-radius:5px; padding:3px 6px; flex:0 0 auto; }
+  .p-scroll{ flex:1 1 auto; overflow-y:auto; padding:18px 20px; display:flex; flex-direction:column; gap:16px; }
+  .p-actions{ flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
+  .p-actions:empty{ display:none; }
+
+  .ident{ display:flex; flex-direction:column; gap:11px; }
+  .ident .top{ display:flex; align-items:center; gap:11px; }
+  .avatar{ width:34px; height:34px; flex:0 0 auto; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:14px; color:var(--ground); }
+  .ident h2{ margin:0; font-size:21px; font-weight:600; letter-spacing:-.015em; line-height:1.15; text-wrap:balance; }
+  .ident .kind{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; margin-top:3px; }
+  .stats{ display:flex; gap:8px; }
+  .tile{ flex:1 1 0; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:7px 9px; }
+  .tile .l{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+  .tile .v{ font-size:14px; font-weight:600; margin-top:2px; }
+
+  .slabel{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); }
+  .desc{ font-size:13.5px; line-height:1.65; color:var(--text); text-wrap:pretty; }
+  .desc.clamp{ max-height:88px; overflow:hidden; }
+  .reveal{ color:var(--accent); cursor:pointer; font-size:12.5px; margin-top:-8px; display:inline-block; }
+  .section{ display:flex; flex-direction:column; gap:8px; }
+  .section .hd{ display:flex; align-items:baseline; justify-content:space-between; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:99px; padding:5px 10px; font-size:12px; cursor:pointer; color:var(--text); }
+  .chip:hover{ border-color:var(--accent); }
+  .chip .cd{ width:6px; height:6px; border-radius:50%; flex:0 0 auto; }
+  .chip.out{ background:transparent; color:var(--dim); }
+
+  .card{ background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:11px 12px; display:flex; flex-direction:column; gap:6px; }
+  .card .name{ display:flex; align-items:center; gap:7px; font-size:13px; }
+  .card .name .lnk{ cursor:pointer; }
+  .card .name .lnk:hover{ color:var(--accent); }
+  .wbar{ display:flex; align-items:center; gap:7px; }
+  .wbar .track{ height:3px; background:var(--surface-3); border-radius:2px; overflow:hidden; }
+  .wbar .fill{ height:100%; background:var(--accent); }
+  .wbar .wv{ font-family:var(--mono); font-size:10px; color:var(--faint); }
+  .quote{ font-size:12.5px; line-height:1.6; color:var(--dim); text-wrap:pretty; }
+  .src{ font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--faint); }
+
+  .ends{ display:flex; align-items:stretch; gap:8px; }
+  .ecard{ flex:1 1 0; min-width:0; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px; cursor:pointer; }
+  .ecard:hover{ border-color:var(--accent); }
+  .ecard .en{ font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ecard .et{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-top:3px; }
+  .ejoin{ flex:0 0 auto; display:flex; align-items:center; color:var(--dim); font-size:16px; }
+  .kbadge{ font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); background:var(--surface-3); border-radius:5px; padding:3px 7px; }
+  .rcard{ border-left:2px solid var(--line-2); background:var(--surface-2); border-radius:0 10px 10px 0; padding:9px 12px; display:flex; flex-direction:column; gap:5px; }
+  .rcard.newest{ border-left-color:var(--accent); }
+
+  .btn{ height:34px; padding:0 13px; border-radius:8px; font-size:12.5px; font-weight:500; cursor:pointer;
+    display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line-2); background:var(--surface-3); color:var(--text); }
+  .btn:hover{ border-color:var(--accent); }
+  .btn.primary{ background:var(--accent); color:var(--ground); border-color:var(--accent); font-weight:600; }
+  .btn.ghost{ background:transparent; color:var(--dim); }
+  .btn.right{ margin-left:auto; }
+  .btn[disabled]{ opacity:.4; cursor:not-allowed; }
+  .btn[disabled]:hover{ border-color:var(--line-2); }
+
+  .idle h2{ margin:0 0 8px; font-size:17px; font-weight:600; }
+  .idle p{ margin:0 0 14px; color:var(--dim); font-size:13px; line-height:1.6; }
+  .keys{ display:flex; flex-direction:column; gap:7px; }
+  .keyrow{ display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--dim); }
+  .keycap{ font-family:var(--mono); font-size:10px; min-width:64px; text-align:center; padding:4px 6px; background:var(--surface-3); border:1px solid var(--line-2); border-radius:6px; color:var(--text); }
+  .appears{ background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; display:flex; flex-direction:column; gap:3px; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hud"><h1>TESSERA</h1><div class="sub" id="counts"></div></div>
+<div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span></div>
 <div id="tip"></div>
-<div id="help">scroll = zoom · drag = pan · click = focus · right-click = inspect · hover edge = why · h = show/hide provenance</div>
+<div id="help">scroll zoom · drag pan · click focus · right-click inspect · h provenance · esc close</div>
 <div id="legend"></div>
-<div id="panel"><span class="close" id="pclose">×</span>
-  <div class="type" id="ptype"></div><h2 id="ptitle"></h2>
-  <div id="pmeta"></div>
-  <div class="body" id="pbody"></div>
-  <div class="nlabel" id="pnlabel">connections</div><div id="pneighbors"></div>
+<div id="panel">
+  <div class="p-head">
+    <div class="sq" id="pback" title="back" style="display:none">‹</div>
+    <div class="crumb" id="crumb"></div>
+    <span class="badge" id="pbadge" style="display:none">deep inspect</span>
+    <div class="sq" id="pclose" title="close">✕</div>
+  </div>
+  <div class="p-scroll" id="pscroll"></div>
+  <div class="p-actions" id="pactions"></div>
 </div>
 <script>
 const GRAPH = /*__GRAPH_DATA__*/ {nodes:[],edges:[]};
@@ -85,8 +167,8 @@ function rebuild(){
   settle(); buildLegend(); updateCounts();
 }
 function updateCounts(){
-  const people = NODES.filter(n=>n.type==='PERSON').length;
-  $('counts').textContent = people+' people · '+(NODES.length-people)+' other · '+EDGES.length+' links'+(showProv?' · +provenance':'');
+  $('gname').textContent = GRAPH.name || 'graph';
+  $('gcount').textContent = NODES.length+' nodes · '+EDGES.length+' edges'+(showProv?' · +prov':'');
 }
 
 // --- colour: coarse buckets, deliberately few. Person vs. the rest, because 7 shades of one hue don't read.
@@ -184,9 +266,10 @@ cv.addEventListener('mousemove', ev=>{
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
   if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
-    // the reason IS the insight — don't prefix "A ↔ B" (formulaic, and the endpoints are already the two nodes
-    // the edge visibly joins). Fall back to endpoint names only when there's no reason.
-    tip.textContent = hoverEdge.reason || ((hoverEdge.a.label||'')+'  —  '+(hoverEdge.b.label||'')); }
+    // the reason IS the insight — don't prefix "A ↔ B" (formulaic; the endpoints are already the two nodes it
+    // joins). A mono kind+weight line sits above it. Fall back to endpoint names only when there's no reason.
+    tip.innerHTML = '<span class="k">'+esc(hoverEdge.kind)+' · w '+(hoverEdge.w||1)+'</span>'
+      + esc(hoverEdge.reason || ((hoverEdge.a.label||'')+'  —  '+(hoverEdge.b.label||''))); }
   else if(hoverNode){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px'; tip.textContent=hoverNode.label; }
   else tip.style.display='none';
   cv.style.cursor=(hoverNode||hoverEdge)?'pointer':'grab';
@@ -194,71 +277,129 @@ cv.addEventListener('mousemove', ev=>{
 cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
 addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
-  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n) select(n); else { const e=edgeAt(ev.clientX,ev.clientY); e?inspectEdge(e):deselect(); } }
+  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):deselect(); } }
   panning=false; cv.classList.remove('dragging'); });
 // right-click = deep inspect (node or edge)
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
-  if(n){ inspectNode(n); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) inspectEdge(e); });
+  if(n){ walk=[]; openNode(n,true); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) openEdge(e); });
 cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev.clientX,ev.clientY);
   scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.15,Math.min(6,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
-// --- panel: light focus (left-click) + deep inspect (right-click) ---
-const panel=$('panel');
-function neighborsOf(n){ return EDGES.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a, reason:e.reason, kind:e.kind })); }
-function provenanceOf(n){ return edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b.label).filter(Boolean); }
-function chips(box, list, onpick){ list.forEach(node=>{ const c=document.createElement('span'); c.className='chip';
-  c.textContent=node.label||node.id; c.onclick=()=>onpick(node); box.appendChild(c); }); }
+// --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
+const panel=$('panel'), pscroll=$('pscroll'), pactions=$('pactions'), crumb=$('crumb');
+let walk=[]; // breadcrumb of visited node ids
 
-// left-click: focus the neighbourhood + brief detail, and let you walk via the connection chips
-function select(n){ selected=n; panel.classList.add('open');
-  $('ptype').textContent=(n.group||n.type||'')+(n.deg?(' · '+n.deg+' links'):'');
-  $('ptitle').textContent=n.label||n.id;
-  $('pmeta').innerHTML='';
-  $('pbody').textContent=((n.meta&&(n.meta.description||n.meta.bio))||n.text||'');
-  $('pnlabel').textContent='connections';
-  const box=$('pneighbors'); box.innerHTML='';
-  chips(box, neighborsOf(n).sort((a,b)=>b.node.deg-a.node.deg).map(x=>x.node), node=>{ select(node); centerOn(node); });
-}
-// right-click a node: everything — id/identity/strength/degree, full description, provenance, neighbours by kind + reason
-function inspectNode(n){ selected=n; panel.classList.add('open');
-  $('ptype').textContent=(n.group?(n.type+' / '+n.group):n.type)+' · inspect';
-  $('ptitle').textContent=n.label||n.id;
-  const md=n.meta||{}, prov=provenanceOf(n);
-  const kv=[['id',n.id],['strength',n.strength],['degree',n.deg],['identity',n.text]].filter(r=>r[1]!=null);
-  $('pmeta').innerHTML=kv.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join('');
-  $('pbody').textContent=(md.description||md.bio||n.text||'');
-  $('pnlabel').textContent='connections';
-  const box=$('pneighbors'); box.innerHTML='';
-  const nb=neighborsOf(n);
-  [...new Set(nb.map(x=>x.kind))].forEach(k=>{ const h=document.createElement('div'); h.className='nlabel'; h.textContent=k; box.appendChild(h);
-    nb.filter(x=>x.kind===k).forEach(({node,reason})=>{ const row=document.createElement('div'); row.style.margin='0 0 7px';
-      const c=document.createElement('span'); c.className='chip'; c.textContent=node.label||node.id; c.onclick=()=>{ inspectNode(node); centerOn(node); }; row.appendChild(c);
-      if(reason){ const r=document.createElement('div'); r.style.cssText='color:#8b93a7;font-size:11px;margin:3px 2px 0'; r.textContent=reason; row.appendChild(r); }
-      box.appendChild(row); }); });
-  // 'derived from' — the source chunk(s), shown even when provenance is hidden on the map. So a node with no
-  // semantic links still shows its origin: it was never truly unlinked — its RELATED edges just don't exist yet.
-  if(prov.length){ const h=document.createElement('div'); h.className='nlabel'; h.textContent='derived from'; box.appendChild(h);
-    prov.forEach(label=>{ const d=document.createElement('div'); d.style.cssText='color:#8b93a7;font-size:12px;margin:0 2px 5px'; d.textContent=label; box.appendChild(d); }); }
-  if(!nb.length && !prov.length){ const d=document.createElement('div'); d.style.cssText='color:#8b93a7;font-size:12px'; d.textContent='floating — no links or provenance'; box.appendChild(d); }
-}
-// right-click an edge: endpoints, kind, weight, and EVERY assertion reason
-function inspectEdge(e){ selected=null; panel.classList.add('open');
-  $('ptype').textContent=e.kind+' edge · inspect';
-  $('ptitle').textContent=(e.a.label||e.a.id)+'  ↔  '+(e.b.label||e.b.id);
-  const kv=[['kind',e.kind],['weight',e.w],['polarity',e.polarity]].filter(r=>r[1]!=null);
-  $('pmeta').innerHTML=kv.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join('');
-  const reasons=(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]);
-  $('pbody').textContent=reasons.length?reasons.map((r,i)=>(reasons.length>1?(i+1)+'. ':'')+r).join('\n\n'):'(no reason recorded)';
-  $('pnlabel').textContent='endpoints';
-  const box=$('pneighbors'); box.innerHTML='';
-  chips(box, [e.a,e.b], node=>{ inspectNode(node); centerOn(node); });
-}
-function deselect(){ selected=null; panel.classList.remove('open'); }
+const el=(tag,cls,txt)=>{ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; };
+function clearPanel(){ pscroll.innerHTML=''; pactions.innerHTML=''; }
+function neighborsOf(n){ return EDGES.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a,
+  reason:e.reason, reasons:(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]), kind:e.kind, w:e.w||1 })); }
+function provChunks(n){ return edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b.label||'').filter(Boolean); }
+function sourcesOf(n){ return [...new Set(provChunks(n).map(l=>{ const m=l.match(/ of (.+)$/); return m?m[1]:l; }))]; }
+const initialOf=s=>((String(s||'?').trim()[0])||'?').toUpperCase();
 function centerOn(n){ ox=W/2-n.x*scale; oy=H/2-n.y*scale; }
-$('pclose').onclick=deselect;
-addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); } });
 
-rebuild(); draw();
+function setCrumb(n){ crumb.innerHTML='';
+  const prev = walk.length>1 ? byId.get(walk[walk.length-2]) : null;
+  if(prev){ crumb.appendChild(el('span',null,prev.label||prev.id)); crumb.appendChild(el('span',null,'  ›  ')); }
+  crumb.appendChild(el('b',null, n?(n.label||n.id):''));
+  $('pback').style.display = walk.length>1 ? 'flex' : 'none';
+}
+function tile(l,v){ const t=el('div','tile'); t.appendChild(el('div','l',l)); t.appendChild(el('div','v',String(v))); return t; }
+function chipEl(node){ const c=el('span','chip'); const d=el('span','cd'); d.style.background=colorFor(node);
+  c.appendChild(d); c.appendChild(el('span',null,node.label||node.id)); c.onclick=()=>walkTo(node); return c; }
+function mkBtn(label,cls,onclick){ const b=el('button','btn'+(cls?' '+cls:''),label); if(onclick) b.onclick=onclick; else b.disabled=true; return b; }
+function walkTo(node){ walk.push(node.id); openNode(node, panel.classList.contains('deep')); centerOn(node); }
+
+function openNode(n, deep){
+  selected=n; panel.classList.add('open'); panel.classList.toggle('deep',!!deep); panel.classList.remove('edge');
+  $('pbadge').style.display = deep?'inline-block':'none';
+  if(!walk.length || walk[walk.length-1]!==n.id) walk.push(n.id);
+  setCrumb(n); clearPanel();
+
+  const ident=el('div','ident'), top=el('div','top');
+  const av=el('div','avatar', initialOf(n.label)); av.style.background=colorFor(n); top.appendChild(av);
+  const tt=el('div'); tt.appendChild(el('h2',null,n.label||n.id));
+  const kind=el('div','kind', n.group?(n.type+' / '+n.group):n.type); kind.style.color=colorFor(n); tt.appendChild(kind);
+  top.appendChild(tt); ident.appendChild(top);
+  const st=el('div','stats'); st.appendChild(tile('strength','×'+n.strength)); st.appendChild(tile('degree',n.deg)); st.appendChild(tile('sources',sourcesOf(n).length)); ident.appendChild(st);
+  pscroll.appendChild(ident);
+
+  const md=n.meta||{}, descText=md.description||md.bio||n.text||'';
+  if(descText){ const d=el('div','desc'+(deep?'':' clamp'),descText); pscroll.appendChild(d);
+    if(!deep && descText.length>170){ const r=el('span','reveal','Show full description'); r.onclick=()=>{ d.classList.remove('clamp'); r.remove(); }; pscroll.appendChild(r); } }
+
+  const semantic=neighborsOf(n).filter(x=>x.kind==='RELATED');
+  const sec=el('div','section'), hd=el('div','hd');
+  hd.appendChild(el('div','slabel','Connections')); hd.appendChild(el('div','slabel',semantic.length+' link'+(semantic.length===1?'':'s'))); sec.appendChild(hd);
+  if(deep){
+    semantic.forEach(({node,reasons,w})=>{ const c=el('div','card'), nm=el('div','name');
+      const dot=el('span','cd'); dot.style.background=colorFor(node); nm.appendChild(dot);
+      const lnk=el('span','lnk',node.label||node.id); lnk.onclick=()=>walkTo(node); nm.appendChild(lnk); c.appendChild(nm);
+      const wb=el('div','wbar'), tr=el('div','track'); tr.style.width='34px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,(w/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv','w '+w)); c.appendChild(wb);
+      reasons.forEach(rr=>c.appendChild(el('div','quote','“'+rr+'”'))); sec.appendChild(c); });
+    if(!semantic.length) sec.appendChild(el('div','quote','No semantic links yet.'));
+  } else {
+    const chips=el('div','chips'), show=semantic.slice(0,12);
+    show.forEach(({node})=>chips.appendChild(chipEl(node)));
+    if(semantic.length>show.length) chips.appendChild(el('span','chip out','+'+(semantic.length-show.length)+' more'));
+    if(!semantic.length) chips.appendChild(el('div','quote','No semantic links yet.'));
+    sec.appendChild(chips);
+  }
+  pscroll.appendChild(sec);
+
+  const prov=provChunks(n);
+  if(prov.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance':'Appears in'));
+    const card=el('div','appears'); (deep?prov:sourcesOf(n)).forEach(l=>card.appendChild(el('div','src',l))); ap.appendChild(card); pscroll.appendChild(ap); }
+
+  pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
+  pactions.appendChild(mkBtn('Save as scene',null,null)); // scenes deferred → disabled placeholder
+  pactions.appendChild(deep ? mkBtn('Collapse','ghost right',()=>openNode(n,false)) : mkBtn('Deep inspect →','ghost right',()=>openNode(n,true)));
+}
+
+function openEdge(e){
+  selected=null; panel.classList.add('open','edge'); panel.classList.remove('deep'); $('pbadge').style.display='none';
+  walk=[]; crumb.innerHTML=''; crumb.appendChild(el('b',null,'edge')); $('pback').style.display='none'; clearPanel();
+
+  const ends=el('div','ends');
+  const mkEnd=node=>{ const c=el('div','ecard'); c.appendChild(el('div','en',node.label||node.id)); c.appendChild(el('div','et',node.group||node.type)); c.onclick=()=>walkTo(node); return c; };
+  ends.appendChild(mkEnd(e.a)); ends.appendChild(el('div','ejoin','↔')); ends.appendChild(mkEnd(e.b));
+  pscroll.appendChild(ends);
+
+  const reasons=(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]);
+  const meta=el('div'); meta.style.cssText='display:flex;align-items:center;gap:10px';
+  meta.appendChild(el('span','kbadge',e.kind));
+  const wb=el('div','wbar'); wb.appendChild(el('span','wv','weight')); const tr=el('div','track'); tr.style.width='56px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,((e.w||1)/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv',String(e.w||1))); meta.appendChild(wb);
+  const cnt=el('span','src',reasons.length+' reason'+(reasons.length===1?'':'s')); cnt.style.marginLeft='auto'; meta.appendChild(cnt);
+  pscroll.appendChild(meta);
+
+  const rsec=el('div','section'); rsec.appendChild(el('div','slabel','Reasons recorded'));
+  const ordered=[...reasons].reverse(), showN=ordered.slice(0,3); // newest first (assertions stored oldest→newest)
+  showN.forEach((rr,i)=>{ const c=el('div','rcard'+(i===0?' newest':'')); c.appendChild(el('div','quote','“'+rr+'”')); rsec.appendChild(c); });
+  if(ordered.length>showN.length) rsec.appendChild(el('div','src','+'+(ordered.length-showN.length)+' more'));
+  if(!ordered.length) rsec.appendChild(el('div','quote','(no reason recorded)'));
+  pscroll.appendChild(rsec);
+
+  pactions.appendChild(mkBtn('Walk to '+(e.a.label||'A'),null,()=>walkTo(e.a)));
+  pactions.appendChild(mkBtn('Walk to '+(e.b.label||'B'),'ghost',()=>walkTo(e.b)));
+}
+
+function showIdle(){
+  selected=null; panel.classList.add('open'); panel.classList.remove('deep','edge'); $('pbadge').style.display='none';
+  walk=[]; crumb.innerHTML=''; $('pback').style.display='none'; clearPanel();
+  const box=el('div','idle');
+  box.appendChild(el('h2',null,'Click a landmark to open it'));
+  box.appendChild(el('p',null,'Left-click a node to focus its neighborhood; right-click to inspect it in full; hover an edge to see why it exists.'));
+  const keys=el('div','keys');
+  [['click','focus a node + its links'],['right-click','deep inspect a node or edge'],['hover','read an edge’s reason'],['h','show / hide provenance']].forEach(([k,d])=>{ const r=el('div','keyrow'); r.appendChild(el('span','keycap',k)); r.appendChild(el('span',null,d)); keys.appendChild(r); });
+  box.appendChild(keys); pscroll.appendChild(box);
+}
+
+function back(){ if(walk.length>1){ walk.pop(); const prev=byId.get(walk[walk.length-1]); if(prev) openNode(prev, panel.classList.contains('deep')); } }
+function deselect(){ showIdle(); }
+$('pback').onclick=back; $('pclose').onclick=deselect;
+addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); if(selected && !NODES.includes(selected)) showIdle(); } });
+
+rebuild(); showIdle(); draw();
 </script>
 </body>
 </html>

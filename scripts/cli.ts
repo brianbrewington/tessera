@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     case "view": {
       const name = args[0] ?? usage();
       const out = join(graphDir(name), "view.html");
-      const n = exportViewer(join(graphDir(name), "graph.db"), out);
+      const n = exportViewer(join(graphDir(name), "graph.db"), out, name);
       console.log(`wrote ${out}  (${n} nodes) — open it in a browser`);
       break;
     }

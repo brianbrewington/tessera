@@ -9,7 +9,7 @@ import { StubEmbedder } from "../src/embedder.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const TPL = `${here}/../viewer/template.html`;
 
-export function exportViewer(db: string, out: string): number {
+export function exportViewer(db: string, out: string, name = "graph"): number {
   // Read-only export; the embedder only satisfies the ctor (dim must match the db's vec tables → 768).
   const store = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
   const nodes = store.allNodes().map((n) => ({
@@ -32,7 +32,7 @@ export function exportViewer(db: string, out: string): number {
   }));
   store.close();
 
-  const dataJson = JSON.stringify({ nodes, edges }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  const dataJson = JSON.stringify({ nodes, edges, name }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);
