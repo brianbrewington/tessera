@@ -183,8 +183,10 @@ cv.addEventListener('mousemove', ev=>{
   const px=ev.clientX, py=ev.clientY;
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
-  if(hoverEdge && hoverEdge.reason){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
-    tip.textContent=(hoverEdge.a.label)+'  ↔  '+(hoverEdge.b.label)+'   —   '+hoverEdge.reason; }
+  if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
+    // the reason IS the insight — don't prefix "A ↔ B" (formulaic, and the endpoints are already the two nodes
+    // the edge visibly joins). Fall back to endpoint names only when there's no reason.
+    tip.textContent = hoverEdge.reason || ((hoverEdge.a.label||'')+'  —  '+(hoverEdge.b.label||'')); }
   else if(hoverNode){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px'; tip.textContent=hoverNode.label; }
   else tip.style.display='none';
   cv.style.cursor=(hoverNode||hoverEdge)?'pointer':'grab';
@@ -224,7 +226,7 @@ function inspectNode(n){ selected=n; panel.classList.add('open');
   const md=n.meta||{}, prov=provenanceOf(n);
   const kv=[['id',n.id],['strength',n.strength],['degree',n.deg],['identity',n.text]].filter(r=>r[1]!=null);
   $('pmeta').innerHTML=kv.map(r=>'<span class="kv"><b>'+esc(r[0])+'</b>'+esc(r[1])+'</span>').join('');
-  $('pbody').textContent=(md.description||md.bio||n.text||'')+(prov.length?('\n\nappears in:\n· '+prov.join('\n· ')):'');
+  $('pbody').textContent=(md.description||md.bio||n.text||'');
   $('pnlabel').textContent='connections';
   const box=$('pneighbors'); box.innerHTML='';
   const nb=neighborsOf(n);
@@ -233,6 +235,11 @@ function inspectNode(n){ selected=n; panel.classList.add('open');
       const c=document.createElement('span'); c.className='chip'; c.textContent=node.label||node.id; c.onclick=()=>{ inspectNode(node); centerOn(node); }; row.appendChild(c);
       if(reason){ const r=document.createElement('div'); r.style.cssText='color:#8b93a7;font-size:11px;margin:3px 2px 0'; r.textContent=reason; row.appendChild(r); }
       box.appendChild(row); }); });
+  // 'derived from' — the source chunk(s), shown even when provenance is hidden on the map. So a node with no
+  // semantic links still shows its origin: it was never truly unlinked — its RELATED edges just don't exist yet.
+  if(prov.length){ const h=document.createElement('div'); h.className='nlabel'; h.textContent='derived from'; box.appendChild(h);
+    prov.forEach(label=>{ const d=document.createElement('div'); d.style.cssText='color:#8b93a7;font-size:12px;margin:0 2px 5px'; d.textContent=label; box.appendChild(d); }); }
+  if(!nb.length && !prov.length){ const d=document.createElement('div'); d.style.cssText='color:#8b93a7;font-size:12px'; d.textContent='floating — no links or provenance'; box.appendChild(d); }
 }
 // right-click an edge: endpoints, kind, weight, and EVERY assertion reason
 function inspectEdge(e){ selected=null; panel.classList.add('open');
