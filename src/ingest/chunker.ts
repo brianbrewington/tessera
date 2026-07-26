@@ -26,5 +26,9 @@ export function chunk(text: string, maxChars = 1500): Chunk[] {
     if (buf.length >= maxChars) flush();
   }
   flush();
-  return chunks.length ? chunks : [{ index: 0, text: text.trim() }];
+  // Fallback for a single-paragraph doc with no blank lines. An EMPTY/whitespace-only doc yields NO chunks
+  // (never a junk empty-text chunk that would embed("") and mint a contentless CHUNK node).
+  if (chunks.length) return chunks;
+  const whole = text.trim();
+  return whole ? [{ index: 0, text: whole }] : [];
 }

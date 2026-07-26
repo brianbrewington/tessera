@@ -66,41 +66,64 @@ Output ONLY a JSON object — no markdown fence, no prose:
 
 Third person; name subjects explicitly (never "this document" / "the persona"). Output the JSON object only.`;
 
-/** First balanced {...} object in a string (brace-counting, string-aware) — tolerant of chatty models. */
-export function firstJsonObject(text: string): string | null {
-  const i = text.indexOf("{");
-  if (i < 0) return null;
-  let depth = 0, inStr = false, esc = false;
-  for (let j = i; j < text.length; j++) {
-    const c = text[j]!;
-    if (esc) { esc = false; continue; }
-    if (c === "\\") { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (c === "{") depth++;
-    else if (c === "}") { depth--; if (depth === 0) return text.slice(i, j + 1); }
+const norm = (s: string): string => s.trim().toLowerCase();
+
+/** Each balanced {...} group in a string (brace-counting, string-aware), left to right — tolerant of chatty
+ *  models that wrap the payload in prose or emit a decoy object first (e.g. "I found {2} groups: {...}"). */
+export function* jsonObjectCandidates(text: string): Generator<string> {
+  let i = text.indexOf("{");
+  while (i >= 0) {
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j]!;
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) { end = j; break; } }
+    }
+    if (end < 0) return; // unbalanced tail — nothing more to yield
+    yield text.slice(i, end + 1);
+    i = text.indexOf("{", end + 1);
   }
-  return null;
 }
 
-/** Parse + validate an extraction reply. Never throws — reports `parsed:false` on unparseable output so a
- *  silent parse failure is distinguishable from a genuinely empty chunk. */
+/** First balanced {...} object in a string — tolerant of chatty models. */
+export function firstJsonObject(text: string): string | null {
+  return jsonObjectCandidates(text).next().value ?? null;
+}
+
+/** Keep the schema-valid elements of an array, dropping the bad ones (one malformed row must not void all). */
+function salvage<S extends z.ZodTypeAny>(arr: unknown, schema: S): z.infer<S>[] {
+  return Array.isArray(arr) ? arr.flatMap((x) => { const r = schema.safeParse(x); return r.success ? [r.data] : []; }) : [];
+}
+
+/** Parse + validate an extraction reply. Never throws. `parsed:false` ONLY when no candidate is parseable JSON
+ *  (distinct from a valid-but-empty chunk). A reply that IS valid JSON but has some malformed entities/relations
+ *  is `parsed:true` with the bad rows dropped — one bad element never discards the good ones. */
 export function parseExtraction(raw: string): ExtractResult {
-  const js = firstJsonObject(raw);
-  if (!js) return { extraction: { entities: [], relations: [] }, parsed: false };
-  let obj: unknown;
-  try { obj = JSON.parse(js); } catch { return { extraction: { entities: [], relations: [] }, parsed: false }; }
-  const p = Extraction.safeParse(obj);
-  if (!p.success) return { extraction: { entities: [], relations: [] }, parsed: false };
-  // Keep only relations whose endpoints were actually extracted (drop hallucinated dangling edges).
-  const names = new Set(p.data.entities.map((e) => e.name));
-  return {
-    extraction: {
-      entities: p.data.entities,
-      relations: p.data.relations.filter((r) => names.has(r.source) && names.has(r.target)),
-    },
-    parsed: true,
-  };
+  // Prefer the first candidate SHAPED like an extraction (has an entities/relations array) over an earlier
+  // decoy object a chatty model may have emitted (e.g. "I found {"count":2}: {...real...}"); fall back to the
+  // first parseable object if none is payload-shaped.
+  let obj: Record<string, unknown> | null = null;
+  let fallback: Record<string, unknown> | null = null;
+  for (const cand of jsonObjectCandidates(raw)) {
+    let o: unknown;
+    try { o = JSON.parse(cand); } catch { continue; }
+    if (!o || typeof o !== "object") continue;
+    const rec = o as Record<string, unknown>;
+    fallback ??= rec;
+    if (Array.isArray(rec.entities) || Array.isArray(rec.relations)) { obj = rec; break; }
+  }
+  obj ??= fallback;
+  if (!obj) return { extraction: { entities: [], relations: [] }, parsed: false };
+  const entities = salvage(obj.entities, Entity);
+  // Keep only relations whose endpoints were actually extracted (drop hallucinated dangling edges). Match on
+  // normalized names so a relation citing "de doorns" survives against entity "De Doorns" (the mapper norms too).
+  const names = new Set(entities.map((e) => norm(e.name)));
+  const relations = salvage(obj.relations, Relation).filter((r) => names.has(norm(r.source)) && names.has(norm(r.target)));
+  return { extraction: { entities, relations }, parsed: true };
 }
 
 export class LlmExtractor implements Extractor {

@@ -10,7 +10,8 @@ import { chunk as splitChunks } from "./chunker.js";
 import { mapExtraction } from "./mapper.js";
 import { sourceIdentity, chunkIdentity } from "../extract/identity.js";
 
-const IDENTITY = { nearDupMerge: false } as const; // ingest owns identity via content_hash; no cosine merge
+// Ingest owns identity via content_hash of the mapper's identity string; the store's default (no cosine
+// near-dup merge) means similar CONTENT never collapses distinct identities — so putNode needs no opts here.
 
 export interface IngestResult {
   source: string;
@@ -35,7 +36,7 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
       text: sourceIdentity(doc.source), name: doc.title, description: `Document: ${doc.title}`,
       provenance: { path: doc.source },
     },
-    meta, srcVec, IDENTITY,
+    meta, srcVec,
   );
 
   const chunks = splitChunks(doc.text);
@@ -53,7 +54,7 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
         text: chunkIdentity(doc.source, c.text), name: label, description: c.text,
         provenance: { path: doc.source, index: i },
       },
-      meta, cvec, IDENTITY,
+      meta, cvec,
     );
     await graph.store.putEdge(
       { from: chunkNode.id, to: src.id, kind: "ORIGINATED_FROM", reason: `${label} is from ${doc.title}`, origin: "ingest" },

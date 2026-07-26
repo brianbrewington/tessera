@@ -48,6 +48,22 @@ two-gate LLM-verify. Reuse `analysis/entity_resolution.py` (fix its greedy-centr
 entity gets two nodes and never dedups. Pick one identity contract (the mapper's is the reviewed one) and route
 `persona.ts` through it, or explicitly namespace the two so the divergence is intentional, not accidental.
 
+## Idempotent + cheap re-ingest (chunk-hash extraction memo)
+Live re-ingest of one doc is idempotent for everything the system *controls* (SOURCE/CHUNK/PERSON identity all
+reinforce, zero duplication), but the entities/edges still churn because extraction runs at temp 0.4 and returns
+different output each call. Since CHUNK identity is deterministic (`chunk\t<sourceKey>\t<sha16(rawtext)>`), a
+chunk that already exists with `APPEARED_IN` entities could **skip re-extraction** entirely — making re-ingest
+truly idempotent AND saving the (dominant) LLM cost. Design: memo on chunk content_hash; invalidate if the
+extraction model/prompt version changes. Interacts with the chunker-tuning sub-plan.
+
+## Identity-string normalization edges (latent)
+`contentHash` runs identity strings through `normalizeText` (lowercase + `\s+`→space). Two consequences, both
+low-frequency, both safe to fix now (no persisted data): (1) `\t` field delimiters collapse to spaces before
+hashing, so identity safety rests on the type prefix being an enum, not on the delimiter; (2) case-distinct file
+paths on a case-sensitive FS (`/a/Notes.md` vs `/a/notes.md`) collapse to one SOURCE identity while their chunks
+(raw-path `sourceKey`) stay separate → provenance split. Fix: hash identity strings verbatim (bypass the lossy
+normalize) OR normalize paths consistently across `sourceIdentity` and `sourceKey`.
+
 ## Extraction type-consistency (I1)
 Live run flagged the same word typed two ways in one corpus (e.g. `Imifino` as both CONCEPT and PRODUCT,
 `Spinach` as PRODUCT). By design that's two identity nodes (type is part of identity), so extractor type-jitter

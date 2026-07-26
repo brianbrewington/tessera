@@ -122,8 +122,8 @@ export class GraphStore {
   }
 
   // putNode — always lands `proposed`, embeds to node-quarantine. Dedup primary key =
-  // content_hash; cosine > 0.99 is a secondary near-dup merge. On dedup: reinforce, do
-  // NOT create (spec §4). Async because embedding is async; the dedup + write run as ONE
+  // content_hash; cosine > 0.99 is an OPT-IN secondary near-dup merge (nearDupMerge:true).
+  // On dedup: reinforce, do NOT create (spec §4). Async because embedding is async; the dedup + write run as ONE
   // BEGIN IMMEDIATE transaction so the write lock serializes concurrent writers (even a
   // second connection) — no read-before-write TOCTOU that could split a duplicate.
   async putNode(
@@ -145,11 +145,12 @@ export class GraphStore {
       let dupId: string | undefined = (
         this.db.prepare("SELECT id FROM nodes WHERE content_hash = ?").get(hash) as { id: string } | undefined
       )?.id;
-      // Secondary near-dup merge is content-based; identity-controlled callers (ingest) pass
-      // nearDupMerge:false so content_hash(identity string) is the SOLE identity key — distinct
-      // identities with similar CONTENT (two docs same title; "place\tjava" vs "concept\tjava") must
-      // NOT collapse. The content embedding is for RAG/similarity, not identity.
-      if (!dupId && opts.nearDupMerge !== false) {
+      // Secondary cosine near-dup merge is content-based and OPT-IN (nearDupMerge:true). By default
+      // content_hash(text) is the SOLE identity key, so distinct identities with similar CONTENT (two
+      // docs same title; "place\tjava" vs "concept\tjava"; two source-qualified people with near-identical
+      // bios) never collapse on embedding geometry. Only a caller that means text-IS-content (a plain notes
+      // store) should opt in. The content embedding is for RAG/similarity, not identity.
+      if (!dupId && opts.nearDupMerge === true) {
         const near = this.knnNodes("vec_node_quarantine", vec, 1);
         if (near.length && near[0]!.cosine > DEDUP_COSINE) dupId = near[0]!.node_id;
       }
@@ -158,21 +159,30 @@ export class GraphStore {
         const before = this.db
           .prepare("SELECT strength, version, type, name, description FROM nodes WHERE id = ?")
           .get(dupId) as { strength: number; version: number; type: string; name: string | null; description: string | null } | undefined;
-        // reinforce: bump strength; keep the RICHER description; fill name only if empty. On a TYPE CONFLICT
-        // (only reachable via nearDupMerge cosine — content_hash includes the type-prefixed identity), refuse
-        // to merge name/description and log it — never clobber across types.
-        const typeConflict = !!before && before.type !== inp.type;
-        const mergedName = typeConflict ? (before?.name ?? null) : (before?.name || inp.name || null);
-        const mergedDesc = typeConflict
-          ? (before?.description ?? null)
-          : inp.description && (!before?.description || inp.description.length > before.description.length)
-            ? inp.description
-            : (before?.description ?? null);
+        // A TYPE CONFLICT (different type collided on identity — only reachable via opt-in cosine merge,
+        // since content_hash includes the type prefix) is NOT evidence for the existing node: leave it
+        // untouched, don't inflate strength, and log the conflict for audit. Never clobber across types.
+        if (!!before && before.type !== inp.type) {
+          this.log(m, at, "typeConflict", dupId, { type: before.type, name: before.name }, { attemptedType: inp.type, attemptedName: inp.name ?? null });
+          return { id: dupId, reinforced: true };
+        }
+        // Genuine reinforce: bump strength; keep the RICHER description; fill name only if empty. When the
+        // description upgrades, refresh the stored embedding too — else querySimilar/surprise keep running on
+        // the stale first-mention vector while the text has moved on. Log carries the merged values so replay
+        // can reconstruct the upgrade (spec §5.4).
+        const mergedName = before?.name || inp.name || null;
+        const descUpgraded = !!inp.description && (!before?.description || inp.description.length > before.description.length);
+        const mergedDesc = descUpgraded ? inp.description! : (before?.description ?? null);
         this.db
           .prepare("UPDATE nodes SET strength = strength + 1, version = version + 1, name = ?, description = ? WHERE id = ?")
           .run(mergedName, mergedDesc, dupId);
-        if (typeConflict) this.log(m, at, "typeConflict", dupId, { type: before?.type }, { attemptedType: inp.type });
-        this.log(m, at, "reinforce", dupId, before, { strength: (before?.strength ?? 0) + 1 });
+        if (descUpgraded) this.db.prepare("UPDATE vec_node_quarantine SET embedding = ? WHERE node_id = ?").run(toBlob(vec), dupId);
+        this.log(m, at, "reinforce", dupId, before, {
+          strength: (before?.strength ?? 0) + 1,
+          name: mergedName,
+          description: mergedDesc,
+          ...(descUpgraded ? { embedding_b64: embeddingB64 } : {}),
+        });
         return { id: dupId, reinforced: true };
       }
 

@@ -55,9 +55,10 @@ Each stage is a small module behind a seam:
 ### 3.2 The store (`src/store/graphStore.ts`) — the sole writable authority
 - `better-sqlite3` + `sqlite-vec`, WAL, single-writer (`BEGIN IMMEDIATE`), every mutation appended to a
   replay-grade `mutation_log`. Records in / hydrated records out; all writes go through GraphStore verbs.
-- **Dedup**: primary `content_hash(normalizeText(text))`; secondary KNN cosine `> 0.99` over a *quarantine*
-  vector table. A hit **reinforces** (`strength += 1`, no new row) → idempotent re-ingest. Nodes embed on a
-  supplied vector or (default) their text.
+- **Dedup**: primary `content_hash(normalizeText(text))`; an **opt-in** (`nearDupMerge:true`) secondary KNN
+  cosine `> 0.99` over a *quarantine* vector table (ingest never opts in — identity is content_hash only). A hit
+  **reinforces** (`strength += 1`, no new row, richer description wins, embedding refreshed on upgrade) →
+  idempotent re-ingest. Nodes embed on a supplied vector or (default) their text.
 - **Two-tier vectors** (quarantine → shared): everything lands in quarantine on write; `promoteNode` is the
   only path to the durable "shared" tier (promote-hardening is **not yet built** — a known gap).
 - **Edges**: a structural spine (`edges`, unique on from/to/kind/polarity) separate from **`edge_assertions`**

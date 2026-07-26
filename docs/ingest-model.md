@@ -14,7 +14,11 @@ identity policy** by constructing each node's `text` (the dedup basis) and its f
 | **Identity entity** (PERSON) | `<type>\t<normalized name>\t<sourceKey>` | name | description | distinct instances never merge |
 
 - `sourceKey = sha256(source path).slice(0,8)` (matches `persona.ts`). `normalized = trim().toLowerCase()`.
-- Same identity string → same GUID (dedup/reinforce). Different → new GUID.
+- The **source path is canonicalized** (`path.resolve`) in the adapter, so `doc.md`, `./doc.md`, and an
+  absolute path yield ONE source identity — a re-ingest under a different spelling reinforces, never duplicates.
+- Same identity string → same GUID (dedup/reinforce). Different → new GUID. **Dedup is identity-only by
+  default**: the store's secondary cosine near-dup merge is OPT-IN (`nearDupMerge:true`), so similar CONTENT
+  never collapses distinct identities. Ingest never opts in — the content embedding is for RAG, not identity.
 - **CHUNK identity = source + hash of its raw text** → re-ingesting the same doc reinforces the same chunks
   (idempotent); the same text in a *different* doc is a distinct chunk (source-qualified).
 
@@ -27,6 +31,9 @@ identity policy** by constructing each node's `text` (the dedup basis) and its f
 
 - **`RELATED` is canonicalized**: undirected, stored `from = min(GUID), to = max(GUID)` (kills the A→B / B→A
   double-edge). ORIGINATED_FROM / APPEARED_IN stay directed (they are directional).
+- **Ambiguous endpoints are dropped, not guessed**: relations carry entity *names*, not types. If a name split
+  into two typed nodes in a chunk (PLACE Java / CONCEPT Java), a relation naming it is unresolvable → the edge
+  is skipped rather than bound to an arbitrary (last-written) node. Only real new edges count toward the report.
 - **Assertion idempotency**: `putEdge` skips inserting a new `edge_assertion` if an identical `reason` already
   exists on that edge (bounds unbounded growth on re-ingest).
 
@@ -45,15 +52,20 @@ their linked entities/neighborhood → context` — never the whole doc.
 1. `nodes`: add `name TEXT` and `description TEXT` columns (first-class; `text` becomes pure identity, not
    display). `PutNodeInput` + `NodeRecord` gain `name?`/`description?`.
 2. `putNode` reinforce: keep the **richer description** (longer non-empty), and set `name` if it was empty
-   (never clobber a good value; never merge across a type conflict — log it).
+   (never clobber a good value). When the description upgrades, **refresh the stored embedding** too, so
+   retrieval never runs on a stale first-mention vector. A **type conflict** (only reachable via opt-in cosine
+   merge) is not evidence: leave the node untouched, don't bump strength, log it.
 3. `putEdge`: **assertion idempotency** — skip the assertion insert (and its vector) when an identical reason
    already exists for the edge; still bump `hebbian_weight`.
 4. Everything the mapper does (identity strings, canonicalization, chunk nodes, provenance) is **ingest-layer**,
    not store logic.
 
 ## Fail-loud extraction (cheap correctness win)
-`parseExtraction` still never throws, but returns a `parsed: boolean`; ingest counts bad chunks and the
-`IngestResult` reports them, so a run that silently extracted nothing is visible (not a false success).
+`parseExtraction` never throws and returns a `parsed: boolean`; ingest counts bad chunks and the `IngestResult`
+reports them, so a run that silently extracted nothing is visible (not a false success). **`parsed:false` means
+NO parseable JSON object** (distinct from a valid-but-empty chunk). Salvage is **per-element**: one malformed
+entity/relation drops only that row, never the whole chunk; a chatty model's decoy object is skipped in favour of
+the first entities/relations-shaped payload. Relation endpoints match extracted names **case-insensitively**.
 
 ## Not changing
 GraphStore single-writer/`BEGIN IMMEDIATE`, two-tier vec, mutation_log, the deferred engine

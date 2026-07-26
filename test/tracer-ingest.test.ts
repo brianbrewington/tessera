@@ -8,11 +8,13 @@ import { tmpdir } from "node:os";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { StubChat } from "../src/llm.js";
-import { LlmExtractor, type Extraction } from "../src/extract/extractor.js";
+import { LlmExtractor, parseExtraction, type Extraction } from "../src/extract/extractor.js";
 import { mapExtraction } from "../src/ingest/mapper.js";
 import { entityIdentity, chunkIdentity, canonical } from "../src/extract/identity.js";
 import { Graph } from "../src/graph.js";
 import { ingestFile } from "../src/ingest/ingest.js";
+import { readDoc } from "../src/ingest/adapters.js";
+import { resolve } from "node:path";
 
 const meta = { actor: "test", cause: "unit" };
 const emb = new StubEmbedder(64);
@@ -109,6 +111,44 @@ describe("mapExtraction", () => {
     expect(new Set(javas.map((n) => n.subtype)).size).toBe(2); // place + concept — the type-in-identity split
   });
 
+  it("a relation naming a type-split homograph is dropped, not miswired to an arbitrary node", async () => {
+    store = new GraphStore({ path: ":memory:", embedder: emb });
+    const ch = await mkChunk(store);
+    // "Java" splits into PLACE + CONCEPT; the relation names "Java" — unresolvable to one node, so skip it
+    // rather than bind the wrong (last-written) Java. "Bali -> Indonesia" is unambiguous and must still wire.
+    const ex: Extraction = {
+      entities: [
+        { name: "Java", type: "PLACE", description: "an island" },
+        { name: "Java", type: "CONCEPT", description: "a programming language" },
+        { name: "Bali", type: "PLACE", description: "an island" },
+        { name: "Indonesia", type: "PLACE", description: "a country" },
+      ],
+      relations: [
+        { source: "Indonesia", target: "Java", reason: "Java is an island of Indonesia" }, // ambiguous -> drop
+        { source: "Bali", target: "Indonesia", reason: "Bali is an island of Indonesia" }, // clean -> wire
+      ],
+    };
+    const r = await mapExtraction(store, emb, meta, ex, "doc.md", new Map(), { id: ch, label: "c1" });
+    expect(store.allNodes().filter((n) => n.name === "Java").length).toBe(2); // both Javas exist
+    expect(r.edgeCount).toBe(1); // only the unambiguous Bali->Indonesia edge
+    const rels = store.allEdges().filter((e) => e.kind === "RELATED");
+    expect(rels.length).toBe(1);
+    const ends = new Set([rels[0]!.from, rels[0]!.to]);
+    for (const j of store.allNodes().filter((n) => n.name === "Java")) expect(ends.has(j.id)).toBe(false); // no Java edge
+  });
+
+  it("reinforce refreshes the stored embedding when the description upgrades (no stale RAG vector)", async () => {
+    store = new GraphStore({ path: ":memory:", embedder: emb });
+    const id = "concept\tx";
+    const put1 = await store.putNode({ type: "CONCEPT", origin: "ingest", text: id, name: "X", description: "short" }, meta, await emb.embed("X. short"));
+    const rich = "X. a much longer, richer description of X in the Hex River Valley";
+    await store.putNode({ type: "CONCEPT", origin: "ingest", text: id, name: "X", description: rich.slice(3) }, meta, await emb.embed(rich));
+    // The node is now retrieved by the NEW content's embedding (~1.0), not the stale first-mention one.
+    const hits = await store.querySimilar(await emb.embed(rich), 1, { index: "quarantine" });
+    expect(hits[0]!.node.id).toBe(put1.id);
+    expect(hits[0]!.cosine).toBeGreaterThan(0.999);
+  });
+
   it("within a doc, a later richer mention upgrades the description (node-reuse via known)", async () => {
     store = new GraphStore({ path: ":memory:", embedder: emb });
     const known = new Map<string, string>();
@@ -172,5 +212,78 @@ describe("ingestFile (full spine, stub LLM)", () => {
     expect(store.allNodes().length).toBe(n1); // no new nodes
     expect(store.countEdges()).toBe(e1); // no new edges
     store.close();
+  });
+
+  it("an empty document creates a SOURCE but zero chunks (no junk empty chunk, no embed of '')", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    const extractor = new LlmExtractor(new StubChat(JSON.stringify({ entities: [], relations: [] })));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-empty-"));
+    const docPath = join(dir, "empty.md");
+    writeFileSync(docPath, "   \n\n  \n"); // whitespace only
+    const r = await ingestFile(g, extractor, docPath);
+    expect(r.chunks).toBe(0);
+    expect(store.allNodes().some((n) => n.subtype === "document")).toBe(true); // the SOURCE still exists
+    expect(store.allNodes().some((n) => n.subtype === "chunk")).toBe(false); // but no junk chunk node
+    store.close();
+  });
+
+  it("re-ingesting the same file under a different path spelling does not duplicate the SOURCE", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    const extractor = new LlmExtractor(new StubChat(JSON.stringify({ entities: [{ name: "Kilo", type: "CONCEPT", description: "k" }], relations: [] })));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-path-"));
+    const docPath = join(dir, "doc.md");
+    writeFileSync(docPath, "# Doc\n\nMentions Kilo.\n");
+    await ingestFile(g, extractor, docPath);
+    const n1 = store.allNodes().length;
+    await ingestFile(g, extractor, `${dir}/./doc.md`); // same file, non-canonical spelling
+    expect(store.allNodes().length).toBe(n1); // resolve() canonicalized -> reinforced, not duplicated
+    store.close();
+  });
+});
+
+describe("parseExtraction (fail-loud + element salvage)", () => {
+  it("keeps the valid rows when one entity is malformed; parsed stays true (not a parse failure)", () => {
+    const raw = JSON.stringify({
+      entities: [
+        { name: "De Doorns", type: "PLACE", description: "a town" },
+        { name: "", type: "CONCEPT", description: "nameless — invalid, must be dropped" },
+      ],
+      relations: [{ source: "Ghost", target: "De Doorns", reason: "dangling endpoint" }],
+    });
+    const { extraction, parsed } = parseExtraction(raw);
+    expect(parsed).toBe(true); // valid JSON that failed on ONE row is NOT a parse failure
+    expect(extraction.entities.map((e) => e.name)).toEqual(["De Doorns"]); // empty-name row salvaged out
+    expect(extraction.relations.length).toBe(0); // "Ghost" endpoint never extracted -> dropped
+  });
+
+  it("relation endpoints match case-insensitively against extracted names", () => {
+    const raw = JSON.stringify({
+      entities: [{ name: "De Doorns", type: "PLACE", description: "a town" }, { name: "Klipgat Farm", type: "PLACE", description: "a farm" }],
+      relations: [{ source: "de doorns", target: "KLIPGAT FARM", reason: "De Doorns is near Klipgat Farm" }],
+    });
+    expect(parseExtraction(raw).extraction.relations.length).toBe(1); // survives the case mismatch
+  });
+
+  it("unparseable reply -> parsed:false, empty extraction", () => {
+    expect(parseExtraction("the model refused and just wrote prose").parsed).toBe(false);
+  });
+
+  it("finds the real payload past a decoy JSON object (chatty model)", () => {
+    const raw = 'I found {"count": 2} things: {"entities":[{"name":"Klipgat Farm","type":"PLACE","description":"a farm"}],"relations":[]}';
+    const { extraction, parsed } = parseExtraction(raw);
+    expect(parsed).toBe(true);
+    expect(extraction.entities.map((e) => e.name)).toEqual(["Klipgat Farm"]); // not the {"count":2} decoy
+  });
+});
+
+describe("adapter path canonicalization", () => {
+  it("readDoc returns an absolute, resolved source for a non-canonical path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tessera-adapt-"));
+    const docPath = join(dir, "d.md");
+    writeFileSync(docPath, "# D\n\nbody\n");
+    const doc = readDoc(`${dir}/./d.md`);
+    expect(doc.source).toBe(resolve(docPath)); // canonicalized identity, not the raw spelling
   });
 });
