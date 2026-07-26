@@ -37,6 +37,24 @@ within a single call, fewer chunks, less overlap-driven duplicate-node load), wh
 - **Store hardening**: promote-breaker (no-brick), `promoteAssertion`, prune-cascade, reinforce/decay commutative.
 - **Prominence pyramid / `getTile`**: semantic-zoom tiling for the viewer.
 
+## Entity dedup at CREATION time (two-gate) — the Connector's key finding (Brian)
+The hardened Connector's dry-run found its highest-cosine candidate band dominated by un-deduplicated
+near-duplicate ENTITIES ("Khoi Families ~ Khoi families", "Stellenbosch Estates ~ Stellenbosch Wine Estates",
+"Camera ~ Father's Camera") — an entity-resolution job leaking into edge-proposal, and one even survived. Brian:
+dedup should run at ENTITY CREATION time (in the mapper/putNode path), not as a pre-Connector pass — so near-dups
+never become separate nodes in the first place. Right direction; but **load-bearing caution:** naive
+cosine-at-creation is EXACTLY what we disabled (`nearDupMerge:false`) because it over-merged catastrophically
+(0.85 → "ANN" swallowed 92 entities). So creation-time dedup MUST be two-gate, in two layers of very different risk:
+- **Layer 1 (cheap, safe, deterministic — do first):** stronger string/type reconciliation. Case/whitespace
+  variants should already merge via `norm()`; if "Khoi Families"/"Khoi families" became two nodes, the culprit is
+  KI-3 type-jitter (same name, different extracted TYPE → different identity prefix → two nodes). Reconcile the
+  type (vote within a doc / at creation). Low over-merge risk; validatable even on the synthetic graph.
+- **Layer 2 (bigger, careful):** an embedding near-dup CANDIDATE at `putNode` → **LLM-verify the merge** before
+  collapsing (reuse the Connector's verifier in `scripts/connect.ts`). NEVER merge on geometry alone — geometry ≠
+  identity is the governing lesson, and the Connector's non-monotonic reject curve just re-proved it. Tune only on
+  a real corpus. Then the Connector runs on an already-clean node set (dedup precedes it — that's the ordering).
+Composes with the item below + KI-3.
+
 ## Cross-persona dedup + resonance tuning
 Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~0.92 (0.85 catastrophically
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,
