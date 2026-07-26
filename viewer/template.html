@@ -461,7 +461,7 @@ function openNode(n, deep){
           const dot=el('span','cd'); dot.style.background=colorFor(node); nm.appendChild(dot);
           const lnk=el('span','lnk',node.label||node.id); lnk.onclick=()=>walkTo(node); nm.appendChild(lnk); c.appendChild(nm);
           const wb=el('div','wbar'), tr=el('div','track'); tr.style.width='34px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,(w/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv','w '+w)); c.appendChild(wb);
-          reasons.forEach(rr=>c.appendChild(el('div','quote','“'+rr+'”'))); sec.appendChild(c); });
+          reasons.forEach(rr=>c.appendChild(el('div','quote',rr))); sec.appendChild(c); });
       } else {
         const chips=el('div','chips'), list=kinds[k], cap=14;
         list.slice(0,cap).forEach(({node})=>chips.appendChild(chipEl(node)));
@@ -508,7 +508,7 @@ function openEdge(e){
 
   const rsec=el('div','section'); rsec.appendChild(el('div','slabel','Reasons recorded'));
   const ordered=[...reasons].reverse(), showN=ordered.slice(0,3); // newest first (assertions stored oldest→newest)
-  showN.forEach((rr,i)=>{ const c=el('div','rcard'+(i===0?' newest':'')); c.appendChild(el('div','quote','“'+rr+'”')); rsec.appendChild(c); });
+  showN.forEach((rr,i)=>{ const c=el('div','rcard'+(i===0?' newest':'')); c.appendChild(el('div','quote',rr)); rsec.appendChild(c); });
   if(ordered.length>showN.length) rsec.appendChild(el('div','src','+'+(ordered.length-showN.length)+' more'));
   if(!ordered.length) rsec.appendChild(el('div','quote','(no reason recorded)'));
   pscroll.appendChild(rsec);
