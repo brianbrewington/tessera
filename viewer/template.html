@@ -331,7 +331,9 @@ function openNode(n, deep){
   const ident=el('div','ident'), top=el('div','top');
   const av=el('div','avatar', initialOf(n.label)); av.style.background=colorFor(n); top.appendChild(av);
   const tt=el('div'); tt.appendChild(el('h2',null,n.label||n.id));
-  const kind=el('div','kind', n.group?(n.type+' / '+n.group):n.type); kind.style.color=colorFor(n); tt.appendChild(kind);
+  // don't render "PERSON / PERSON" (the Personperson) — collapse type/subtype when they're the same word.
+  const kindText = (n.group && n.group.toLowerCase()!==n.type.toLowerCase()) ? (n.type+' / '+n.group) : n.type;
+  const kind=el('div','kind', kindText); kind.style.color=colorFor(n); tt.appendChild(kind);
   top.appendChild(tt); ident.appendChild(top);
   const st=el('div','stats'); st.appendChild(tile('strength','×'+n.strength)); st.appendChild(tile('degree',n.deg)); st.appendChild(tile('sources',sourcesOf(n).length)); ident.appendChild(st);
   pscroll.appendChild(ident);
@@ -379,10 +381,13 @@ function openNode(n, deep){
   // provenance: in deep mode the chunk rows are BACKLINKS — click to open the source chunk (its raw text). In
   // focus mode, the distinct source documents (not clickable — the chunk layer stays hidden).
   const provN = edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b);
-  if(provN.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance — click to open the chunk':'Appears in'));
+  if(provN.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance — click to open the chunk':'Appears in — click to open the profile'));
     const card=el('div','appears');
     if(deep){ provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); }); }
-    else { sourcesOf(n).forEach(l=>card.appendChild(el('div','src',l))); }
+    // focus mode: the source titles are clickable → walk to the PARENT profile (the persona PERSON node) or the
+    // SOURCE document node. This is the ONLY way off an orphan (a node with 0 semantic links, e.g. "Fertilizer Ratios").
+    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.name===title)||nodes.find(x=>x.subtype==='document'&&x.name===title);
+      const row=el('div','src'+(target?' src-link':''), title); if(target) row.onclick=()=>revealAndGo(target); card.appendChild(row); }); }
     ap.appendChild(card); pscroll.appendChild(ap); }
 
   pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
