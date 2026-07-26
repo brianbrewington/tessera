@@ -48,6 +48,18 @@ two-gate LLM-verify. Reuse `analysis/entity_resolution.py` (fix its greedy-centr
 entity gets two nodes and never dedups. Pick one identity contract (the mapper's is the reviewed one) and route
 `persona.ts` through it, or explicitly namespace the two so the divergence is intentional, not accidental.
 
+## Viewer chrome — the larger frame (deferred surfaces + seams to hold)
+From the Claude Design handoff (`docs/viewer-answers.md` has the full Q&A). Tracer bullet = the detail panel +
+idle (`1b`–`1e`). Deferred surfaces: **scenes/tours** (tracer+1), **semantic zoom** (the Church-in-Kansas
+pyramid — start at the country tier on degree; continent tier needs a clustering pass), **annotations**
+(net-new sidecar store), **readings** (cluster the de-anchored assertion reasons — same as the discovered
+taxonomy below). **Seams to hold now so we're not cornered:** (1) stable GUIDs are the reference for citations /
+scenes / annotations — never name-slugs; (2) de-anchored assertion embeddings (shipped) make readings free
+later; (3) filters serialize as an extensible *object*, not named booleans; (4) annotations = sidecar keyed by
+GUID, append-only, with `author{kind,id}` + `visibility` from day one (decided now to avoid a migration), and
+they never enter the graph `mutation_log`; (5) degree/strength drive zoom tiers today, communities are a later
+clustering pass.
+
 ## Discovered (not imposed) edge taxonomy — hierarchical, from the explanations themselves (Brian)
 Today every extracted semantic link is one kind — `RELATED` — distinguished only by its prose reason. The idea:
 **don't hand-author an edge-type enum — discover the taxonomy bottom-up** by clustering the (now de-anchored)
