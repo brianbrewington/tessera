@@ -54,13 +54,16 @@
   .p-head .badge{ font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent);
     background:rgba(122,162,247,.12); border:1px solid rgba(122,162,247,.3); border-radius:5px; padding:3px 6px; flex:0 0 auto; }
   .p-scroll{ flex:1 1 auto; overflow-y:auto; padding:18px 20px; display:flex; flex-direction:column; gap:16px; }
-  .p-actions{ flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
+  .p-actions{ flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
   .p-actions:empty{ display:none; }
 
   .ident{ display:flex; flex-direction:column; gap:11px; }
   .ident .top{ display:flex; align-items:center; gap:11px; }
   .avatar{ width:34px; height:34px; flex:0 0 auto; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:14px; color:var(--ground); }
-  .ident h2{ margin:0; font-size:21px; font-weight:600; letter-spacing:-.015em; line-height:1.15; text-wrap:balance; }
+  .ident h2{ margin:0; font-size:21px; font-weight:600; letter-spacing:-.015em; line-height:1.15; text-wrap:balance; overflow-wrap:anywhere; }
+  .kv{ display:flex; gap:8px; font-size:11px; }
+  .kv b{ font-family:var(--mono); font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); min-width:52px; flex:0 0 auto; }
+  .kv .val{ color:var(--dim); word-break:break-all; }
   .ident .kind{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; margin-top:3px; }
   .stats{ display:flex; gap:8px; }
   .tile{ flex:1 1 0; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:7px 9px; }
@@ -68,7 +71,7 @@
   .tile .v{ font-size:14px; font-weight:600; margin-top:2px; }
 
   .slabel{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); }
-  .desc{ font-size:13.5px; line-height:1.65; color:var(--text); text-wrap:pretty; }
+  .desc{ font-size:13.5px; line-height:1.65; color:var(--text); text-wrap:pretty; white-space:pre-wrap; overflow-wrap:anywhere; }
   .desc.clamp{ max-height:88px; overflow:hidden; }
   .reveal{ color:var(--accent); cursor:pointer; font-size:12.5px; margin-top:-8px; display:inline-block; }
   .section{ display:flex; flex-direction:column; gap:8px; }
@@ -88,7 +91,7 @@
   .wbar .track{ height:3px; background:var(--surface-3); border-radius:2px; overflow:hidden; }
   .wbar .fill{ height:100%; background:var(--accent); }
   .wbar .wv{ font-family:var(--mono); font-size:10px; color:var(--faint); }
-  .quote{ font-size:12.5px; line-height:1.6; color:var(--dim); text-wrap:pretty; }
+  .quote{ font-size:12.5px; line-height:1.6; color:var(--dim); text-wrap:pretty; overflow-wrap:anywhere; }
   .src{ font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--faint); }
 
   .ends{ display:flex; align-items:stretch; gap:8px; }
@@ -268,7 +271,7 @@ cv.addEventListener('mousemove', ev=>{
   if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
     // the reason IS the insight — don't prefix "A ↔ B" (formulaic; the endpoints are already the two nodes it
     // joins). A mono kind+weight line sits above it. Fall back to endpoint names only when there's no reason.
-    tip.innerHTML = '<span class="k">'+esc(hoverEdge.kind)+' · w '+(hoverEdge.w||1)+'</span>'
+    tip.innerHTML = '<span class="k">'+esc(hoverEdge.kind)+' · w '+(+hoverEdge.w||1)+'</span>'
       + esc(hoverEdge.reason || ((hoverEdge.a.label||'')+'  —  '+(hoverEdge.b.label||''))); }
   else if(hoverNode){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px'; tip.textContent=hoverNode.label; }
   else tip.style.display='none';
@@ -277,7 +280,7 @@ cv.addEventListener('mousemove', ev=>{
 cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
 addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
-  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):deselect(); } }
+  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):showIdle(); } }
   panning=false; cv.classList.remove('dragging'); });
 // right-click = deep inspect (node or edge)
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
@@ -288,13 +291,15 @@ cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev
 // --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
 const panel=$('panel'), pscroll=$('pscroll'), pactions=$('pactions'), crumb=$('crumb');
 let walk=[]; // breadcrumb of visited node ids
+let curEdge=null; // the edge shown in the panel, if any (selected tracks a node instead)
+const trunc=(s,n)=>{ s=String(s||''); return s.length>n?s.slice(0,n-1)+'…':s; };
 
 const el=(tag,cls,txt)=>{ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; };
 function clearPanel(){ pscroll.innerHTML=''; pactions.innerHTML=''; }
-function neighborsOf(n){ return EDGES.filter(e=>e.a===n||e.b===n).map(e=>({ node:e.a===n?e.b:e.a,
-  reason:e.reason, reasons:(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]), kind:e.kind, w:e.w||1 })); }
+function neighborsOf(n){ return EDGES.filter(e=>(e.a===n||e.b===n) && e.a!==e.b).map(e=>({ node:e.a===n?e.b:e.a,
+  reason:e.reason, reasons:(e.reasons&&e.reasons.length)?e.reasons:(e.reason?[e.reason]:[]), kind:e.kind, w:+e.w||1 })); }
 function provChunks(n){ return edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b.label||'').filter(Boolean); }
-function sourcesOf(n){ return [...new Set(provChunks(n).map(l=>{ const m=l.match(/ of (.+)$/); return m?m[1]:l; }))]; }
+function sourcesOf(n){ return [...new Set(provChunks(n).map(l=>{ const m=l.match(/^chunk \d+ of (.+)$/); return m?m[1]:l; }))]; }
 const initialOf=s=>((String(s||'?').trim()[0])||'?').toUpperCase();
 function centerOn(n){ ox=W/2-n.x*scale; oy=H/2-n.y*scale; }
 
@@ -308,10 +313,10 @@ function tile(l,v){ const t=el('div','tile'); t.appendChild(el('div','l',l)); t.
 function chipEl(node){ const c=el('span','chip'); const d=el('span','cd'); d.style.background=colorFor(node);
   c.appendChild(d); c.appendChild(el('span',null,node.label||node.id)); c.onclick=()=>walkTo(node); return c; }
 function mkBtn(label,cls,onclick){ const b=el('button','btn'+(cls?' '+cls:''),label); if(onclick) b.onclick=onclick; else b.disabled=true; return b; }
-function walkTo(node){ walk.push(node.id); openNode(node, panel.classList.contains('deep')); centerOn(node); }
+function walkTo(node){ if(!NODES.includes(node)) return; walk.push(node.id); openNode(node, panel.classList.contains('deep')); centerOn(node); } // don't walk to a hidden (provenance) node
 
 function openNode(n, deep){
-  selected=n; panel.classList.add('open'); panel.classList.toggle('deep',!!deep); panel.classList.remove('edge');
+  selected=n; curEdge=null; panel.classList.add('open'); panel.classList.toggle('deep',!!deep); panel.classList.remove('edge');
   $('pbadge').style.display = deep?'inline-block':'none';
   if(!walk.length || walk[walk.length-1]!==n.id) walk.push(n.id);
   setCrumb(n); clearPanel();
@@ -326,24 +331,38 @@ function openNode(n, deep){
 
   const md=n.meta||{}, descText=md.description||md.bio||n.text||'';
   if(descText){ const d=el('div','desc'+(deep?'':' clamp'),descText); pscroll.appendChild(d);
-    if(!deep && descText.length>170){ const r=el('span','reveal','Show full description'); r.onclick=()=>{ d.classList.remove('clamp'); r.remove(); }; pscroll.appendChild(r); } }
+    // reveal only when the clamp actually clips (pixel-based, not char-count) — CJK/wide glyphs clip under 170 chars too.
+    if(!deep) requestAnimationFrame(()=>{ if(d.scrollHeight>d.clientHeight+2){ const r=el('span','reveal','Show full description'); r.onclick=()=>{ d.classList.remove('clamp'); r.remove(); }; d.after(r); } }); }
 
-  const semantic=neighborsOf(n).filter(x=>x.kind==='RELATED');
+  // deep inspect exposes the raw identity (id + the dedup identity string) — hidden in focus mode.
+  if(deep){ const idbox=el('div','section');
+    [['id',n.id],['identity',n.text]].filter(r=>r[1]!=null).forEach(([k,v])=>{ const row=el('div','kv'); row.appendChild(el('b',null,k)); row.appendChild(el('span','val',String(v))); idbox.appendChild(row); });
+    pscroll.appendChild(idbox); }
+
+  // Connections = ALL non-provenance edge kinds (RELATED, RESONATES_WITH, REFERENCES, …), grouped by kind — the
+  // degree tile counts these, so the panel must not silently drop a kind (provenance has its own section below).
+  const links=neighborsOf(n).filter(x=> x.kind!=='APPEARED_IN' && x.kind!=='ORIGINATED_FROM');
   const sec=el('div','section'), hd=el('div','hd');
-  hd.appendChild(el('div','slabel','Connections')); hd.appendChild(el('div','slabel',semantic.length+' link'+(semantic.length===1?'':'s'))); sec.appendChild(hd);
-  if(deep){
-    semantic.forEach(({node,reasons,w})=>{ const c=el('div','card'), nm=el('div','name');
-      const dot=el('span','cd'); dot.style.background=colorFor(node); nm.appendChild(dot);
-      const lnk=el('span','lnk',node.label||node.id); lnk.onclick=()=>walkTo(node); nm.appendChild(lnk); c.appendChild(nm);
-      const wb=el('div','wbar'), tr=el('div','track'); tr.style.width='34px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,(w/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv','w '+w)); c.appendChild(wb);
-      reasons.forEach(rr=>c.appendChild(el('div','quote','“'+rr+'”'))); sec.appendChild(c); });
-    if(!semantic.length) sec.appendChild(el('div','quote','No semantic links yet.'));
-  } else {
-    const chips=el('div','chips'), show=semantic.slice(0,12);
-    show.forEach(({node})=>chips.appendChild(chipEl(node)));
-    if(semantic.length>show.length) chips.appendChild(el('span','chip out','+'+(semantic.length-show.length)+' more'));
-    if(!semantic.length) chips.appendChild(el('div','quote','No semantic links yet.'));
-    sec.appendChild(chips);
+  hd.appendChild(el('div','slabel','Connections')); hd.appendChild(el('div','slabel',links.length+' link'+(links.length===1?'':'s'))); sec.appendChild(hd);
+  if(!links.length){ sec.appendChild(el('div','quote','No semantic links yet.')); }
+  else {
+    const kinds={}; links.forEach(x=>{ (kinds[x.kind]=kinds[x.kind]||[]).push(x); });
+    const multi=Object.keys(kinds).length>1;
+    Object.keys(kinds).forEach(k=>{
+      if(multi || k!=='RELATED') sec.appendChild(el('span','kbadge',k)); // label the kind when it carries info
+      if(deep){
+        kinds[k].forEach(({node,reasons,w})=>{ const c=el('div','card'), nm=el('div','name');
+          const dot=el('span','cd'); dot.style.background=colorFor(node); nm.appendChild(dot);
+          const lnk=el('span','lnk',node.label||node.id); lnk.onclick=()=>walkTo(node); nm.appendChild(lnk); c.appendChild(nm);
+          const wb=el('div','wbar'), tr=el('div','track'); tr.style.width='34px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,(w/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv','w '+w)); c.appendChild(wb);
+          reasons.forEach(rr=>c.appendChild(el('div','quote','“'+rr+'”'))); sec.appendChild(c); });
+      } else {
+        const chips=el('div','chips'), list=kinds[k], cap=14;
+        list.slice(0,cap).forEach(({node})=>chips.appendChild(chipEl(node)));
+        if(list.length>cap){ const more=el('span','chip out','+'+(list.length-cap)+' more'); more.onclick=()=>{ more.remove(); list.slice(cap).forEach(({node})=>chips.appendChild(chipEl(node))); }; chips.appendChild(more); }
+        sec.appendChild(chips);
+      }
+    });
   }
   pscroll.appendChild(sec);
 
@@ -357,7 +376,7 @@ function openNode(n, deep){
 }
 
 function openEdge(e){
-  selected=null; panel.classList.add('open','edge'); panel.classList.remove('deep'); $('pbadge').style.display='none';
+  selected=null; curEdge=e; panel.classList.add('open','edge'); panel.classList.remove('deep'); $('pbadge').style.display='none';
   walk=[]; crumb.innerHTML=''; crumb.appendChild(el('b',null,'edge')); $('pback').style.display='none'; clearPanel();
 
   const ends=el('div','ends');
@@ -379,12 +398,12 @@ function openEdge(e){
   if(!ordered.length) rsec.appendChild(el('div','quote','(no reason recorded)'));
   pscroll.appendChild(rsec);
 
-  pactions.appendChild(mkBtn('Walk to '+(e.a.label||'A'),null,()=>walkTo(e.a)));
-  pactions.appendChild(mkBtn('Walk to '+(e.b.label||'B'),'ghost',()=>walkTo(e.b)));
+  pactions.appendChild(mkBtn('Walk to '+trunc(e.a.label||'A',16),null,()=>walkTo(e.a)));
+  pactions.appendChild(mkBtn('Walk to '+trunc(e.b.label||'B',16),'ghost',()=>walkTo(e.b)));
 }
 
 function showIdle(){
-  selected=null; panel.classList.add('open'); panel.classList.remove('deep','edge'); $('pbadge').style.display='none';
+  selected=null; curEdge=null; panel.classList.add('open'); panel.classList.remove('deep','edge'); $('pbadge').style.display='none';
   walk=[]; crumb.innerHTML=''; $('pback').style.display='none'; clearPanel();
   const box=el('div','idle');
   box.appendChild(el('h2',null,'Click a landmark to open it'));
@@ -395,9 +414,14 @@ function showIdle(){
 }
 
 function back(){ if(walk.length>1){ walk.pop(); const prev=byId.get(walk[walk.length-1]); if(prev) openNode(prev, panel.classList.contains('deep')); } }
-function deselect(){ showIdle(); }
+// re-render whatever the panel is showing after the graph changed (h toggle) — and fall back to idle if its
+// subject vanished (an edge whose endpoint got hidden, a node that's no longer visible).
+function rerender(){ if(selected){ NODES.includes(selected)?openNode(selected,panel.classList.contains('deep')):showIdle(); }
+  else if(curEdge){ (NODES.includes(curEdge.a)&&NODES.includes(curEdge.b))?openEdge(curEdge):showIdle(); } }
+// ✕ / esc steps back: a selection → idle, and idle → fully hidden (so you can see the whole graph on a narrow window).
+function deselect(){ if(selected||curEdge) showIdle(); else if(panel.classList.contains('open')) panel.classList.remove('open'); }
 $('pback').onclick=back; $('pclose').onclick=deselect;
-addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); if(selected && !NODES.includes(selected)) showIdle(); } });
+addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
 
 rebuild(); showIdle(); draw();
 </script>
