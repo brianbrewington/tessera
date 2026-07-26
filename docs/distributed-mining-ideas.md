@@ -20,6 +20,19 @@ proposal, then LLM verification — got to ~0% false merges** where geometry alo
 Jetson fleet is that verification gate, at scale, in parallel. The distributed part is the delivery vehicle; the
 *decomposition into verifiable pieces* is the actual idea.
 
+## The second principle: a DIVERSE fleet, not 10 copies
+
+The swarm must be **heterogeneous across model families** — a few different small models (a Qwen, a Llama, a
+Gemma, a Phi…), not ten instances of one. A vote among identical models just amplifies their *shared* blind
+spot; a vote among different families is real signal, because their errors are less correlated. This is not a
+hunch — it's the exact discipline that has been catching real bugs all through tessera's own development: every
+increment goes to **Codex (a GPT family) AND a Claude-family reviewer**, and they reliably catch *different*
+things (Codex flagged an over-broad regex match; the Claude reviewer flagged a dropped edge-kind — same diff,
+disjoint findings). And it's the through-line of the whole `persona_diversity` project: **diversity is a defense
+against correlated collapse.** The same reason a monoculture of personas collapses to "Elara Vance" is the reason
+a monoculture of miners would share a blind spot — apply the thesis to compute. Consensus and adversarial
+verification below are only as strong as the fleet is diverse; homogeneity quietly throws away the whole point.
+
 ## Why tessera is unusually ready for this
 
 - **Chunks are the natural shard.** Ingest is already chunk-parallel and the chunk memo is idempotent — a
@@ -74,8 +87,9 @@ multi-hop reasoning. The pattern: **smalls propose + filter + verify; the big mo
   a mixed fleet (a couple of Orins + several Pis + the Mac Studio).
 - **Cascade / triage**: smalls do the cheap first pass and *escalate only the hard/ambiguous cases* to the big
   model. Cost-optimal — the big model only touches what the swarm couldn't settle.
-- **Consensus / ensemble**: K smalls on the same unit; keep what ≥M agree on; disagreement → escalate. Small-model
-  noise cancels by voting — this is how a swarm reaches big-model quality on extraction itself.
+- **Consensus / ensemble**: K smalls **from different families** on the same unit; keep what ≥M agree on;
+  disagreement → escalate. Uncorrelated errors cancel by voting — this is how a diverse swarm reaches big-model
+  quality on extraction itself. (K copies of one model does NOT do this — see "the second principle".)
 - **Specialist roles**: assign each box a role (proposer / type-classifier / edge-verifier) rather than N
   generalists — a pipeline of specialists, each prompt-tuned for its one job.
 
@@ -102,7 +116,8 @@ structure instead of hashes.
 ## The minimal first experiment (when we pick this up — build by hand first)
 
 Don't build the fleet. Prove ONE micro-task swarm on the machines we have: **edge evidence-verification.** Take an
-existing graph's RELATED edges, fan each `(chunk, A, reason, B)` out to K small models asking "supported? y/n",
-keep the majority verdict, and **measure against the scorecard** — did the verified subset have fewer bad edges
-than the raw set? If a swarm of smalls measurably beats the raw extraction on edge quality, the architecture has
-earned the hardware. Start there, hand-run, one task, one number.
+existing graph's RELATED edges, fan each `(chunk, A, reason, B)` out to K small models **from different families**
+asking "supported? y/n", keep the majority verdict, and **measure against the scorecard** — did the verified subset
+have fewer bad edges than the raw set? Also check the diversity dividend directly: does the mixed-family panel beat
+K copies of the *best single* small model? If a diverse swarm measurably beats both raw extraction and a
+monoculture panel, the architecture has earned the hardware. Start there, hand-run, one task, one number.
