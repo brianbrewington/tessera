@@ -42,6 +42,18 @@ Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,
 two-gate LLM-verify. Reuse `analysis/entity_resolution.py` (fix its greedy-centroid + shortest-canonical bug).
 
+## Identity-scheme convergence (landmine)
+`persona.ts` builds node identity as `name [sourceKey]` — a DIFFERENT scheme from the mapper's tab-delimited
+`<type>\t<name>[\t<sourceKey>]`. If a persona-path graph and a mapper-ingest graph ever share a store, the "same"
+entity gets two nodes and never dedups. Pick one identity contract (the mapper's is the reviewed one) and route
+`persona.ts` through it, or explicitly namespace the two so the divergence is intentional, not accidental.
+
+## Extraction type-consistency (I1)
+Live run flagged the same word typed two ways in one corpus (e.g. `Imifino` as both CONCEPT and PRODUCT,
+`Spinach` as PRODUCT). By design that's two identity nodes (type is part of identity), so extractor type-jitter
+fragments hubs. Mitigations to test: a tighter type rubric in the prompt, a post-pass that reconciles same-name
+different-type within a doc, or folding near-synonym subtypes. Measure hub fragmentation before/after.
+
 ## Embedder head-to-head
 nomic-embed-text vs mxbai-embed-large vs current SOTA (the field has moved since Jan/Feb). "Go slowly — it
 powers a good de-dupe." embeddinggemma's ~0.92-compressed space is a warning; measure near-dup separation, not
