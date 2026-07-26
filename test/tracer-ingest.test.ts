@@ -340,7 +340,7 @@ describe("subject-aware extraction (KI-1/KI-2: persona linked + named, not float
   it("LlmExtractor injects the subject clause into the system prompt only when a subject is given", async () => {
     let seen = "";
     const chat = { complete: async (system: string) => { seen = system; return JSON.stringify({ entities: [], relations: [] }); } };
-    const ex = new LlmExtractor(chat as unknown as import("../src/llm.js").Chat);
+    const ex = new LlmExtractor(chat);
     await ex.extract("text", { subject: "Anele Sotashe" });
     expect(seen).toContain("SUBJECT OF THIS DOCUMENT");
     expect(seen).toContain("Anele Sotashe");
@@ -348,21 +348,28 @@ describe("subject-aware extraction (KI-1/KI-2: persona linked + named, not float
     expect(seen).not.toContain("SUBJECT OF THIS DOCUMENT");
   });
 
-  it("a subject-anchored extraction makes the persona reachable from a relational person by a direct edge", async () => {
+  it("threads the derived subject adapter→ingest→extractor, and the mapping makes the persona reachable", async () => {
     const store = new GraphStore({ path: ":memory:", embedder: emb });
     const g = Graph.attach(store, emb);
-    const canned = JSON.stringify({
+    const cannedEx: Extraction = {
       entities: [
         { name: "Anele Sotashe", type: "PERSON", description: "a community organizer" },
         { name: "Anele Sotashe's Father", type: "PERSON", description: "the persona's father, died at 31" },
       ],
       relations: [{ source: "Anele Sotashe's Father", target: "Anele Sotashe", reason: "is the father of" }],
-    });
-    const extractor = new LlmExtractor(new StubChat(canned));
+    };
+    // A RECORDING extractor: captures the subject it was handed (StubChat would ignore it — the tautology the
+    // reviewers caught) AND returns the canned extraction so the mapping can be checked in the same test.
+    let seenSubject: string | undefined = "UNSET";
+    const recExtractor = { extract: async (_t: string, opts?: { subject?: string }) => { seenSubject = opts?.subject; return { extraction: cannedEx, parsed: true }; } };
     const dir = mkdtempSync(join(tmpdir(), "tessera-subj-"));
     const p = join(dir, "anele.txt");
-    writeFileSync(p, "PROFILE: Anele Sotashe\n\nHis father died young.\n"); // PROFILE line → adapter sets doc.subject
-    await ingestFile(g, extractor, p);
+    writeFileSync(p, "PROFILE: Anele Sotashe\n\nHis father died young.\n");
+
+    expect(readDoc(p).subject).toBe("Anele Sotashe"); // the adapter derives it from the PROFILE header
+    await ingestFile(g, recExtractor, p);
+    expect(seenSubject).toBe("Anele Sotashe"); // ingest THREADED it to extract() — the previously-untested link
+
     const father = store.allNodes().find((n) => n.name === "Anele Sotashe's Father");
     const anele = store.allNodes().find((n) => n.name === "Anele Sotashe" && n.type === "PERSON");
     expect(!!(father && anele)).toBe(true);

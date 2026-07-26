@@ -72,6 +72,23 @@ cluster its reason lands in, and stays `RELATED` if it clusters with nothing. Co
 discipline (naive thresholds over-merge). Do this AFTER de-anchored reasons accumulate at real corpus scale —
 clusters need volume to form. Let the corpus vote on the type list, don't impose it.
 
+## Prompt-version salt in the chunk memo  *(review 3 — closes a real footgun)*
+The chunk memo keys on chunk content only, so a graph ingested under an OLD prompt keeps its stale extractions
+forever unless someone remembers `--reextract` (e.g. existing persona graphs won't pick up subject-aware
+extraction). Fix: a `PROMPT_VERSION` constant salted into the `extracted_chunks` key (or a version column checked
+by `isExtracted`); bump it on any prompt change → old memos auto-invalidate. Permanently closes the "silently
+stale extraction after a prompt change" class.
+
+## Directed / typed edges  *(review 3)*
+`RELATED` is canonicalized undirected, but de-anchored reasons are often directional ("is the father of",
+"mentored") — for a symmetric-looking pair the direction is unrecoverable. Ties to the discovered-edge-taxonomy
+work: a typed edge could carry direction. Until then, prefer symmetric reason phrasing where possible.
+
+## Within-doc subject alias folding  *(KI-4)*
+Fold name variants of the same source-qualified person before identity (`Anele` → `Anele Sotashe`; curly vs ASCII
+apostrophe) so subject-aware extraction can't split the hub. A light per-doc pass keyed on the known subject +
+fuzzy match; reuse the embeddings_experiments blocking discipline.
+
 ## Idempotent + cheap re-ingest (chunk-hash extraction memo)
 Live re-ingest of one doc is idempotent for everything the system *controls* (SOURCE/CHUNK/PERSON identity all
 reinforce, zero duplication), but the entities/edges still churn because extraction runs at temp 0.4 and returns

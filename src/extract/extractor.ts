@@ -1,6 +1,6 @@
 // Extraction — turn a chunk of text into typed ENTITIES and RELATIONS, using the battle-tested
 // prompt design from docs/history (LightRAG entity+relation + the UNIVERSAL schema + NEGATIVE_CONSTRAINTS
-// + the CRITICAL EDGE RULE: an edge reason must name BOTH endpoints). Output is JSON (easier to parse in
+// + the CRITICAL EDGE RULE: a reason carries the specific relationship, NOT the endpoint names). Output is JSON (easier to parse in
 // TS than LightRAG's delimiter format) validated by Zod. The `Extractor` interface is the seam so ingest
 // can be tested with a canned extraction and the real LLM extractor swaps in for live runs.
 import { z } from "zod";
@@ -49,10 +49,11 @@ export function subjectClause(subject?: string): string {
 The primary subject is the PERSON "${s}". Passages speak about them in the first person (I, me, my) and the
 third (their name; he/she/they). Resolve all of these to "${s}". Then:
 - Extract "${s}" itself as a PERSON entity whenever the passage is about them, so relations to them have BOTH endpoints.
-- Connect "${s}" to the specific things the passage says about them — their people, places, projects, work, events.
-- A person known ONLY by relation to "${s}" (a father, a sister, an unnamed neighbour): name them "${s}'s <Relation>"
-  (e.g. "${s}'s Father") — NEVER a bare role like "Father" — AND emit a relation to "${s}" whose reason is the
-  specific bond ("is the father of", "is a sibling of", "mentored").`;
+- Connect "${s}" to the graph-worthy things you ALREADY extract about them — their people, places, projects,
+  work, events — as relations. Do NOT lower the entity bar (the 8-20 cap + NEGATIVE_CONSTRAINTS still hold) to attach the subject.
+- A person known ONLY by relation to "${s}" who MATTERS to the story (recurring or pivotal — not a passing
+  mention): name them "${s}'s <Relation>" (e.g. "${s}'s Father") — NEVER a bare role like "Father" — AND emit a
+  relation to "${s}" whose reason is the specific bond ("is the father of", "is a sibling of"). Skip incidental unnamed people.`;
 }
 
 // Ported from docs/history/memory-agent/system-design.md:327-396 (LightRAG) + graphrag-integration-

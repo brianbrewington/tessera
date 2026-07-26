@@ -23,9 +23,17 @@ The live-quality (does the model obey) is a Tier-2 acceptance concern, not hard-
 ## KI-2 — vague relational-role entity names  *(FIXED 2026-07-26 via KI-1)*
 **Repro:** the `Father` node above is named bare `Father`; other personas yield `Mother`, `Sister`, etc.
 **Why:** an unnamed person referred to only by relation gets the role as its name.
-**Fix:** the KI-1 subject injection names them `<Subject>'s <Relation>` (e.g. `Anele's Father`) — specific,
+**Fix:** the KI-1 subject injection names them `<Subject>'s <Relation>` (e.g. `Anele Sotashe's Father`) — specific,
 and distinct across personas (PERSON identity is already source-qualified, so they never merge; this only
 fixes the human-facing display name). Alternatively, drop unnamed relational people unless graph-worthy.
+
+## KI-4 — subject name-variant drift can fragment the hub  *(open; LLM-behavior, watch)*
+**Risk:** subject-aware extraction names relational people `<Subject>'s <Relation>` and re-extracts the subject
+per chunk. PERSON identity is `person\t<norm(name)>\t<sourceKey>` (trim+lowercase only, no alias folding). If the
+model spells the subject differently across a persona's ~30 chunks (`Anele` vs `Anele Sotashe`, curly `’s` vs
+ASCII `'s`), it mints a *second* subject node and splits the hub — silently reverting KI-1. The prompt says use
+the exact subject string, but there's no post-hoc normalization. **Watch** via `tessera report` (a split shows as
+two same-person PERSON nodes); fix = a within-doc alias-folding pass (see backlog).
 
 ## KI-3 — extraction is noisy: ~52 entities/doc vs. ~5–15 target; generic + type-jitter  *(the I1 headline)*
 **Repro:** `tessera report <graph>` → `entities/doc: 52`; hubs include generic nodes (`Plot`, `Major Producers

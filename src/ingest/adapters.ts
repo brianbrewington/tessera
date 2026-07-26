@@ -27,10 +27,11 @@ export function readDoc(path: string): Doc {
   if (fm) text = text.slice(fm[0].length);
   const h1 = text.match(/^#\s+(.+)$/m);
   if (h1?.[1]) title = h1[1].trim();
-  // persona docs: prefer the PROFILE: name as title AND as the document subject (drives subject-aware extraction
-  // so the persona links to what's said about them — "his father" etc. — instead of floating unconnected).
-  const prof = text.match(/^PROFILE:\s*(.+)$/m);
-  const subject = prof?.[1]?.trim();
+  // persona docs: the subject is the PROFILE: name — but ONLY when it's the document's FIRST non-blank line (a
+  // persona header). A `PROFILE:` line quoted deep in a report/transcript must NOT steer extraction person-ward,
+  // and a `\s*` that spans newlines must not grab the next line. Drives subject-aware extraction (KI-1).
+  const firstLine = text.replace(/^\s+/, "").split("\n", 1)[0] ?? "";
+  const subject = firstLine.match(/^PROFILE:[ \t]*(.+)$/)?.[1]?.trim() || undefined;
   if (subject) title = subject;
   return { source, title, text: text.trim(), subject };
 }
