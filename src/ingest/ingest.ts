@@ -83,7 +83,7 @@ export async function ingestFile(
       continue;
     }
 
-    const { extraction, parsed } = await extractor.extract(c.text);
+    const { extraction, parsed } = await extractor.extract(c.text, { subject: doc.subject });
     if (!parsed) parseFailures++;
     else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
     const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, doc.source, known, { id: chunkNode.id, label });

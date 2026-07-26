@@ -93,6 +93,7 @@
   .wbar .wv{ font-family:var(--mono); font-size:10px; color:var(--faint); }
   .quote{ font-size:12.5px; line-height:1.6; color:var(--dim); text-wrap:pretty; overflow-wrap:anywhere; }
   .src{ font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--faint); }
+  .src-link{ cursor:pointer; } .src-link:hover{ color:var(--accent); }
 
   .ends{ display:flex; align-items:stretch; gap:8px; }
   .ecard{ flex:1 1 0; min-width:0; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px; cursor:pointer; }
@@ -314,6 +315,8 @@ function chipEl(node){ const c=el('span','chip'); const d=el('span','cd'); d.sty
   c.appendChild(d); c.appendChild(el('span',null,node.label||node.id)); c.onclick=()=>walkTo(node); return c; }
 function mkBtn(label,cls,onclick){ const b=el('button','btn'+(cls?' '+cls:''),label); if(onclick) b.onclick=onclick; else b.disabled=true; return b; }
 function walkTo(node){ if(!NODES.includes(node)) return; walk.push(node.id); openNode(node, panel.classList.contains('deep')); centerOn(node); } // don't walk to a hidden (provenance) node
+// backlink into provenance: reveal the chunk layer if needed, then open the source chunk (its raw text is the description)
+function revealAndGo(node){ if(!NODES.includes(node)){ showProv=true; rebuild(); } walk=[]; openNode(node,false); centerOn(node); }
 
 function openNode(n, deep){
   selected=n; curEdge=null; panel.classList.add('open'); panel.classList.toggle('deep',!!deep); panel.classList.remove('edge');
@@ -366,9 +369,14 @@ function openNode(n, deep){
   }
   pscroll.appendChild(sec);
 
-  const prov=provChunks(n);
-  if(prov.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance':'Appears in'));
-    const card=el('div','appears'); (deep?prov:sourcesOf(n)).forEach(l=>card.appendChild(el('div','src',l))); ap.appendChild(card); pscroll.appendChild(ap); }
+  // provenance: in deep mode the chunk rows are BACKLINKS — click to open the source chunk (its raw text). In
+  // focus mode, the distinct source documents (not clickable — the chunk layer stays hidden).
+  const provN = edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b);
+  if(provN.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance — click to open the chunk':'Appears in'));
+    const card=el('div','appears');
+    if(deep){ provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); }); }
+    else { sourcesOf(n).forEach(l=>card.appendChild(el('div','src',l))); }
+    ap.appendChild(card); pscroll.appendChild(ap); }
 
   pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
   pactions.appendChild(mkBtn('Save as scene',null,null)); // scenes deferred → disabled placeholder

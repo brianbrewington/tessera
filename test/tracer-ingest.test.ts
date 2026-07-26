@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { StubChat } from "../src/llm.js";
-import { LlmExtractor, parseExtraction, type Extraction } from "../src/extract/extractor.js";
+import { LlmExtractor, parseExtraction, subjectClause, type Extraction } from "../src/extract/extractor.js";
 import { mapExtraction } from "../src/ingest/mapper.js";
 import { entityIdentity, chunkIdentity, canonical } from "../src/extract/identity.js";
 import { Graph } from "../src/graph.js";
@@ -322,6 +322,54 @@ describe("parseExtraction (fail-loud + element salvage)", () => {
     const { extraction, parsed } = parseExtraction(raw);
     expect(parsed).toBe(true);
     expect(extraction.entities.map((e) => e.name)).toEqual(["Klipgat Farm"]); // not the {"count":2} decoy
+  });
+});
+
+describe("subject-aware extraction (KI-1/KI-2: persona linked + named, not floating)", () => {
+  // The LLM's actual output is non-deterministic (a Tier-2 acceptance concern); these test the DETERMINISTIC
+  // plumbing — the prompt clause and the mapping — that turn a subject-anchored extraction into a traversable edge.
+  it("subjectClause is empty without a subject, and anchors relational people with one", () => {
+    expect(subjectClause()).toBe("");
+    expect(subjectClause("   ")).toBe("");
+    const c = subjectClause("Anele Sotashe");
+    expect(c).toContain("Anele Sotashe");
+    expect(c).toContain("Anele Sotashe's <Relation>"); // the anchored-naming rule (KI-2)
+    expect(c.toLowerCase()).toContain("both endpoints");
+  });
+
+  it("LlmExtractor injects the subject clause into the system prompt only when a subject is given", async () => {
+    let seen = "";
+    const chat = { complete: async (system: string) => { seen = system; return JSON.stringify({ entities: [], relations: [] }); } };
+    const ex = new LlmExtractor(chat as unknown as import("../src/llm.js").Chat);
+    await ex.extract("text", { subject: "Anele Sotashe" });
+    expect(seen).toContain("SUBJECT OF THIS DOCUMENT");
+    expect(seen).toContain("Anele Sotashe");
+    await ex.extract("text"); // no subject → base prompt only
+    expect(seen).not.toContain("SUBJECT OF THIS DOCUMENT");
+  });
+
+  it("a subject-anchored extraction makes the persona reachable from a relational person by a direct edge", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    const canned = JSON.stringify({
+      entities: [
+        { name: "Anele Sotashe", type: "PERSON", description: "a community organizer" },
+        { name: "Anele Sotashe's Father", type: "PERSON", description: "the persona's father, died at 31" },
+      ],
+      relations: [{ source: "Anele Sotashe's Father", target: "Anele Sotashe", reason: "is the father of" }],
+    });
+    const extractor = new LlmExtractor(new StubChat(canned));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-subj-"));
+    const p = join(dir, "anele.txt");
+    writeFileSync(p, "PROFILE: Anele Sotashe\n\nHis father died young.\n"); // PROFILE line → adapter sets doc.subject
+    await ingestFile(g, extractor, p);
+    const father = store.allNodes().find((n) => n.name === "Anele Sotashe's Father");
+    const anele = store.allNodes().find((n) => n.name === "Anele Sotashe" && n.type === "PERSON");
+    expect(!!(father && anele)).toBe(true);
+    const linked = store.allEdges().some((e) => e.kind === "RELATED" &&
+      ((e.from === father!.id && e.to === anele!.id) || (e.from === anele!.id && e.to === father!.id)));
+    expect(linked).toBe(true); // traversable from the father — not merely co-located in a chunk
+    store.close();
   });
 });
 

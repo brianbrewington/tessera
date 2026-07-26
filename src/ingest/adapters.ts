@@ -7,6 +7,7 @@ export interface Doc {
   source: string; // stable id (the path)
   title: string;
   text: string;
+  subject?: string; // the PERSON this document is about (personas) — drives subject-aware extraction; else undefined
 }
 
 const SUPPORTED = new Set([".txt", ".md", ".markdown", ".text"]);
@@ -26,8 +27,10 @@ export function readDoc(path: string): Doc {
   if (fm) text = text.slice(fm[0].length);
   const h1 = text.match(/^#\s+(.+)$/m);
   if (h1?.[1]) title = h1[1].trim();
-  // persona docs: prefer the PROFILE: name as title.
+  // persona docs: prefer the PROFILE: name as title AND as the document subject (drives subject-aware extraction
+  // so the persona links to what's said about them — "his father" etc. — instead of floating unconnected).
   const prof = text.match(/^PROFILE:\s*(.+)$/m);
-  if (prof?.[1]) title = prof[1].trim();
-  return { source, title, text: text.trim() };
+  const subject = prof?.[1]?.trim();
+  if (subject) title = subject;
+  return { source, title, text: text.trim(), subject };
 }

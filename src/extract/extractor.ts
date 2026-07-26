@@ -34,7 +34,25 @@ export interface ExtractResult {
 }
 
 export interface Extractor {
-  extract(text: string): Promise<ExtractResult>;
+  extract(text: string, opts?: { subject?: string }): Promise<ExtractResult>;
+}
+
+/** Extra instructions when the document has a known primary subject (a persona). Makes the subject the hub of
+ *  its own document: it's extracted as an entity, connected to what the text says about it, and people known
+ *  only by relation to it are named "<Subject>'s <Relation>" AND linked back — so nothing floats unconnected. */
+export function subjectClause(subject?: string): string {
+  if (!subject || !subject.trim()) return "";
+  const s = subject.trim();
+  return `
+
+## SUBJECT OF THIS DOCUMENT
+The primary subject is the PERSON "${s}". Passages speak about them in the first person (I, me, my) and the
+third (their name; he/she/they). Resolve all of these to "${s}". Then:
+- Extract "${s}" itself as a PERSON entity whenever the passage is about them, so relations to them have BOTH endpoints.
+- Connect "${s}" to the specific things the passage says about them — their people, places, projects, work, events.
+- A person known ONLY by relation to "${s}" (a father, a sister, an unnamed neighbour): name them "${s}'s <Relation>"
+  (e.g. "${s}'s Father") — NEVER a bare role like "Father" — AND emit a relation to "${s}" whose reason is the
+  specific bond ("is the father of", "is a sibling of", "mentored").`;
 }
 
 // Ported from docs/history/memory-agent/system-design.md:327-396 (LightRAG) + graphrag-integration-
@@ -128,8 +146,9 @@ export function parseExtraction(raw: string): ExtractResult {
 
 export class LlmExtractor implements Extractor {
   constructor(private chat: Chat, private opts: { temperature?: number } = {}) {}
-  async extract(text: string): Promise<ExtractResult> {
-    const raw = await this.chat.complete(EXTRACTION_SYSTEM, text, { temperature: this.opts.temperature ?? 0.4 });
+  async extract(text: string, opts: { subject?: string } = {}): Promise<ExtractResult> {
+    const system = EXTRACTION_SYSTEM + subjectClause(opts.subject);
+    const raw = await this.chat.complete(system, text, { temperature: this.opts.temperature ?? 0.4 });
     return parseExtraction(raw);
   }
 }
