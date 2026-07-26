@@ -58,6 +58,21 @@
   #scenes .add{ font-family:var(--mono); font-size:11px; color:var(--dim); background:var(--surface-3); border:1px solid var(--line-2); border-radius:99px; padding:4px 11px; cursor:pointer; flex:0 0 auto; }
   #scenes .add:hover{ border-color:var(--accent); color:var(--text); }
   #scenes input{ font:inherit; font-size:12px; background:var(--surface-3); border:1px solid var(--accent); border-radius:99px; padding:4px 11px; color:var(--text); width:150px; outline:none; }
+  /* tours — now-playing bar (violet = tour mode) */
+  #nowplaying{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); width:min(860px,86vw); display:none;
+    background:rgba(18,22,30,.95); border:1px solid rgba(187,154,247,.35); border-radius:14px; box-shadow:0 18px 60px rgba(0,0,0,.7); overflow:hidden; z-index:7; }
+  #nowplaying .prog{ display:flex; gap:2px; height:3px; }
+  #nowplaying .prog i{ flex:1 1 0; background:var(--surface-3); }
+  #nowplaying .prog i.on{ background:var(--tour); }
+  #nowplaying .body{ display:flex; align-items:center; gap:12px; padding:10px 14px; }
+  #nowplaying .ctrl{ display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  #nowplaying .b2{ width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid var(--line-2); background:var(--surface-3); color:var(--text); font-size:12px; }
+  #nowplaying .b2.play{ width:42px; height:42px; background:var(--tour); color:#140f1e; border-color:var(--tour); font-size:14px; }
+  #nowplaying .mid{ flex:1 1 auto; min-width:0; }
+  #nowplaying .st{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--tour); margin-bottom:3px; }
+  #nowplaying textarea.narr{ font:inherit; font-size:15px; line-height:1.45; color:var(--text); background:transparent; border:none; outline:none; width:100%; resize:none; }
+  #nowplaying .exit{ flex:0 0 auto; color:var(--dim); cursor:pointer; font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+  #nowplaying .exit:hover{ color:var(--text); }
   #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
   #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
@@ -156,6 +171,7 @@
 <div id="legend"></div>
 <div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
 <div id="scenes"></div>
+<div id="nowplaying"></div>
 <div id="panel">
   <div class="p-head">
     <div class="sq" id="pback" title="back" style="display:none">‹</div>
@@ -555,7 +571,10 @@ function rerender(){ if(selected){ NODES.includes(selected)?openNode(selected,pa
 // ✕ / esc steps back: a selection → idle, and idle → fully hidden (so you can see the whole graph on a narrow window).
 function deselect(){ if(selected||curEdge) showIdle(); else if(panel.classList.contains('open')) panel.classList.remove('open'); }
 $('pback').onclick=back; $('pclose').onclick=deselect;
-addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
+addEventListener('keydown', e=>{
+  if(e.target && (e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')){ if(e.key==='Escape') e.target.blur(); return; } // don't hijack typing
+  if(tour){ if(e.key==='Escape') exitTour(); else if(e.key==='ArrowRight') tourStep(1); else if(e.key==='ArrowLeft') tourStep(-1); else if(e.key===' '){ e.preventDefault(); tourToggle(); } return; } // ←/→ step · space pause · esc exit
+  if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
 
 // --- scenes: save the current view (camera + provenance filter + selected node) and fly back to it later.
 // Persisted per-graph in localStorage — the exported viewer is offline HTML, so that's the natural sidecar. ---
@@ -580,8 +599,33 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
     inp.addEventListener('blur', ()=> saveScene(inp.value)); };
   box.appendChild(add);
+  if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); box.appendChild(pl); }
 }
 loadScenes(); renderScenes();
+
+// --- tours: play the saved scenes as a guided walkthrough — the camera flies stop→stop, narration per stop.
+// v1: one implicit tour = all scenes in save order; narration lives on the scene. (Named tours + drag-reorder next.) ---
+let tour=null;
+function playTour(){ if(!scenes.length) return; tour={ i:-1, playing:true, timer:0 }; $('scenes').style.display='none'; tourGo(0); }
+function tourGo(i){ if(!tour) return; tour.i=i; restoreScene(scenes[i]); renderNow(); if(tour.playing) armAutoplay(); }
+function armAutoplay(){ clearTimeout(tour.timer); tour.timer=setTimeout(()=>{ if(tour.i<scenes.length-1) tourGo(tour.i+1); else { tour.playing=false; renderNow(); } }, 8000); }
+function tourStep(d){ if(!tour) return; clearTimeout(tour.timer); tourGo(Math.max(0,Math.min(scenes.length-1,tour.i+d))); }
+function tourToggle(){ if(!tour) return; tour.playing=!tour.playing; if(tour.playing) armAutoplay(); else clearTimeout(tour.timer); renderNow(); }
+function exitTour(){ if(tour){ clearTimeout(tour.timer); tour=null; } $('nowplaying').style.display='none'; $('scenes').style.display=''; renderScenes(); }
+function renderNow(){ const np=$('nowplaying'); np.style.display='block'; np.innerHTML='';
+  const prog=el('div','prog'); scenes.forEach((s,i)=> prog.appendChild(el('i', i<=tour.i?'on':''))); np.appendChild(prog);
+  const body=el('div','body'), ctrl=el('div','ctrl');
+  const prev=el('span','b2','◀'); prev.onclick=()=>tourStep(-1);
+  const pp=el('span','b2 play', tour.playing?'❙❙':'▶'); pp.onclick=()=>tourToggle();
+  const next=el('span','b2','▶'); next.onclick=()=>tourStep(1);
+  ctrl.append(prev,pp,next); body.appendChild(ctrl);
+  const mid=el('div','mid'), s=scenes[tour.i];
+  mid.appendChild(el('div','st','stop '+(tour.i+1)+' of '+scenes.length+'  ·  '+(s.name||'')));
+  const ta=document.createElement('textarea'); ta.className='narr'; ta.rows=2; ta.placeholder='add narration for this stop…'; ta.value=s.narr||'';
+  ta.oninput=()=>{ s.narr=ta.value; persistScenes(); }; mid.appendChild(ta); body.appendChild(mid);
+  const ex=el('span','exit','exit'); ex.onclick=()=>exitTour(); body.appendChild(ex);
+  np.appendChild(body);
+}
 
 rebuild(); showIdle(); draw();
 </script>
