@@ -45,6 +45,19 @@
   #minimap{ position:fixed; bottom:14px; left:14px; width:268px; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   #minimap .mm-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line); }
   #minimap canvas{ display:block; background:#080a0f; cursor:crosshair; }
+  /* scenes — saved views, bottom-center rack */
+  #scenes{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:6px;
+    background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:99px; padding:6px 10px; max-width:56vw; overflow-x:auto; }
+  #scenes .lab{ font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); flex:0 0 auto; }
+  #scenes .sc{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text); background:var(--surface-2); border:1px solid var(--line);
+    border-radius:99px; padding:4px 10px; cursor:pointer; white-space:nowrap; flex:0 0 auto; }
+  #scenes .sc:hover{ border-color:var(--accent); }
+  #scenes .sc.on{ background:rgba(122,162,247,.14); border-color:rgba(122,162,247,.4); color:#c8d8fc; }
+  #scenes .sc .x{ color:var(--faint); font-size:12px; line-height:1; }
+  #scenes .sc .x:hover{ color:var(--conflict); }
+  #scenes .add{ font-family:var(--mono); font-size:11px; color:var(--dim); background:var(--surface-3); border:1px solid var(--line-2); border-radius:99px; padding:4px 11px; cursor:pointer; flex:0 0 auto; }
+  #scenes .add:hover{ border-color:var(--accent); color:var(--text); }
+  #scenes input{ font:inherit; font-size:12px; background:var(--surface-3); border:1px solid var(--accent); border-radius:99px; padding:4px 11px; color:var(--text); width:150px; outline:none; }
   #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
   #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
@@ -142,6 +155,7 @@
 <div id="tip"></div>
 <div id="legend"></div>
 <div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
+<div id="scenes"></div>
 <div id="panel">
   <div class="p-head">
     <div class="sq" id="pback" title="back" style="display:none">‹</div>
@@ -226,6 +240,8 @@ function settle(){
 
 // --- camera ---
 let scale=1, ox=W/2, oy=H/2;
+let camAnim=null; // scene fly-to tween (ease-out; cancelled by any manual pan/zoom)
+function flyTo(tox,toy,ts){ camAnim={ t0:performance.now(), dur:460, fox:ox, foy:oy, fs:scale, tox, toy, ts }; }
 function toScreen(x,y){ return [x*scale+ox, y*scale+oy]; }
 function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 
@@ -288,6 +304,9 @@ addEventListener('blur', ()=>{ mmDrag=false; panning=false; }); // release if th
 
 function draw(){
   ctx.clearRect(0,0,W,H);
+  if(camAnim){ const k=Math.min(1,(performance.now()-camAnim.t0)/camAnim.dur), e=1-Math.pow(1-k,3); // ease-out cubic
+    ox=camAnim.fox+(camAnim.tox-camAnim.fox)*e; oy=camAnim.foy+(camAnim.toy-camAnim.foy)*e; scale=camAnim.fs+(camAnim.ts-camAnim.fs)*e;
+    if(k>=1) camAnim=null; }
   const tier=tierFor(scale), ti=TIERS.indexOf(tier);
   if(ti>=3){ // city and lower: a faint aligned grid that scales with zoom (a floor to read motion against)
     const step=96*scale, a=Math.min(0.055, 0.02+(ti-3)*0.018);
@@ -376,7 +395,7 @@ cv.addEventListener('mousemove', ev=>{
   else tip.style.display='none';
   cv.style.cursor=(hoverNode||hoverEdge)?'pointer':'grab';
 });
-cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
+cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; camAnim=null; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
 addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
   if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):showIdle(); } }
@@ -384,7 +403,7 @@ addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
 // right-click = deep inspect (node or edge)
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
   if(n){ walk=[]; openNode(n,true); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) openEdge(e); });
-cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev.clientX,ev.clientY);
+cv.addEventListener('wheel', ev=>{ ev.preventDefault(); camAnim=null; const [wx,wy]=toWorld(ev.clientX,ev.clientY);
   scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.12,Math.min(8,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
 // --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
@@ -486,7 +505,7 @@ function openNode(n, deep){
     ap.appendChild(card); pscroll.appendChild(ap); }
 
   pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
-  pactions.appendChild(mkBtn('Save as scene',null,null)); // scenes deferred → disabled placeholder
+  pactions.appendChild(mkBtn('Save as scene',null,()=>saveScene(n.label))); // saves the current view, named for this node
   pactions.appendChild(deep ? mkBtn('Collapse','ghost right',()=>openNode(n,false)) : mkBtn('Deep inspect →','ghost right',()=>openNode(n,true)));
 }
 
@@ -537,6 +556,32 @@ function rerender(){ if(selected){ NODES.includes(selected)?openNode(selected,pa
 function deselect(){ if(selected||curEdge) showIdle(); else if(panel.classList.contains('open')) panel.classList.remove('open'); }
 $('pback').onclick=back; $('pclose').onclick=deselect;
 addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
+
+// --- scenes: save the current view (camera + provenance filter + selected node) and fly back to it later.
+// Persisted per-graph in localStorage — the exported viewer is offline HTML, so that's the natural sidecar. ---
+const SKEY='tessera-scenes-'+(GRAPH.name||'graph');
+let scenes=[], activeScene=null;
+function loadScenes(){ try{ scenes=JSON.parse(localStorage.getItem(SKEY))||[]; }catch(e){ scenes=[]; } }
+function persistScenes(){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)); }catch(e){} }
+function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); return; }
+  const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null };
+  scenes.push(s); activeScene=s.id; persistScenes(); renderScenes(); }
+function restoreScene(s){ activeScene=s.id;
+  if(!!s.showProv!==showProv){ showProv=!!s.showProv; rebuild(); }   // match the saved provenance filter
+  if(s.node){ const n=byId.get(s.node); if(n&&NODES.includes(n)){ walk=[]; openNode(n,false); } else showIdle(); } else showIdle();
+  flyTo(s.ox, s.oy, s.scale); renderScenes(); }                       // animate the camera rather than cutting
+function delScene(id){ scenes=scenes.filter(s=>s.id!==id); if(activeScene===id) activeScene=null; persistScenes(); renderScenes(); }
+function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChild(el('span','lab','scenes'));
+  scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
+    const x=el('span','x','×'); x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
+    c.onclick=()=>restoreScene(s); box.appendChild(c); });
+  const add=el('span','add','+ save view'); add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
+    add.replaceWith(inp); inp.focus();
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
+    inp.addEventListener('blur', ()=> saveScene(inp.value)); };
+  box.appendChild(add);
+}
+loadScenes(); renderScenes();
 
 rebuild(); showIdle(); draw();
 </script>
