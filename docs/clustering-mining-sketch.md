@@ -8,6 +8,15 @@ marked, and the by-hand experiment at the end has a pass/fail number. Tear at bo
 *Status: sketch only. Nothing here is built. Facts marked **[measured 2026-07-26]** were checked against
 `graphs/big/graph.db` on that date; everything else is labeled hypothesis or open question.*
 
+> **Revised after a 3-model review (Codex, Grok, Composer — all non-Anthropic).** All three independently
+> converged on one flaw: the original pass metric (held-out label-fit) was **circular** — it scored reasons
+> held out from clusters those same reasons had already been pruned into, so it measured self-consistency of
+> Gate-2 survivors, not whether a taxonomy is real. The **architecture** (geometry-proposes-never-decides;
+> Leiden-on-edges not embedding-clustering; sidecar/no-writes; NMI null-test) they judged sound. This revision
+> rewrites §5–§6: **negative controls** replace the circular metric, the decision splits into **harness-earned
+> vs taxonomy-earned**, the analysis is **frozen before running**, and the framing stops overselling what
+> Monday decides. The diversity dividend in action — three families, one disjoint-then-convergent critique.
+
 ---
 
 ## 1. Why one pass unlocks three features
@@ -93,6 +102,11 @@ a small model answers the pairwise micro-task from the mining doc — *"same kin
 the check are ejected to noise; a cluster whose ejection rate exceeds ~30% is dissolved entirely (the
 "ANN" failure mode: a plausible centroid gluing unrelated things). The verifier checks *kind*, not truth —
 edge truth against source text is the separate evidence-verification swarm task and is out of scope here.
+**Known limit (review):** medoid-pairwise cannot catch a *bimodal* cluster — two coherent kinds bridged, each
+similar to a compromise medoid — since every member passes "same as medoid." That's why over-merge detection
+does NOT rest here: the §5 **cross-cluster/noise false-positive** control is what exposes an over-broad label
+downstream; Gate 2 only trims fringe members. If a cheap second-mode check (silhouette split of the cluster)
+is easy, add it; otherwise the FP control is the backstop.
 
 **What a cluster means:** a candidate edge KIND. The hierarchy in the backlog (shallow `RELATED` → deep
 `ATTENDED_SAME_COLLEGE`) falls out of HDBSCAN's condensed tree for free *in principle*, but at 522 reasons
@@ -138,9 +152,11 @@ with no verification. It has never run on `graphs/big` [measured: all 522 RELATE
 `origin=ingest`] — good, because run as-is it would hairball the graph (the wire-on-use lesson: eager
 auto-linking made a hairball once already).
 
-Hardened shape: **propose** — kNN over node quarantine vectors, k ≈ 6, cosine floor raised into the
-validated band (start ~0.75 for cross-type concept pairs; this is NOT entity dedup, so 0.92 is the wrong
-anchor — open question, tune against the verifier's reject rate); **block** — drop pairs already joined by
+Hardened shape: **propose** — kNN over node quarantine vectors, k ≈ 6, with a cosine floor that is **an
+unvalidated starting rate, not a "validated band"** (review): the node-vector cosine distribution has never
+been measured (§5 measures it before this runs), 0.92 is the wrong anchor (that's entity *dedup*, not concept
+relatedness), and under "geometry ≠ quality" any floor is arbitrary until the reject-rate-by-band curve
+exists — so ~0.75 is a **candidate-budget knob** to start that measurement, nothing more; **block** — drop pairs already joined by
 any RELATED edge, and drop same-document pairs (within one doc, chunk co-mention had its chance; the
 Connector's value is cross-document); **verify** — the verifier gets both nodes' names + descriptions +
 one provenance chunk each, and must (a) answer "is there a real, statable relationship? y/n" and (b) if
@@ -174,54 +190,82 @@ the label as a *claim to be verified*, not an output.
   the adjudicator (the Mac Studio's qwen-14b-class model). On today's hardware "the fleet" is Ollama model
   swaps in a loop — slower, same contract, and that's fine for phase 1.
 
-## 5. Measurement — the numbers that decide
+## 5. Measurement — the numbers that decide (rebuilt after review)
 
-Everything reports through a `mine` section appended to `tessera report` (the scorecard is the fitness
-function; a mining pass that can't move a scorecard number doesn't exist). New metrics:
+Everything reports through a `mine` section appended to `tessera report`. The review killed the original
+primary metric, so the load-bearing signal is now **discrimination, not coherence**: a label is only real if it
+*accepts its own members AND rejects everyone else's*. Coherence alone (the old held-out fit) is a necessary
+check that a Gate-2-pruned cluster is nameable — it can be high on a wrongly-merged cluster, so it is reported
+but **never decides**.
 
-- **typed%** — RELATED assertions assigned a discovered kind (coverage). Noise staying `RELATED` is correct
-  behavior, so typed% has no target of 100; it has a floor for usefulness (§6).
-- **held-out label fit** — the primary quality number. Per cluster: split members 70/30, label from the
-  70%, a different-family judge scores each held-out reason against the label. Report mean fit.
-- **shuffled-label control** — the same judge, same held-out reasons, labels swapped between clusters. If
-  shuffled fit isn't dramatically lower than true fit, the judge is a yes-machine and the true number is
-  void. This control is mandatory; an LLM-judge number without a control is hand-waving (the prior work's
-  lesson: llama-3-judge variance swamped signal until deterministic checks anchored it).
-- **human spot check** — 20 (label, reason) pairs, blind mix of true and shuffled, Brian judges fit. His
-  agreement with the model judge calibrates whether the judge can be trusted unsupervised at scale.
-- **community/provenance NMI** (§3.2) + count of cross-persona communities (≥3 personas' members).
-- **Connector precision** — of verified proposed edges, % a human accepts on a 20-edge sample; and the
-  verifier reject-rate by cosine band (if reject-rate doesn't rise as cosine falls, the geometry floor is
-  meaningless and should be re-tuned — this doubles as a live re-test of "geometry doesn't predict quality").
-- **stability** — re-run clustering with a different seed / minus one persona's assertions; % of assertions
-  whose kind assignment survives. Unstable kinds are not taxonomy, they're weather.
+- **held-out label fit (coherence — necessary, not sufficient).** Per cluster, split members 70/30, label from
+  the 70%, a different-family judge scores each held-out reason. **Only clusters with ≥3 held-out reasons are
+  reported**; smaller clusters' fit is uninterpretable noise (1/1 y/n) and is listed, not averaged. Report the
+  per-cluster distribution + a bootstrap CI, not a lone mean.
+- **cross-cluster & noise false-positive rate (the new primary — catches over-merge the shuffled control
+  can't).** Score each cluster's label against (a) held-out reasons from *other* clusters and (b) HDBSCAN noise
+  points. A real kind must **reject** these. High true-fit with high cross-cluster FP = an internally-consistent
+  *but wrongly-merged or over-broad* label (the "FAMILY_RELATION fits every kin reason" failure all three
+  reviewers named). The decision signal is the **gap**: true-fit − cross-cluster-FP, per cluster.
+- **shuffled-label control (kept, demoted).** Labels swapped between clusters; a coarse discriminability floor.
+  Necessary but weak — it only proves the judge can tell KIN from TRADE, not that a cluster is one kind.
+- **judge calibration by κ, not by count.** ~40 pairs (blind mix of true members, cross-cluster reasons, and
+  shuffled) judged by both Brian and the model; report **Cohen's κ**. If κ is below a pre-set floor (say 0.6),
+  no unsupervised number from this pipeline is trusted — say so and stop, don't ship the number.
+- **typed%** — coverage (RELATED assertions assigned a kind). **Reported, not gated** at this scale: noise
+  staying `RELATED` is correct, and the review showed a typed% floor contradicts the honest scale expectation.
+  It informs the *taxonomy-earned* verdict (§6), not the *harness-earned* one.
+- **community/provenance NMI** (§3.2) + cross-persona communities (≥3 personas). **Low NMI is not a win by
+  itself** — an arbitrary cut of the 319-node giant component scores low NMI with no meaning. A cross-persona
+  community only counts if it *also* passes a coherence gate (its members share a nameable place/trade a judge
+  accepts, with the same shuffled control).
+- **Connector** — first measure the `vec_node_quarantine` cosine distribution (as §2 did for reason space; it
+  was never measured, so the §3.3 floor is currently a guess). Then verifier reject-rate by cosine band (if it
+  doesn't rise as cosine falls, the floor is meaningless — a live re-test of "geometry ≠ quality") + human
+  precision on a 20-edge sample.
+- **stability** — re-run minus one persona's assertions; match kinds across runs **by label+intension** (a
+  judge answers "same kind?"), never by cluster index; report % of assertions whose *kind* survives. Star
+  topology means −1 persona may thrash *communities* structurally (flag it, don't read it as kind-instability).
 
 ## 6. The by-hand first experiment (what to run Monday)
 
-One graph, one script, no store writes, no new hardware. Target: `graphs/big` (12 personas, 411 RELATED
-edges, 522 reason vectors, already built and embedded — zero ingest cost).
+**What this run actually decides (reframed after review):** it proves the **propose→verify→label harness and
+the judge** on ONE object (the taxonomy), plus a community null-check. It does **not** unlock three features —
+the Connector (the only mutating step) is deferred, and communities are expected to ≈ documents at this scale.
+"One pass unlocks three" is the *architecture's* promise; Monday earns the *harness*.
 
-1. **`scripts/mine-taxonomy.ts`** (read-only over `graph.db`, like `ingest-report.ts`): pull the 522
-   RELATED assertion vectors + reasons; HDBSCAN (via a small py script if the TS ecosystem fights back —
-   this is a lab script, not product); write `graphs/big/mine/taxonomy.json` with clusters, medoids, noise.
-   Sidecar output only — **the mutation_log/single-writer discipline stays intact; nothing writes to the
-   store until a taxonomy earns a real store verb.**
-2. **Gate 2 + labels:** medoid-pairwise verify per member (~522 small-model calls), then label each
-   surviving cluster from a 70% split and judge the 30% held-out (+ the shuffled control, ~2× the held-out
-   calls). Two model families minimum (e.g. qwen2.5:7b propose/verify, gemma or llama judge). Order
-   magnitude ~1,500 short y/n calls — an afternoon on the Mac via Ollama, ~zero dollars.
-3. **Measure:** the §5 numbers into the report. Human spot check: 20 pairs, ten minutes of Brian.
-4. **Same script, second mode:** Leiden over the RELATED spine → communities + NMI vs provenance + labels
-   for any cross-persona community. (Cheap: 386 nodes.)
-5. **Defer the Connector run** until 1–4 read out — its verifier prompt is informed by what the taxonomy
-   finds ("write the reason as one of these kinds, or NONE"), and it's the only step that mutates state.
+**Step 0 — freeze the analysis before looking at any label (kills the tune-to-pass freedom the review flagged):**
+register, now, in the script: cluster over the **481 distinct reason strings** (exact duplicates collapsed,
+carried as weight), not the 522 rows; pick HDBSCAN `min_cluster_size` by **DBCV** (density-based validity) over
+the sweep, tie-break to the smallest, decided by the index and not by eyeballing the labels; fall back to
+agglomerative only if HDBSCAN labels >80% noise; an edge's kind is the **majority kind of its assertions**.
+These are locked before the run; changing them after seeing §5 voids the result.
 
-**Pass bar (decided now, before running):** the pass earns further building if **mean held-out label fit
-≥ 0.8 across accepted clusters, with typed% ≥ 0.4 of the 522, and shuffled-control fit ≤ 0.3.** Softer
-secondary win: ≥1 labeled cross-persona community that isn't a document. If typed% comes in low but fit is
-high, that's a *scale* verdict (need more corpus — expected, per the backlog) and still a green light for
-the machinery; if fit is low or the control is high, the reason space or the judge isn't ready and the
-right next move is the embedder head-to-head, not more clustering code.
+1. **`scripts/mine-taxonomy.ts`** (read-only over `graph.db`, like `ingest-report.ts`): pull the RELATED
+   assertion vectors + reasons; cluster per Step 0; write `graphs/big/mine/taxonomy.json` (clusters, medoids,
+   noise). **Sidecar only — single-writer/mutation-log discipline intact; nothing writes to the store.**
+2. **Gate 2 + labels:** medoid-pairwise verify per member; label each surviving cluster from a 70% split;
+   then the §5 battery — held-out coherence, **cross-cluster + noise false-positive** (the real signal),
+   shuffled control, all by a **different-family** judge. Two families minimum. ~1,500–2,000 short local calls.
+3. **Measure + calibrate:** the §5 numbers into the report; the ~40-pair blind κ sample (~15 min of Brian).
+4. **Second mode:** Leiden over the RELATED spine → communities + NMI vs provenance; label + coherence-gate
+   any cross-persona community.
+5. **Defer the Connector run** until 1–4 read out (its verifier prompt is informed by the discovered kinds,
+   and it's the only step that mutates state); first measure the node-vector cosine distribution (§5).
+
+**Two verdicts, decided now (not one bar):**
+- **HARNESS earned** — the Monday goal, and a *green light* even if the taxonomy is thin: the negative controls
+  **separate** (per-cluster `true-fit − cross-cluster-FP` gap large across accepted clusters; shuffled low) AND
+  judge **κ ≥ 0.6** AND stability is defined and reported. This says the machinery + the judge are trustworthy →
+  build more, and run the embedder head-to-head (the §6 harness *is* most of that harness).
+- **TAXONOMY earned** — **not** expected at 522 reasons: harness-earned AND high `typed%` AND labels generalize
+  to paraphrases AND kinds stable across the −1-persona run. Deferred to corpus scale, as the backlog says.
+
+**Reading a null result honestly (pre-committed):** thin taxonomy + separating controls + good κ = *harness
+earned, taxonomy waits for scale* — a success, proceed to more corpus + the embedder head-to-head. Controls
+**don't** separate, or κ low = the reason space or the judge isn't ready — stop clustering, do the embedder
+head-to-head first. `typed%` is **reported, never a gate** — the review showed a typed% floor contradicts the
+honest scale expectation.
 
 ## 7. Risks and open questions
 
