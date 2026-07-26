@@ -182,7 +182,7 @@ function rebuild(){
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
-  settle(); computeBounds(); buildLegend(); updateCounts();
+  settle(); computeBounds(); renderMMDots(); buildLegend(); updateCounts();
 }
 function updateCounts(){
   $('gname').textContent = GRAPH.name || 'graph';
@@ -237,13 +237,15 @@ let hoverNode=null, hoverEdge=null, selected=null, panning=false, lastX=0, lastY
 // settlement, mono=evidence), ink contrast rises as you go lower. Continent cluster-labels are DEFERRED (no
 // clustering pass yet), so the ladder starts at country with landmark punch-through (the prominence budget).
 const FF={serif:'Georgia,ui-serif,serif', sans:'-apple-system,system-ui,sans-serif', mono:'ui-monospace,Menlo,monospace'};
+// `budget` = the prominence budget: how many labels the altitude affords. Small at the top (a few landmarks
+// stand in for the deferred community NAMES), growing as you descend — so a lone hub doesn't flood the serif.
 const TIERS=[
-  {name:'continent', zmax:0.8, deg:22, w:'300', size:27, fam:FF.serif, track:0.30, caps:1, ink:'rgba(230,233,239,.55)', sub:'clusters (soon)'},
-  {name:'country',   zmax:1.4, deg:14, w:'400', size:21, fam:FF.serif, track:0.18, caps:1, ink:'rgba(230,233,239,.85)', sub:'landmarks'},
-  {name:'region',    zmax:2.4, deg:10, w:'600', size:15, fam:FF.sans,  track:0.13, caps:1, ink:'#b9c0d0', sub:'major hubs'},
-  {name:'city',      zmax:4.0, deg:7,  w:'600', size:15, fam:FF.sans,  track:-0.01, title:1, ink:'#e6e9ef', sub:'hubs + type'},
-  {name:'district',  zmax:6.5, deg:2,  w:'500', size:13, fam:FF.sans,  track:0, ink:'#cfd5e4', sub:'all nodes'},
-  {name:'building',  zmax:99,  deg:1,  w:'400', size:12, fam:FF.mono,  track:0.02, ink:'#9aa3b8', sub:'reasons'},
+  {name:'continent', zmax:0.8, deg:22, budget:4,  w:'300', size:27, fam:FF.serif, track:0.30, caps:1, ink:'rgba(230,233,239,.55)', sub:'clusters (soon)'},
+  {name:'country',   zmax:1.4, deg:14, budget:9,  w:'400', size:21, fam:FF.serif, track:0.18, caps:1, ink:'rgba(230,233,239,.85)', sub:'landmarks'},
+  {name:'region',    zmax:2.4, deg:10, budget:24, w:'600', size:15, fam:FF.sans,  track:0.13, caps:1, ink:'#b9c0d0', sub:'major hubs'},
+  {name:'city',      zmax:4.0, deg:7,  budget:48, w:'600', size:15, fam:FF.sans,  track:-0.01, title:1, ink:'#e6e9ef', sub:'hubs + type'},
+  {name:'district',  zmax:6.5, deg:2,  budget:90, w:'500', size:13, fam:FF.sans,  track:0, ink:'#cfd5e4', sub:'most nodes'},
+  {name:'building',  zmax:99,  deg:1,  budget:90, w:'400', size:12, fam:FF.mono,  track:0.02, ink:'#9aa3b8', sub:'reasons'},
 ];
 function tierFor(s){ for(const t of TIERS) if(s<=t.zmax) return t; return TIERS[TIERS.length-1]; }
 const titleCase=s=>String(s||'').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
@@ -262,22 +264,27 @@ function computeBounds(){ if(!NODES.length) return; let a=1e9,b=-1e9,c=1e9,d=-1e
   for(const n of NODES){ if(n.x<a)a=n.x; if(n.x>b)b=n.x; if(n.y<c)c=n.y; if(n.y>d)d=n.y; }
   const px=(b-a)*0.06+20, py=(d-c)*0.06+20; bounds={minX:a-px,maxX:b+px,minY:c-py,maxY:d+py}; }
 const mmc=$('mmc'), mmx=mmc.getContext('2d'), MMW=268, MMH=168;
+const mmDots=document.createElement('canvas'); mmDots.width=MMW; mmDots.height=MMH; const mmdx=mmDots.getContext('2d');
 function mmS(){ return Math.min(MMW/(bounds.maxX-bounds.minX), MMH/(bounds.maxY-bounds.minY)); }
 function toMM(x,y){ const s=mmS(); return [ (x-bounds.minX)*s + (MMW-(bounds.maxX-bounds.minX)*s)/2, (y-bounds.minY)*s + (MMH-(bounds.maxY-bounds.minY)*s)/2 ]; }
 function mmToWorld(px,py){ const s=mmS(); return [ (px-(MMW-(bounds.maxX-bounds.minX)*s)/2)/s+bounds.minX, (py-(MMH-(bounds.maxY-bounds.minY)*s)/2)/s+bounds.minY ]; }
-function drawMinimap(){ mmx.clearRect(0,0,MMW,MMH);
-  for(const n of NODES){ const [x,y]=toMM(n.x,n.y); mmx.fillStyle=colorFor(n); mmx.globalAlpha=.8; mmx.beginPath(); mmx.arc(x,y,n.deg>=10?2:1.2,0,7); mmx.fill(); }
-  mmx.globalAlpha=1;
+function renderMMDots(){ mmdx.clearRect(0,0,MMW,MMH);  // node dots are static between rebuilds → cache offscreen
+  for(const n of NODES){ const [x,y]=toMM(n.x,n.y); mmdx.fillStyle=colorFor(n); mmdx.globalAlpha=.8; mmdx.beginPath(); mmdx.arc(x,y,n.deg>=10?2:1.2,0,7); mmdx.fill(); }
+  mmdx.globalAlpha=1; }
+let lastZ='';
+function drawMinimap(){ mmx.clearRect(0,0,MMW,MMH); mmx.drawImage(mmDots,0,0);
   const [wx0,wy0]=toWorld(0,0), [wx1,wy1]=toWorld(W,H); const [mx0,my0]=toMM(wx0,wy0), [mx1,my1]=toMM(wx1,wy1);
   mmx.fillStyle='rgba(122,162,247,.09)'; mmx.fillRect(mx0,my0,mx1-mx0,my1-my0);
   mmx.strokeStyle='#7aa2f7'; mmx.lineWidth=1.5; mmx.strokeRect(mx0,my0,mx1-mx0,my1-my0);
-  $('mmzoom').textContent=scale.toFixed(2)+'×';
+  const z=scale.toFixed(2)+'×'; if(z!==lastZ){ $('mmzoom').textContent=z; lastZ=z; }
 }
 let mmDrag=false;
 function mmJump(ev){ const r=mmc.getBoundingClientRect(); const [wx,wy]=mmToWorld(ev.clientX-r.left, ev.clientY-r.top); ox=W/2-wx*scale; oy=H/2-wy*scale; }
-mmc.addEventListener('mousedown', ev=>{ mmDrag=true; mmJump(ev); ev.stopPropagation(); });
+mmc.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; mmDrag=true; mmJump(ev); ev.stopPropagation(); });
+mmc.addEventListener('contextmenu', ev=> ev.preventDefault()); // right-click on the minimap shouldn't jump + menu
 addEventListener('mousemove', ev=>{ if(mmDrag) mmJump(ev); });
 addEventListener('mouseup', ()=>{ mmDrag=false; });
+addEventListener('blur', ()=>{ mmDrag=false; panning=false; }); // release if the mouseup landed off-window
 
 function draw(){
   ctx.clearRect(0,0,W,H);
@@ -317,18 +324,26 @@ function draw(){
   }
   // labels by tier: which nodes label (degree budget for the altitude) + how the type reads. Landmarks
   // (hover/selected/focus) always label; viewport-culled + capped so a low altitude doesn't flood.
-  ctx.textAlign='center'; ctx.textBaseline='top'; ctx.font=tier.w+' '+tier.size+'px '+tier.fam;
-  try{ ctx.letterSpacing=(tier.track*tier.size).toFixed(1)+'px'; }catch(e){}
+  // Type encodes PROMINENCE, not just camera altitude. A node that BELONGS at this tier (deg ≥ threshold) gets
+  // the tier's grand type; a punch-through node you merely selected/hovered that does NOT belong (a minor node)
+  // gets a muted focus style — so clicking a town at country zoom doesn't render it as a country. (Real cure for
+  // "one name for the group" at altitude is the deferred community labels; this keeps the metaphor honest meanwhile.)
+  const FOCUS={size:12.5, w:'500', fam:FF.sans, track:0, ink:'#dfe4ee'};
+  ctx.textAlign='center'; ctx.textBaseline='top';
   const always=n=> n===hoverNode||n===selected||(focusSet&&focusSet.has(n.id));
-  const cands=NODES.filter(n=> !(focusSet&&!focusSet.has(n.id)) && (always(n)||n.deg>=tier.deg))
+  const vis0=NODES.filter(n=> !(focusSet&&!focusSet.has(n.id)))
     .map(n=>{ const [x,y]=toScreen(n.x,n.y); return {n,x,y}; })
-    .filter(o=> o.x>-60&&o.x<W+60&&o.y>-30&&o.y<H+30)
-    .sort((a,b)=> b.n.deg-a.n.deg).slice(0,90);
-  for(const {n,x,y} of cands){
-    let t=(n.label||''); if(tier.caps) t=t.toUpperCase(); else if(tier.title) t=titleCase(t); if(t.length>44) t=t.slice(0,43)+'…';
+    .filter(o=> o.x>-60&&o.x<W+60&&o.y>-30&&o.y<H+30);
+  const keep=vis0.filter(o=> always(o.n));  // landmarks/selection never evicted by the budget
+  const rest=vis0.filter(o=> !always(o.n) && o.n.deg>=tier.deg).sort((a,b)=> b.n.deg-a.n.deg).slice(0, Math.max(0, tier.budget-keep.length));
+  for(const {n,x,y} of keep.concat(rest)){
+    const T = (n.deg>=tier.deg) ? tier : FOCUS;   // belongs here → tier type; punch-through minor → muted focus
+    ctx.font=T.w+' '+T.size+'px '+T.fam;
+    try{ ctx.letterSpacing=((T.track||0)*T.size).toFixed(1)+'px'; }catch(e){}
+    let t=(n.label||''); if(T.caps) t=t.toUpperCase(); else if(T.title) t=titleCase(t); if(t.length>44) t=t.slice(0,43)+'…';
     const by=y+radius(n)+4, w=ctx.measureText(t).width;
-    ctx.fillStyle='rgba(10,12,17,0.66)'; ctx.fillRect(x-w/2-4, by, w+8, tier.size+4);
-    ctx.fillStyle=tier.ink; ctx.fillText(t, x, by+2);
+    ctx.fillStyle='rgba(10,12,17,0.66)'; ctx.fillRect(x-w/2-4, by, w+8, T.size+4);
+    ctx.fillStyle=T.ink; ctx.fillText(t, x, by+2);
   }
   try{ ctx.letterSpacing='0px'; }catch(e){} ctx.textBaseline='alphabetic';
   drawMinimap();
@@ -349,6 +364,7 @@ function edgeAt(px,py){ let best=null,bd=7;
 const tip=$('tip');
 cv.addEventListener('mousemove', ev=>{
   const px=ev.clientX, py=ev.clientY;
+  if(mmDrag){ tip.style.display='none'; hoverNode=hoverEdge=null; return; } // don't hover-flicker while dragging the minimap
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
   if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
@@ -464,7 +480,8 @@ function openNode(n, deep){
     if(deep){ provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); }); }
     // focus mode: the source titles are clickable → walk to the PARENT profile (the persona PERSON node) or the
     // SOURCE document node. This is the ONLY way off an orphan (a node with 0 semantic links, e.g. "Fertilizer Ratios").
-    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.name===title)||nodes.find(x=>x.subtype==='document'&&x.name===title);
+    // viewer nodes expose `label` + `group` (NOT name/subtype — those live in the store); match on those.
+    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.label===title)||nodes.find(x=>x.group==='document'&&x.label===title);
       const row=el('div','src'+(target?' src-link':''), title); if(target) row.onclick=()=>revealAndGo(target); card.appendChild(row); }); }
     ap.appendChild(card); pscroll.appendChild(ap); }
 
