@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS layout (
   version  INTEGER NOT NULL DEFAULT 1
 );
 
+-- Chunk extraction memo: a CHUNK node id is inserted here only AFTER its extraction fully completed (parse
+-- succeeded and the mapper finished). Re-ingest skips a chunk iff it's here — a chunk that started but crashed
+-- mid-map is absent, so it retries (never silently frozen half-written). Parse-failures are absent too → retry.
+CREATE TABLE IF NOT EXISTS extracted_chunks (
+  chunk_id TEXT PRIMARY KEY REFERENCES nodes(id)
+);
+
 CREATE TABLE IF NOT EXISTS mutation_log (
   event_id     INTEGER PRIMARY KEY AUTOINCREMENT,
   effective_at INTEGER NOT NULL,

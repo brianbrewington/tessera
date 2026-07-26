@@ -1,7 +1,8 @@
 // Ingest orchestrator (per docs/ingest-model.md): open graph -> read adapter -> chunk -> per chunk
 // {CHUNK node (raw text, embedded = the RAG unit) -> ORIGINATED_FROM the SOURCE; extract -> map entities,
-// each APPEARED_IN this chunk}. SOURCE is keyed by PATH; SOURCE/CHUNK use nearDupMerge:false so similar
-// content never collapses distinct identities. Reports parse failures vs empty chunks (fail-loud).
+// each APPEARED_IN this chunk}. SOURCE is keyed by PATH; identity is content_hash only (no cosine collapse).
+// A chunk already extracted is skipped (deterministic chunk identity) so re-ingest is idempotent and cheap.
+// Reports parse failures vs empty chunks vs reused chunks (fail-loud).
 import type { Graph } from "../graph.js";
 import type { Extractor } from "../extract/extractor.js";
 import type { Meta } from "../schema.js";
@@ -21,9 +22,17 @@ export interface IngestResult {
   edges: number;
   parseFailures: number; // chunks whose model reply couldn't be parsed
   emptyChunks: number; // chunks that parsed but extracted nothing
+  reused: number; // chunks skipped because they were already extracted (deterministic chunk identity)
 }
 
-export async function ingestFile(graph: Graph, extractor: Extractor, path: string): Promise<IngestResult> {
+// reextract: bypass the chunk memo (re-run extraction even for unchanged chunks) — use when the extraction
+// model or prompt changed, since the memo keys only on chunk content, not on how it was extracted.
+export async function ingestFile(
+  graph: Graph,
+  extractor: Extractor,
+  path: string,
+  opts: { reextract?: boolean } = {},
+): Promise<IngestResult> {
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
   const doc = readDoc(path);
   const meta: Meta = { actor: "ingest", cause: `ingest ${doc.source}` };
@@ -41,7 +50,7 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
 
   const chunks = splitChunks(doc.text);
   const known = new Map<string, string>();
-  let entities = 0, edges = 0, parseFailures = 0, emptyChunks = 0;
+  let entities = 0, edges = 0, parseFailures = 0, emptyChunks = 0, reused = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     const c = chunks[i]!;
@@ -61,13 +70,29 @@ export async function ingestFile(graph: Graph, extractor: Extractor, path: strin
       meta,
     );
 
+    // Chunk memo: a chunk whose extraction previously COMPLETED (marked in extracted_chunks) is skipped — chunk
+    // identity is deterministic, so re-running the temp-0.4 extractor would only churn the graph AND repay the
+    // dominant LLM cost. Completion is marked AFTER the map below, so a crash mid-map leaves it unmarked and it
+    // retries (not silently frozen half-written). `reextract` forces a re-run (model/prompt bump).
+    if (!opts.reextract && graph.store.isExtracted(chunkNode.id)) {
+      reused++;
+      // NOTE: a skipped chunk does not repopulate the mapper's cross-chunk `known` map this run. Safe today —
+      // the LlmExtractor drops any relation whose endpoints aren't in the SAME chunk (extractor.ts), so `known`
+      // is effectively same-chunk. An extractor that emits cross-chunk relations would need `known` seeded from
+      // the store on skip (see docs/backlog.md "known-map on memo-skip").
+      continue;
+    }
+
     const { extraction, parsed } = await extractor.extract(c.text);
     if (!parsed) parseFailures++;
     else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
     const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, doc.source, known, { id: chunkNode.id, label });
     entities += r.entityCount;
     edges += r.edgeCount;
+    // Mark complete only on a successful PARSE (empty-but-parsed counts as done → don't re-pay the LLM for a
+    // genuinely empty chunk; a parse FAILURE stays unmarked → retried next time).
+    if (parsed) graph.store.markExtracted(chunkNode.id);
   }
 
-  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks };
+  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused };
 }

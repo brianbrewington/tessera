@@ -67,6 +67,13 @@ NO parseable JSON object** (distinct from a valid-but-empty chunk). Salvage is *
 entity/relation drops only that row, never the whole chunk; a chatty model's decoy object is skipped in favour of
 the first entities/relations-shaped payload. Relation endpoints match extracted names **case-insensitively**.
 
+## Chunk memo (idempotent + cheap re-ingest)
+Chunk identity is deterministic, so re-extracting an unchanged chunk only churns the graph and re-pays the
+(dominant) LLM cost. A chunk id is recorded in `extracted_chunks` **only after** its extraction fully completed
+(parse succeeded AND the mapper finished); re-ingest skips a chunk iff it's recorded. A chunk that crashed
+mid-map or failed to parse is absent → retried (never frozen half-written). `ingest --reextract` forces a re-run
+(use on a model/prompt bump — the memo keys on chunk content, not on how it was extracted).
+
 ## Not changing
 GraphStore single-writer/`BEGIN IMMEDIATE`, two-tier vec, mutation_log, the deferred engine
 (resonator/dream/promote/prune), non-txt/md formats, the embedder eval.

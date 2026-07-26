@@ -439,6 +439,15 @@ export class GraphStore {
   countEdges(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM edges").get() as { n: number }).n;
   }
+  // Chunk extraction memo (see ddl `extracted_chunks`). `markExtracted` is called only AFTER a chunk's
+  // extraction fully completed, so `isExtracted` is a true completion predicate — a chunk that crashed
+  // mid-map or failed to parse is NOT marked and will be retried on re-ingest. Idempotent.
+  markExtracted(chunkId: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO extracted_chunks (chunk_id) VALUES (?)").run(chunkId);
+  }
+  isExtracted(chunkId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM extracted_chunks WHERE chunk_id = ?").get(chunkId);
+  }
   countAssertions(edgeId: string): number {
     return (
       this.db.prepare("SELECT count(*) AS n FROM edge_assertions WHERE edge_id = ?").get(edgeId) as { n: number }
@@ -449,6 +458,11 @@ export class GraphStore {
       .prepare("SELECT reason FROM edge_assertions WHERE edge_id = ? ORDER BY rowid DESC LIMIT 1")
       .get(edgeId) as { reason: string } | undefined;
     return r?.reason ?? null;
+  }
+  // ALL of an edge's assertion reasons (an edge accumulates one per distinct reason) — the scorecard scores
+  // every reason, not just the newest, so the quality metric is order-of-ingest independent.
+  edgeReasons(edgeId: string): string[] {
+    return (this.db.prepare("SELECT reason FROM edge_assertions WHERE edge_id = ? ORDER BY rowid").all(edgeId) as { reason: string }[]).map((r) => r.reason);
   }
   assertionSurprise(assertionId: string): number | null {
     const r = this.db.prepare("SELECT expert_surprise FROM edge_assertions WHERE id = ?").get(assertionId) as

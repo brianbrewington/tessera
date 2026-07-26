@@ -56,6 +56,14 @@ chunk that already exists with `APPEARED_IN` entities could **skip re-extraction
 truly idempotent AND saving the (dominant) LLM cost. Design: memo on chunk content_hash; invalidate if the
 extraction model/prompt version changes. Interacts with the chunker-tuning sub-plan.
 
+## known-map on memo-skip (latent, from review 2)
+The chunk memo skips already-extracted chunks on re-ingest, but a skipped chunk doesn't repopulate the mapper's
+cross-chunk `known` name→id map. Dead-code-safe today (the LlmExtractor drops relations whose endpoints aren't in
+the same chunk, so `known`'s cross-chunk fallback is never exercised), but a smarter/custom extractor that emits
+cross-chunk relations would silently drop them on a partial re-ingest — diverging from a fresh ingest. Fix when
+that extractor lands: on skip, seed `known` from the chunk's existing APPEARED_IN entities. Alternatively make the
+same-chunk-relations assumption an explicit contract on the `Extractor` interface.
+
 ## Identity-string normalization edges (latent)
 `contentHash` runs identity strings through `normalizeText` (lowercase + `\s+`→space). Two consequences, both
 low-frequency, both safe to fix now (no persisted data): (1) `\t` field delimiters collapse to spaces before

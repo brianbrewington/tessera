@@ -214,6 +214,53 @@ describe("ingestFile (full spine, stub LLM)", () => {
     store.close();
   });
 
+  it("chunk memo: re-ingest reuses already-extracted chunks and does NOT call the extractor again", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    let calls = 0;
+    const canned = JSON.stringify({ entities: [{ name: "Kilo", type: "CONCEPT", description: "k" }], relations: [] });
+    const extractor = new LlmExtractor(new StubChat(() => { calls++; return canned; }));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-memo-"));
+    const docPath = join(dir, "doc.md");
+    writeFileSync(docPath, "# Doc\n\nMentions Kilo once.\n");
+
+    const r1 = await ingestFile(g, extractor, docPath);
+    expect(r1.reused).toBe(0);
+    expect(calls).toBe(r1.chunks); // extracted every chunk on the first pass
+    const callsAfterFirst = calls;
+
+    const r2 = await ingestFile(g, extractor, docPath); // re-ingest, same content
+    expect(r2.reused).toBe(r2.chunks); // every chunk reused
+    expect(r2.entities).toBe(0); // nothing newly created
+    expect(calls).toBe(callsAfterFirst); // extractor NEVER called again — the LLM cost is skipped
+
+    const r3 = await ingestFile(g, extractor, docPath, { reextract: true }); // force re-extraction
+    expect(r3.reused).toBe(0);
+    expect(calls).toBeGreaterThan(callsAfterFirst); // reextract bypasses the memo
+    store.close();
+  });
+
+  it("memo does NOT freeze a chunk whose extraction failed to parse — it retries on re-ingest", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    let call = 0;
+    // first call: unparseable (parse failure); subsequent calls: a valid extraction
+    const chat = new StubChat(() => (++call === 1 ? "sorry, prose only, no JSON here" : JSON.stringify({ entities: [{ name: "Kilo", type: "CONCEPT", description: "k" }], relations: [] })));
+    const extractor = new LlmExtractor(chat);
+    const dir = mkdtempSync(join(tmpdir(), "tessera-retry-"));
+    const docPath = join(dir, "doc.md");
+    writeFileSync(docPath, "# Doc\n\nMentions Kilo.\n"); // one chunk
+
+    const r1 = await ingestFile(g, extractor, docPath);
+    expect(r1.parseFailures).toBeGreaterThanOrEqual(1);
+    expect(store.allNodes().some((n) => n.name === "Kilo")).toBe(false); // parse failed -> nothing extracted yet
+
+    const r2 = await ingestFile(g, extractor, docPath); // the failed chunk must RETRY, not be memoized as done
+    expect(r2.reused).toBe(0); // not skipped — it never completed
+    expect(store.allNodes().some((n) => n.name === "Kilo")).toBe(true); // now successfully extracted
+    store.close();
+  });
+
   it("an empty document creates a SOURCE but zero chunks (no junk empty chunk, no embed of '')", async () => {
     const store = new GraphStore({ path: ":memory:", embedder: emb });
     const g = Graph.attach(store, emb);
