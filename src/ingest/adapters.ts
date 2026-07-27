@@ -20,7 +20,10 @@ export function readDoc(path: string): Doc {
   // Canonicalize the path so `doc.md`, `./doc.md`, and an absolute path all yield ONE source identity
   // (else a re-ingest under a differently-spelled path duplicates the SOURCE, its chunks, and its people).
   const source = resolve(path);
-  let text = readFileSync(source, "utf8").replace(/\r\n/g, "\n");
+  // Normalize at the boundary: NFC + newline canonicalization once, so SOURCE identity (hash of doc.text),
+  // CHUNK identity (hash of chunk text split from doc.text), and the stored body all agree — two docs that
+  // differ only in Unicode composition dedup completely, not just at the SOURCE level (Codex review).
+  let text = readFileSync(source, "utf8").replace(/\r\n/g, "\n").normalize("NFC");
   let title = basename(source).replace(/\.[^.]+$/, "");
   // md: strip YAML frontmatter, prefer the first H1 as title.
   const fm = text.match(/^---\n[\s\S]*?\n---\n?/);

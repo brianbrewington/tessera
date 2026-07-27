@@ -91,16 +91,20 @@ describe("mapExtraction", () => {
     expect(places[0]!.strength).toBe(2); // reinforced
   });
 
-  it("same-named PERSON from two docs now MERGES to one node (content-addressed identity)", async () => {
+  it("same-named PERSON from two docs now MERGES to one node spanning both chunks (content-addressed identity)", async () => {
     store = new GraphStore({ path: ":memory:", embedder: emb });
-    const ch = await mkChunk(store);
+    const chA = await mkChunk(store, "cA"); // two DISTINCT chunks — genuinely different "documents"
+    const chB = await mkChunk(store, "cB");
     const p = (desc: string): Extraction => ({ entities: [{ name: "Anele Sotashe", type: "PERSON", description: desc }], relations: [] });
     // Path is no longer an identity qualifier: a real person appearing in two docs is ONE node (the whole point
     // of a cross-document graph). The cost is that two GENUINELY-different same-named people also merge — v1's
     // PERSON-merge audit (a person whose APPEARED_IN chunks span >1 source) surfaces that, so it's visible not silent.
-    await mapExtraction(store, emb, meta, p("a grape farmer in the Boland near Paarl"), new Map(), { id: ch, label: "cA" });
-    await mapExtraction(store, emb, meta, p("a fisherman mending nets in Lambert's Bay"), new Map(), { id: ch, label: "cB" });
-    expect(store.allNodes().filter((n) => n.type === "PERSON").length).toBe(1);
+    await mapExtraction(store, emb, meta, p("a grape farmer in the Boland near Paarl"), new Map(), { id: chA, label: "cA" });
+    await mapExtraction(store, emb, meta, p("a fisherman mending nets in Lambert's Bay"), new Map(), { id: chB, label: "cB" });
+    const people = store.allNodes().filter((n) => n.type === "PERSON");
+    expect(people.length).toBe(1); // ONE merged node...
+    const appearances = store.getEdges(people[0]!.id).filter((e) => e.kind === "APPEARED_IN");
+    expect(appearances.length).toBe(2); // ...that genuinely spans BOTH chunks (this is the audit signal for slice 3)
   });
 
   it("type-blind homographs split: PLACE Java and CONCEPT Java become two nodes", async () => {
