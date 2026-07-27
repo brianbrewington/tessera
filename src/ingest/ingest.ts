@@ -23,6 +23,7 @@ export interface IngestResult {
   parseFailures: number; // chunks whose model reply couldn't be parsed
   emptyChunks: number; // chunks that parsed but extracted nothing
   reused: number; // chunks skipped because they were already extracted (deterministic chunk identity)
+  skipped: boolean; // the whole file was skipped (already ingested complete — zero writes)
 }
 
 // reextract: bypass the chunk memo (re-run extraction even for unchanged chunks) — use when the extraction
@@ -31,7 +32,7 @@ export async function ingestFile(
   graph: Graph,
   extractor: Extractor,
   path: string,
-  opts: { reextract?: boolean } = {},
+  opts: { reextract?: boolean; extractorModel?: string } = {},
 ): Promise<IngestResult> {
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
   const doc = readDoc(path);
@@ -39,6 +40,14 @@ export async function ingestFile(
   // Content-addressed identity: the document IS its content. Two byte-identical files (rolled up, on another
   // machine, behind a networked mount) dedup to one SOURCE; path is provenance only, never identity.
   const srcHash = docContentHash(doc.text);
+
+  // File-level skip: an unchanged doc already ingested to completion is a true no-op — no re-embed / re-putNode
+  // churn (a chunk-memo hit alone would still re-embed every chunk). Gated on status 'complete', so a prior
+  // 'partial'/'read_error' falls through and re-ingests (failed chunks retry via the chunk memo).
+  if (!opts.reextract && graph.store.getIngestedSource(srcHash)?.status === "complete") {
+    const prior = graph.store.getIngestedSource(srcHash)!;
+    return { source: doc.source, title: doc.title, chunks: prior.chunkCount, entities: 0, edges: 0, parseFailures: 0, emptyChunks: 0, reused: prior.chunkCount, skipped: true };
+  }
 
   // SOURCE node — identity is the doc CONTENT hash (title/path are display/provenance); re-ingesting the same
   // content reinforces the same source.
@@ -98,5 +107,12 @@ export async function ingestFile(
     if (parsed) graph.store.markExtracted(chunkNode.id);
   }
 
-  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused };
+  // Record the file-level manifest: 'complete' unless a chunk failed to parse (then 'partial' → re-ingested
+  // next run so the failed chunks retry). This is what a corpus re-run reads to skip unchanged docs.
+  graph.store.recordIngestedSource({
+    contentHash: srcHash, path: doc.source, title: doc.title,
+    status: parseFailures > 0 ? "partial" : "complete",
+    chunkCount: chunks.length, parseFailures, extractorModel: opts.extractorModel ?? null, at: Date.now(),
+  });
+  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused, skipped: false };
 }

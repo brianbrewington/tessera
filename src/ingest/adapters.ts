@@ -1,7 +1,7 @@
 // Ingest adapters — read a source file into raw text + a title, behind one interface. Tracer bullet ships
 // txt + md only; PDF/docx/.odp(.pptx)/image are backlog, each a new impl behind this same `readDoc` seam.
-import { readFileSync } from "node:fs";
-import { basename, extname, resolve } from "node:path";
+import { readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { basename, extname, resolve, join } from "node:path";
 
 export interface Doc {
   source: string; // stable id (the path)
@@ -14,6 +14,44 @@ const SUPPORTED = new Set([".txt", ".md", ".markdown", ".text"]);
 
 export function isSupported(path: string): boolean {
   return SUPPORTED.has(extname(path).toLowerCase());
+}
+
+// Directories not descended into during a corpus walk (VCS / dependency / tool dirs) — and any dotdir.
+const SKIP_DIRS = new Set([".git", "node_modules", ".obsidian", ".trash"]);
+
+// Expand a list of files/directories into the sorted, deduped set of supported docs to ingest. Recursive by
+// default; skips hidden and well-known non-content dirs; follows symlinks with a realpath cycle-guard (a
+// symlinked duplicate resolves to one entry, and identity is content-addressed so it would dedup regardless).
+// Deterministic order (sorted realpaths) so a corpus run is reproducible.
+export function collectDocs(paths: string[], opts: { recursive?: boolean } = {}): string[] {
+  const recursive = opts.recursive !== false;
+  const seenDirs = new Set<string>();
+  const out = new Set<string>();
+  const walkDir = (dir: string): void => {
+    if (seenDirs.has(dir)) return; // symlink cycle / re-entry guard (dir is a realpath)
+    seenDirs.add(dir);
+    for (const entry of readdirSync(dir).sort()) {
+      const child = join(dir, entry);
+      let real: string;
+      try { real = realpathSync(child); } catch { continue; } // dangling symlink etc.
+      let st;
+      try { st = statSync(real); } catch { continue; }
+      if (st.isDirectory()) {
+        if (recursive && !entry.startsWith(".") && !SKIP_DIRS.has(entry)) walkDir(real);
+      } else if (isSupported(child)) {
+        out.add(real);
+      }
+    }
+  };
+  for (const p of paths) {
+    let real: string;
+    try { real = realpathSync(p); } catch { continue; } // missing path: silently drop here; caller reports the gap
+    let st;
+    try { st = statSync(real); } catch { continue; }
+    if (st.isDirectory()) walkDir(real);
+    else if (isSupported(p)) out.add(real);
+  }
+  return [...out].sort();
 }
 
 export function readDoc(path: string): Doc {

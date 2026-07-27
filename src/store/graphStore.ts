@@ -488,6 +488,31 @@ export class GraphStore {
   isExtracted(chunkId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM extracted_chunks WHERE chunk_id = ?").get(chunkId);
   }
+
+  // Ingest manifest (see ddl `ingest_sources`). File-level record keyed on doc content hash — lets a corpus
+  // re-run skip an unchanged doc with zero writes, and gates the skip on status='complete' so a partially-
+  // failed ingest re-enters rather than freezing. `path`/`title` are metadata (a moved file is same content).
+  getIngestedSource(contentHash: string): { status: string; chunkCount: number; parseFailures: number; path: string | null } | null {
+    const r = this.db
+      .prepare("SELECT status, chunk_count AS chunkCount, parse_failures AS parseFailures, path FROM ingest_sources WHERE content_hash = ?")
+      .get(contentHash) as { status: string; chunkCount: number; parseFailures: number; path: string | null } | undefined;
+    return r ?? null;
+  }
+  recordIngestedSource(rec: {
+    contentHash: string; path: string | null; title: string | null;
+    status: "complete" | "partial" | "read_error"; chunkCount: number; parseFailures: number;
+    extractorModel: string | null; at: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO ingest_sources (content_hash, path, title, status, chunk_count, parse_failures, extractor_model, ingested_at)
+         VALUES (@contentHash, @path, @title, @status, @chunkCount, @parseFailures, @extractorModel, @at)
+         ON CONFLICT(content_hash) DO UPDATE SET
+           path=@path, title=@title, status=@status, chunk_count=@chunkCount,
+           parse_failures=@parseFailures, extractor_model=@extractorModel, ingested_at=@at`,
+      )
+      .run(rec);
+  }
   countAssertions(edgeId: string): number {
     return (
       this.db.prepare("SELECT count(*) AS n FROM edge_assertions WHERE edge_id = ?").get(edgeId) as { n: number }
