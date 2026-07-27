@@ -37,6 +37,44 @@ within a single call, fewer chunks, less overlap-driven duplicate-node load), wh
 - **Store hardening**: promote-breaker (no-brick), `promoteAssertion`, prune-cascade, reinforce/decay commutative.
 - **Prominence pyramid / `getTile`**: semantic-zoom tiling for the viewer.
 
+## Entity dedup at CREATION time (two-gate) — the Connector's key finding (Brian)
+The hardened Connector's dry-run found its highest-cosine candidate band dominated by un-deduplicated
+near-duplicate ENTITIES ("Khoi Families ~ Khoi families", "Stellenbosch Estates ~ Stellenbosch Wine Estates",
+"Camera ~ Father's Camera") — an entity-resolution job leaking into edge-proposal, and one even survived. Brian:
+dedup should run at ENTITY CREATION time (in the mapper/putNode path), not as a pre-Connector pass — so near-dups
+never become separate nodes in the first place. Right direction; but **load-bearing caution:** naive
+cosine-at-creation is EXACTLY what we disabled (`nearDupMerge:false`) because it over-merged catastrophically
+(0.85 → "ANN" swallowed 92 entities). So creation-time dedup MUST be two-gate, in two layers of very different risk:
+- **Layer 1 (cheap, safe, deterministic — do first):** stronger string/type reconciliation. Case/whitespace
+  variants should already merge via `norm()`; if "Khoi Families"/"Khoi families" became two nodes, the culprit is
+  KI-3 type-jitter (same name, different extracted TYPE → different identity prefix → two nodes). Reconcile the
+  type (vote within a doc / at creation). Low over-merge risk; validatable even on the synthetic graph.
+- **Layer 2 (bigger, careful):** an embedding near-dup CANDIDATE at `putNode` → **LLM-verify the merge** before
+  collapsing (reuse the Connector's verifier in `scripts/connect.ts`). NEVER merge on geometry alone — geometry ≠
+  identity is the governing lesson, and the Connector's non-monotonic reject curve just re-proved it. Tune only on
+  a real corpus. Then the Connector runs on an already-clean node set (dedup precedes it — that's the ordering).
+Composes with the item below + KI-3.
+
+## Connector — before the first REAL-corpus run (cross-review fast-follows, Codex + Fable)
+The merge-blocking findings are fixed (de-anchor gate now enforced via `reasonIsAnchored`, cap clamped in the
+core, `measureCosineDistribution` stride-sampled, same-family refused in `runConnector`). These three are safe to
+defer only because the Connector won't run on a real corpus until creation-time dedup lands (above) — do them
+first when it does:
+- **kNN slots eaten by provenance vectors.** `propose` fetches `k+1` from `vec_node_quarantine`, but chunks and
+  documents live in that same index, and an entity's nearest neighbors prominently include its own chunks — so
+  real-entity recall is silently unpredictable (visible only as a large `blockedSelfOrProvenance`). Over-fetch
+  (`k×3`-ish) or filter provenance in the query, not after. (Behavior change — re-baseline the propose tests.)
+- **No transport-error handling mid-run.** `OllamaChat.complete` throws on network/non-OK; the evaluate loop has no
+  try/catch, so one flaky call late in a run loses every paid-for verdict, and in `--commit` can leave edges
+  committed with no sidecar. Wrap per-candidate; persist partial progress.
+- **Parse-failure folded into `verifierNo`.** A malformed/undelivered reply is counted as "verifier said no,"
+  skewing the reject-rate-by-band curve (the geometry≠quality test). Give it its own counter.
+- **`buildNodeContext` trusts any `APPEARED_IN` target as a chunk** without a `subtype` check — benign today (motif
+  hubs have null description) but a described hub would be fed to the verifier as a source excerpt. One check.
+- **Watch (store policy, not the Connector):** `graphStore.putEdge` stores `expert_surprise = f(endpoint-cosine)`
+  on every committed assertion — geometry re-enters as a stored per-assertion score. Harmless until something
+  downstream ranks by surprise; if it does, geometry is back in the deciding seat through the side door.
+
 ## Cross-persona dedup + resonance tuning
 Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~0.92 (0.85 catastrophically
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,

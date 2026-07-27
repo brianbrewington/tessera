@@ -18,7 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <file.md|.txt> [...] [--reextract]\n  tessera view <name>\n  tessera report <name>");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <file.md|.txt> [...] [--reextract]\n  tessera view <name>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]");
   process.exit(1);
 }
 
@@ -61,6 +61,14 @@ async function main(): Promise<void> {
       const db = join(graphDir(name), "graph.db");
       if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
       printScorecard(report(db));
+      break;
+    }
+    case "connect": {
+      // The hardened cross-document Connector (§3.3). Delegates to scripts/connect.ts, which owns the
+      // dry-run/commit split, the diverse-family verifier+checker, and the sidecar.
+      if (!args[0]) usage();
+      const { connectCli } = await import("./connect.js");
+      await connectCli(args);
       break;
     }
     default:
