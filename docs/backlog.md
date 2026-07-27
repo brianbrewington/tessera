@@ -90,19 +90,27 @@ identity change amplified an extraction gap. Options, in order of preference:
    descriptions/embeddings — the general answer, needed anyway.
 3. Do NOT re-introduce path qualification (Brian's steer stands). A *content*-based subject qualifier for bare
    relational terms only would be a targeted middle path if 1+2 prove insufficient.
-**This is decision-relevant to merging feat/corpus-ingest → main:** the persona graph currently conflates
-relatives. Brian to weigh: merge now (audit makes it visible; fix as I1) vs. fix extraction first.
+
+**Brian's design direction (2026-07-27, "not a rush — needs careful design"):** *"maybe the question is dedupe
+on ingest needing an edge and a node pair. So it's 'Bob', 'related to Bob' (edge), 'Grandmother'?"* — i.e. a
+relational person's identity is disambiguated by the (subject, relation) EDGE, not the bare name alone: the
+node "Grandmother" is only "the same" when it shares the same subject-edge ("Bob's grandmother"). Dedup keyed
+on (node, connecting-edge-to-a-named-anchor), so "Bob → related-to → Grandmother" and "Thabo → related-to →
+Grandmother" stay two nodes. Careful design needed — interacts with how the mapper resolves relation endpoints
+and with the disambiguation layer above. Decision MADE: merged to main as-is (graph usable; audit makes the
+over-merge visible); this is the eventual fix, unhurried.
 
 ## Cross-persona dedup + resonance tuning
 Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~0.92 (0.85 catastrophically
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,
 two-gate LLM-verify. Reuse `analysis/entity_resolution.py` (fix its greedy-centroid + shortest-canonical bug).
 
-## Identity-scheme convergence (landmine)
-`persona.ts` builds node identity as `name [sourceKey]` — a DIFFERENT scheme from the mapper's tab-delimited
-`<type>\t<name>[\t<sourceKey>]`. If a persona-path graph and a mapper-ingest graph ever share a store, the "same"
-entity gets two nodes and never dedups. Pick one identity contract (the mapper's is the reviewed one) and route
-`persona.ts` through it, or explicitly namespace the two so the divergence is intentional, not accidental.
+## Identity-scheme convergence (landmine) — RESOLVED 2026-07-27
+`persona.ts` (the old `<name> [sourceKey]` scheme) was the divergent identity landmine. The general subject-
+aware `tessera ingest` path supersedes it, so `persona.ts`, `scripts/ingest-personas.ts`, and their tests were
+**deleted** (Brian: deprecate if unused — it was unused by the main flow). One identity contract remains: the
+mapper's content-addressed scheme. (Recoverable from git history if the motif/relationship-expansion ideas in
+the old pipeline are ever wanted.)
 
 ## Viewer chrome — the larger frame (deferred surfaces + seams to hold)
 From the Claude Design handoff (`docs/viewer-answers.md` has the full Q&A). Tracer bullet = the detail panel +
