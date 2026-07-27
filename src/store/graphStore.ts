@@ -22,6 +22,18 @@ import {
   type NodeType,
   type Origin,
 } from "../schema.js";
+import {
+  buildAdjacency,
+  pathsBetween as findPaths,
+  connectorsOf as findConnectors,
+  affinity as computeAffinity,
+  type Adjacency,
+  type WeightedPath,
+  type Connector,
+  type PathsOptions,
+  type ConnectorsOptions,
+  type AffinityOptions,
+} from "../graph/paths.js";
 
 const DEDUP_COSINE = 0.99; // secondary near-dup threshold (primary = content_hash)
 
@@ -427,6 +439,34 @@ export class GraphStore {
       .filter((e) => seen.has(e.from_id) && seen.has(e.to_id))
       .map(hydrateEdge);
     return { nodes, edges };
+  }
+
+  // --- Weighted intersection queries (src/graph/paths.ts): "how are these connected, how strongly?" ---
+  // The adjacency is built fresh from the current edge set each call — cheap relative to the LLM work
+  // around it, and it keeps these reads stateless (no cache to invalidate on a write).
+  private connectiveAdjacency(kinds?: EdgeKind[]): Adjacency {
+    return buildAdjacency(this.allEdges(), kinds ? { kinds } : {});
+  }
+
+  // Ranked weighted paths a→b over the connective spine (bottleneck strength). Each result carries the
+  // hydrated node chain alongside the numeric strength/hops so callers get names, not just ids.
+  pathsBetween(a: string, b: string, opts: PathsOptions & { kinds?: EdgeKind[] } = {}): (WeightedPath & { path: NodeRecord[] })[] {
+    const adj = this.connectiveAdjacency(opts.kinds);
+    return findPaths(adj, a, b, opts).map((p) => ({
+      ...p,
+      path: p.nodes.map((id) => this.getNode(id)).filter((n): n is NodeRecord => n !== null),
+    }));
+  }
+
+  // The shared intermediates that bind a set of seeds, ranked rare-bridge-first (see connectorsOf).
+  connectorsOf(seeds: string[], opts: ConnectorsOptions & { kinds?: EdgeKind[] } = {}): (Connector & { node: NodeRecord | null })[] {
+    const adj = this.connectiveAdjacency(opts.kinds);
+    return findConnectors(adj, seeds, opts).map((c) => ({ ...c, node: this.getNode(c.id) }));
+  }
+
+  // Scalar "how strongly connected" for organizing personas by pairwise closeness.
+  affinity(a: string, b: string, opts: AffinityOptions & { kinds?: EdgeKind[] } = {}): number {
+    return computeAffinity(this.connectiveAdjacency(opts.kinds), a, b, opts);
   }
 
   allNodes(): NodeRecord[] {
