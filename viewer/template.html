@@ -257,7 +257,7 @@ function settle(){
 // --- camera ---
 let scale=1, ox=W/2, oy=H/2;
 let camAnim=null; // scene fly-to tween (ease-out; cancelled by any manual pan/zoom)
-function flyTo(tox,toy,ts){ camAnim={ t0:performance.now(), dur:460, fox:ox, foy:oy, fs:scale, tox, toy, ts }; }
+function flyTo(tox,toy,ts,dur){ camAnim={ t0:performance.now(), dur:dur||460, fox:ox, foy:oy, fs:scale, tox, toy, ts }; } // 460 = snappy click-to-scene; tours pass a longer, cinematic glide
 function toScreen(x,y){ return [x*scale+ox, y*scale+oy]; }
 function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 
@@ -585,10 +585,10 @@ function persistScenes(){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)
 function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); return; }
   const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null };
   scenes.push(s); activeScene=s.id; persistScenes(); renderScenes(); }
-function restoreScene(s){ activeScene=s.id;
+function restoreScene(s,dur){ activeScene=s.id;
   if(!!s.showProv!==showProv){ showProv=!!s.showProv; rebuild(); }   // match the saved provenance filter
   if(s.node){ const n=byId.get(s.node); if(n&&NODES.includes(n)){ walk=[]; openNode(n,false); } else showIdle(); } else showIdle();
-  flyTo(s.ox, s.oy, s.scale); renderScenes(); }                       // animate the camera rather than cutting
+  flyTo(s.ox, s.oy, s.scale, dur); renderScenes(); }                  // animate the camera rather than cutting (dur: tours glide slower)
 function delScene(id){ scenes=scenes.filter(s=>s.id!==id); if(activeScene===id) activeScene=null; persistScenes(); renderScenes(); }
 function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChild(el('span','lab','scenes'));
   scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
@@ -607,7 +607,7 @@ loadScenes(); renderScenes();
 // v1: one implicit tour = all scenes in save order; narration lives on the scene. (Named tours + drag-reorder next.) ---
 let tour=null;
 function playTour(){ if(!scenes.length) return; tour={ i:-1, playing:true, timer:0 }; $('scenes').style.display='none'; tourGo(0); }
-function tourGo(i){ if(!tour) return; tour.i=i; restoreScene(scenes[i]); renderNow(); if(tour.playing) armAutoplay(); }
+function tourGo(i){ if(!tour) return; tour.i=i; restoreScene(scenes[i], 1200); renderNow(); if(tour.playing) armAutoplay(); } // 1200ms: a slow, cinematic glide between narrated stops
 function armAutoplay(){ clearTimeout(tour.timer); tour.timer=setTimeout(()=>{ if(tour.i<scenes.length-1) tourGo(tour.i+1); else { tour.playing=false; renderNow(); } }, 8000); }
 function tourStep(d){ if(!tour) return; clearTimeout(tour.timer); tourGo(Math.max(0,Math.min(scenes.length-1,tour.i+d))); }
 function tourToggle(){ if(!tour) return; tour.playing=!tour.playing; if(tour.playing) armAutoplay(); else clearTimeout(tour.timer); renderNow(); }
