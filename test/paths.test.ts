@@ -78,6 +78,12 @@ describe("pathsBetween — bottleneck-weighted paths", () => {
     expect(pathsBetween(adj, "A", "ZZZ")).toEqual([]);
   });
 
+  it("signals truncation when the explore cap is hit rather than pretending the result is the strongest set", () => {
+    let hit = false;
+    pathsBetween(adj, "A", "B", { exploreCap: 1, onTruncate: () => { hit = true; } });
+    expect(hit).toBe(true);
+  });
+
   it("reports the max intermediate degree (a hub-routing signal)", () => {
     // hub H touches A,B,X,Y (deg 4); via H is a hop through a hub, via C2 is not.
     const a2 = buildAdjacency([e("A", "H"), e("H", "B"), e("H", "X"), e("H", "Y"), e("A", "C2", "RELATED", 5), e("C2", "B", "RELATED", 5)]);
@@ -124,6 +130,30 @@ describe("connectorsOf — the shared middle, rare-bridge-first", () => {
     expect(connectorsOf(adj, ["P1"])).toEqual([]);
     expect(connectorsOf(adj, ["P1", "GHOST"])).toEqual([]); // GHOST not in graph → only 1 real seed
   });
+
+  it("does NOT count a node reachable only by transiting through another seed as a shared bridge", () => {
+    // C is a genuine shared neighbor of P1,P2. X hangs off P2 only; the sole route P1→X goes P1→P2→X,
+    // which transits the seed P2 — so X must bind P2 only, never P1. (Regression: Codex review, HIGH.)
+    const adj = buildAdjacency([e("P1", "C"), e("P2", "C"), e("P1", "P2"), e("P2", "X")]);
+    const cs = connectorsOf(adj, ["P1", "P2"], { maxHops: 2 });
+    const ids = cs.map((c) => c.id);
+    expect(ids).toContain("C");
+    expect(ids).not.toContain("X"); // would be a false positive if transit through P2 were allowed
+  });
+
+  it("credits a directly-shared connector by its NEAR route, not a stronger-but-farther hub route (ratio)", () => {
+    // Both seeds reach X directly (w4) and also via hub H (w5,w5). X's contribution must use the direct
+    // ratio (4/1 = 4), not the hub route's (5/2 = 2.5) — even though the hub route has the higher raw
+    // bottleneck. (Regression: Fable review #3 — reachStrength picked max-strength, disc divided by hops.)
+    const adj = buildAdjacency([
+      e("P1", "X", "RELATED", 4), e("P2", "X", "RELATED", 4), // direct: bottleneck 4, ratio 4/1 = 4
+      e("P1", "H", "RELATED", 5), e("P2", "H", "RELATED", 5), e("H", "X", "RELATED", 5), // via hub: bottleneck 5, ratio 5/2 = 2.5
+    ]);
+    const x = connectorsOf(adj, ["P1", "P2"], { maxHops: 2 }).find((c) => c.id === "X")!;
+    const disc = x.bridgeScore / x.distinctiveness; // recover Σ(strength/hops) over the two seeds
+    expect(disc).toBeCloseTo(8, 5); // 2 × direct ratio 4 — NOT 2 × 2.5 via the hub
+    expect(x.strengthSum).toBe(10); // raw bottleneck DOES take the stronger hub route: min(5,5)=5 per seed
+  });
 });
 
 describe("affinity — pairwise 'strongly connected' scalar", () => {
@@ -143,6 +173,16 @@ describe("affinity — pairwise 'strongly connected' scalar", () => {
   it("rewards more and stronger connecting paths (a richly-linked pair beats a thinly-linked one)", () => {
     const thin = buildAdjacency([e("A", "B", "RELATED", 1)]); // one weak direct edge
     expect(affinity(adj, "A", "B")).toBeGreaterThan(affinity(thin, "A", "B"));
+  });
+
+  it("stays symmetric even when the path search is truncated (endpoints canonicalized)", () => {
+    // A dense little graph where a tiny explore cap WILL truncate the DFS; canonicalization makes both
+    // argument orders explore the same region, so the scalar is identical. (Regression: Fable review #2.)
+    const dense = buildAdjacency([
+      e("A", "M1"), e("A", "M2"), e("A", "M3"), e("B", "M1"), e("B", "M2"), e("B", "M3"),
+      e("M1", "M2"), e("M2", "M3"), e("M1", "M3"),
+    ]);
+    expect(affinity(dense, "A", "B", { exploreCap: 2 })).toBe(affinity(dense, "B", "A", { exploreCap: 2 }));
   });
 });
 

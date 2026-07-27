@@ -60,12 +60,15 @@ function strFlag(args: string[], name: string): string | undefined {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 
-// positional args = everything that isn't a --flag or a flag's numeric value
+const VALUE_FLAGS = new Set(["--hops", "--topk", "--type"]); // flags that consume the following token
+// positional args = everything that isn't a --flag or a value-taking flag's value. Only known
+// value-flags swallow the next token, so an unknown/valueless flag can't silently eat a persona name.
 function positionals(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i]!.startsWith("--")) { i++; continue; } // skip flag + its value
-    out.push(args[i]!);
+    const a = args[i]!;
+    if (a.startsWith("--")) { if (VALUE_FLAGS.has(a)) i++; continue; }
+    out.push(a);
   }
   return out;
 }
@@ -83,7 +86,11 @@ export function pathsCli(args: string[]): void {
   try {
     const ia = resolve(store, a, wantType), ib = resolve(store, b, wantType);
     const na = label(store.getNode(ia)), nb = label(store.getNode(ib));
-    const paths = store.pathsBetween(ia, ib, { maxHops: hops, topK: topk });
+    const paths = store.pathsBetween(ia, ib, {
+      maxHops: hops,
+      topK: topk,
+      onTruncate: () => console.warn(`⚠  search hit its step cap at ${hops} hops — results may be incomplete; try a lower --hops.`),
+    });
     if (!paths.length) {
       console.log(`no connection within ${hops} hop(s) between ${na} and ${nb}`);
       return;
@@ -110,7 +117,7 @@ export function commonCli(args: string[]): void {
   const wantType = strFlag(args, "--type");
   const store = openStore(graph);
   try {
-    const ids = names.map((n) => resolve(store, n, wantType));
+    const ids = [...new Set(names.map((n) => resolve(store, n, wantType)))]; // dedup: two names for one node = one seed
     const connectors = store.connectorsOf(ids, { maxHops: hops });
     if (!connectors.length) {
       console.log(`no shared connectors within ${hops} hop(s) among ${names.join(", ")}`);
