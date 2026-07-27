@@ -18,7 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <file.md|.txt> [...] [--reextract]\n  tessera view <name>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <file.md|.txt> [...] [--reextract]\n  tessera view <name>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -69,6 +69,20 @@ async function main(): Promise<void> {
       if (!args[0]) usage();
       const { connectCli } = await import("./connect.js");
       await connectCli(args);
+      break;
+    }
+    case "paths": {
+      // Weighted intersection: the strongest chains connecting two personas (§ intersection queries).
+      if (!args[0]) usage();
+      const { pathsCli } = await import("./intersect.js");
+      pathsCli(args);
+      break;
+    }
+    case "common": {
+      // The shared intermediate nodes that bind a set of personas, ranked rare-bridge-first.
+      if (!args[0]) usage();
+      const { commonCli } = await import("./intersect.js");
+      commonCli(args);
       break;
     }
     default:
