@@ -30,9 +30,49 @@
   #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
     border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
   #tip .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); display:block; margin-bottom:3px; }
-  #help{ position:fixed; bottom:12px; left:16px; color:var(--faint); font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; pointer-events:none; }
-  #legend{ position:fixed; bottom:12px; right:16px; background:rgba(13,17,26,.86); border:1px solid var(--line);
+  #legend{ position:fixed; bottom:214px; left:14px; background:rgba(13,17,26,.86); border:1px solid var(--line);
     border-radius:10px; padding:9px 11px; font-size:11px; color:var(--dim); }
+  /* semantic-zoom chrome — kept on the LEFT so it clears the right-side panel */
+  #altrail{ position:fixed; top:62px; left:14px; width:200px; background:rgba(13,17,26,.72); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px 8px 18px; pointer-events:none; }
+  #altrail .r{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:2px 0; opacity:.38; transition:opacity .2s; }
+  #altrail .r.on{ opacity:1; }
+  #altrail .r .sb{ font-family:var(--mono); font-size:8.5px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase; }
+  #altrail .track{ position:absolute; left:9px; top:12px; bottom:12px; width:2px; background:var(--line-2); border-radius:2px; }
+  #altrail .dot{ position:absolute; left:6px; width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); transition:top .25s; }
+  #zcrumb{ position:fixed; top:16px; left:50%; transform:translateX(-50%); font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--dim); background:rgba(13,17,26,.7); border:1px solid var(--line); border-radius:99px; padding:5px 13px; pointer-events:none; }
+  #minimap{ position:fixed; bottom:14px; left:14px; width:268px; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  #minimap .mm-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line); }
+  #minimap canvas{ display:block; background:#080a0f; cursor:crosshair; }
+  /* scenes — saved views, bottom-center rack */
+  #scenes{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:6px;
+    background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:99px; padding:6px 10px; max-width:56vw; overflow-x:auto; }
+  #scenes .lab{ font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); flex:0 0 auto; }
+  #scenes .sc{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text); background:var(--surface-2); border:1px solid var(--line);
+    border-radius:99px; padding:4px 10px; cursor:pointer; white-space:nowrap; flex:0 0 auto; }
+  #scenes .sc:hover{ border-color:var(--accent); }
+  #scenes .sc.on{ background:rgba(122,162,247,.14); border-color:rgba(122,162,247,.4); color:#c8d8fc; }
+  #scenes .sc .x{ color:var(--faint); font-size:12px; line-height:1; }
+  #scenes .sc .x:hover{ color:var(--conflict); }
+  #scenes .add{ font-family:var(--mono); font-size:11px; color:var(--dim); background:var(--surface-3); border:1px solid var(--line-2); border-radius:99px; padding:4px 11px; cursor:pointer; flex:0 0 auto; }
+  #scenes .add:hover{ border-color:var(--accent); color:var(--text); }
+  #scenes input{ font:inherit; font-size:12px; background:var(--surface-3); border:1px solid var(--accent); border-radius:99px; padding:4px 11px; color:var(--text); width:150px; outline:none; }
+  /* tours — now-playing bar (violet = tour mode) */
+  #nowplaying{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); width:min(860px,86vw); display:none;
+    background:rgba(18,22,30,.95); border:1px solid rgba(187,154,247,.35); border-radius:14px; box-shadow:0 18px 60px rgba(0,0,0,.7); overflow:hidden; z-index:7; }
+  #nowplaying .prog{ display:flex; gap:2px; height:3px; }
+  #nowplaying .prog i{ flex:1 1 0; background:var(--surface-3); }
+  #nowplaying .prog i.on{ background:var(--tour); }
+  #nowplaying .body{ display:flex; align-items:center; gap:12px; padding:10px 14px; }
+  #nowplaying .ctrl{ display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+  #nowplaying .b2{ width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid var(--line-2); background:var(--surface-3); color:var(--text); font-size:12px; }
+  #nowplaying .b2.play{ width:42px; height:42px; background:var(--tour); color:#140f1e; border-color:var(--tour); font-size:14px; }
+  #nowplaying .mid{ flex:1 1 auto; min-width:0; }
+  #nowplaying .st{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--tour); margin-bottom:3px; }
+  #nowplaying textarea.narr{ font:inherit; font-size:15px; line-height:1.45; color:var(--text); background:transparent; border:none; outline:none; width:100%; resize:none; }
+  #nowplaying .exit{ flex:0 0 auto; color:var(--dim); cursor:pointer; font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+  #nowplaying .exit:hover{ color:var(--text); }
   #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
   #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
@@ -125,9 +165,13 @@
 <body>
 <canvas id="c"></canvas>
 <div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span></div>
+<div id="zcrumb"></div>
+<div id="altrail"><div class="track"></div><div class="dot" id="altdot"></div></div>
 <div id="tip"></div>
-<div id="help">scroll zoom · drag pan · click focus · right-click inspect · h provenance · esc close</div>
 <div id="legend"></div>
+<div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
+<div id="scenes"></div>
+<div id="nowplaying"></div>
 <div id="panel">
   <div class="p-head">
     <div class="sq" id="pback" title="back" style="display:none">‹</div>
@@ -168,7 +212,7 @@ function rebuild(){
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
-  settle(); buildLegend(); updateCounts();
+  settle(); computeBounds(); renderMMDots(); buildLegend(); updateCounts();
 }
 function updateCounts(){
   $('gname').textContent = GRAPH.name || 'graph';
@@ -212,14 +256,81 @@ function settle(){
 
 // --- camera ---
 let scale=1, ox=W/2, oy=H/2;
+let camAnim=null; // scene fly-to tween (ease-out; cancelled by any manual pan/zoom)
+function flyTo(tox,toy,ts){ camAnim={ t0:performance.now(), dur:460, fox:ox, foy:oy, fs:scale, tox, toy, ts }; }
 function toScreen(x,y){ return [x*scale+ox, y*scale+oy]; }
 function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 
 // --- interaction state (no node dragging) ---
 let hoverNode=null, hoverEdge=null, selected=null, panning=false, lastX=0, lastY=0, downX=0, downY=0;
 
+// --- semantic zoom: typography as altitude. The tier (from camera zoom) sets which nodes label AND how the type
+// reads — tracking is the altimeter (shrinks as you descend), family marks the register (serif=land, sans=
+// settlement, mono=evidence), ink contrast rises as you go lower. Continent cluster-labels are DEFERRED (no
+// clustering pass yet), so the ladder starts at country with landmark punch-through (the prominence budget).
+const FF={serif:'Georgia,ui-serif,serif', sans:'-apple-system,system-ui,sans-serif', mono:'ui-monospace,Menlo,monospace'};
+// `budget` = the prominence budget: how many labels the altitude affords. Small at the top (a few landmarks
+// stand in for the deferred community NAMES), growing as you descend — so a lone hub doesn't flood the serif.
+const TIERS=[
+  {name:'continent', zmax:0.8, deg:22, budget:4,  w:'300', size:27, fam:FF.serif, track:0.30, caps:1, ink:'rgba(230,233,239,.55)', sub:'clusters (soon)'},
+  {name:'country',   zmax:1.4, deg:14, budget:9,  w:'400', size:21, fam:FF.serif, track:0.18, caps:1, ink:'rgba(230,233,239,.85)', sub:'landmarks'},
+  {name:'region',    zmax:2.4, deg:10, budget:24, w:'600', size:15, fam:FF.sans,  track:0.13, caps:1, ink:'#b9c0d0', sub:'major hubs'},
+  {name:'city',      zmax:4.0, deg:7,  budget:48, w:'600', size:15, fam:FF.sans,  track:-0.01, title:1, ink:'#e6e9ef', sub:'hubs + type'},
+  {name:'district',  zmax:6.5, deg:2,  budget:90, w:'500', size:13, fam:FF.sans,  track:0, ink:'#cfd5e4', sub:'most nodes'},
+  {name:'building',  zmax:99,  deg:1,  budget:90, w:'400', size:12, fam:FF.mono,  track:0.02, ink:'#9aa3b8', sub:'reasons'},
+];
+function tierFor(s){ for(const t of TIERS) if(s<=t.zmax) return t; return TIERS[TIERS.length-1]; }
+const titleCase=s=>String(s||'').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+(function(){ const rail=$('altrail'); TIERS.forEach((t,i)=>{ const r=document.createElement('div'); r.className='r'; r.id='alt'+i;
+  const nm=document.createElement('span'); nm.textContent=t.name; nm.style.cssText='font-family:'+t.fam+';font-size:11px;color:'+t.ink;
+  const sb=document.createElement('span'); sb.className='sb'; sb.textContent=t.sub; r.appendChild(nm); r.appendChild(sb); rail.appendChild(r); }); })();
+let lastTi=-1;
+function updateChrome(ti){ for(let i=0;i<TIERS.length;i++) $('alt'+i).classList.toggle('on', i===ti);
+  const rows=$('altrail').querySelectorAll('.r'); if(rows[ti]) $('altdot').style.top=(rows[ti].offsetTop+rows[ti].offsetHeight/2-4)+'px';
+  $('zcrumb').textContent = TIERS.slice(0, ti+1).map(t=>t.name).join('  ›  ');
+}
+
+// --- minimap: whole graph small, with a live viewport box (click to jump, drag to pan) ---
+let bounds={minX:-300,maxX:300,minY:-300,maxY:300};
+function computeBounds(){ if(!NODES.length) return; let a=1e9,b=-1e9,c=1e9,d=-1e9;
+  for(const n of NODES){ if(n.x<a)a=n.x; if(n.x>b)b=n.x; if(n.y<c)c=n.y; if(n.y>d)d=n.y; }
+  const px=(b-a)*0.06+20, py=(d-c)*0.06+20; bounds={minX:a-px,maxX:b+px,minY:c-py,maxY:d+py}; }
+const mmc=$('mmc'), mmx=mmc.getContext('2d'), MMW=268, MMH=168;
+const mmDots=document.createElement('canvas'); mmDots.width=MMW; mmDots.height=MMH; const mmdx=mmDots.getContext('2d');
+function mmS(){ return Math.min(MMW/(bounds.maxX-bounds.minX), MMH/(bounds.maxY-bounds.minY)); }
+function toMM(x,y){ const s=mmS(); return [ (x-bounds.minX)*s + (MMW-(bounds.maxX-bounds.minX)*s)/2, (y-bounds.minY)*s + (MMH-(bounds.maxY-bounds.minY)*s)/2 ]; }
+function mmToWorld(px,py){ const s=mmS(); return [ (px-(MMW-(bounds.maxX-bounds.minX)*s)/2)/s+bounds.minX, (py-(MMH-(bounds.maxY-bounds.minY)*s)/2)/s+bounds.minY ]; }
+function renderMMDots(){ mmdx.clearRect(0,0,MMW,MMH);  // node dots are static between rebuilds → cache offscreen
+  for(const n of NODES){ const [x,y]=toMM(n.x,n.y); mmdx.fillStyle=colorFor(n); mmdx.globalAlpha=.8; mmdx.beginPath(); mmdx.arc(x,y,n.deg>=10?2:1.2,0,7); mmdx.fill(); }
+  mmdx.globalAlpha=1; }
+let lastZ='';
+function drawMinimap(){ mmx.clearRect(0,0,MMW,MMH); mmx.drawImage(mmDots,0,0);
+  const [wx0,wy0]=toWorld(0,0), [wx1,wy1]=toWorld(W,H); const [mx0,my0]=toMM(wx0,wy0), [mx1,my1]=toMM(wx1,wy1);
+  mmx.fillStyle='rgba(122,162,247,.09)'; mmx.fillRect(mx0,my0,mx1-mx0,my1-my0);
+  mmx.strokeStyle='#7aa2f7'; mmx.lineWidth=1.5; mmx.strokeRect(mx0,my0,mx1-mx0,my1-my0);
+  const z=scale.toFixed(2)+'×'; if(z!==lastZ){ $('mmzoom').textContent=z; lastZ=z; }
+}
+let mmDrag=false;
+function mmJump(ev){ const r=mmc.getBoundingClientRect(); const [wx,wy]=mmToWorld(ev.clientX-r.left, ev.clientY-r.top); ox=W/2-wx*scale; oy=H/2-wy*scale; }
+mmc.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; mmDrag=true; mmJump(ev); ev.stopPropagation(); });
+mmc.addEventListener('contextmenu', ev=> ev.preventDefault()); // right-click on the minimap shouldn't jump + menu
+addEventListener('mousemove', ev=>{ if(mmDrag) mmJump(ev); });
+addEventListener('mouseup', ()=>{ mmDrag=false; });
+addEventListener('blur', ()=>{ mmDrag=false; panning=false; }); // release if the mouseup landed off-window
+
 function draw(){
   ctx.clearRect(0,0,W,H);
+  if(camAnim){ const k=Math.min(1,(performance.now()-camAnim.t0)/camAnim.dur), e=1-Math.pow(1-k,3); // ease-out cubic
+    ox=camAnim.fox+(camAnim.tox-camAnim.fox)*e; oy=camAnim.foy+(camAnim.toy-camAnim.foy)*e; scale=camAnim.fs+(camAnim.ts-camAnim.fs)*e;
+    if(k>=1) camAnim=null; }
+  const tier=tierFor(scale), ti=TIERS.indexOf(tier);
+  if(ti>=3){ // city and lower: a faint aligned grid that scales with zoom (a floor to read motion against)
+    const step=96*scale, a=Math.min(0.055, 0.02+(ti-3)*0.018);
+    ctx.strokeStyle='rgba(139,147,167,'+a+')'; ctx.lineWidth=1;
+    const x0=((ox%step)+step)%step, y0=((oy%step)+step)%step; ctx.beginPath();
+    for(let x=x0;x<W;x+=step){ ctx.moveTo(x,0); ctx.lineTo(x,H); }
+    for(let y=y0;y<H;y+=step){ ctx.moveTo(0,y); ctx.lineTo(W,y); } ctx.stroke();
+  }
   const focusSet = selected ? new Set([selected.id, ...EDGES.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
   // Interim edge treatment: fade + thin when zoomed OUT (edges overlap into a hairball at moderate zoom), firm
   // up as you zoom in. The richer language (rank/weight/kind, bundling) is going to Claude Design.
@@ -246,15 +357,32 @@ function draw(){
     if(n===selected||n===hoverNode){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,rr,0,7); ctx.stroke(); }
     ctx.globalAlpha=1;
   }
-  ctx.font='12px -apple-system,sans-serif'; ctx.textAlign='center';
-  const lblFloor = Math.max(2, Math.min(9, maxDeg*0.5)); // one deg-39 subject shouldn't raise the bar so only IT labels
-  const showLabel = n => n===hoverNode || n===selected || n.deg >= lblFloor || (focusSet&&focusSet.has(n.id)&&scale>0.7);
-  for(const n of NODES){ if(!showLabel(n)) continue; if(focusSet && !focusSet.has(n.id)) continue;
-    const [x,y]=toScreen(n.x,n.y); const t=(n.label||'').slice(0,34);
-    ctx.fillStyle='rgba(11,14,20,0.75)'; const w=ctx.measureText(t).width;
-    ctx.fillRect(x-w/2-4, y+radius(n)+3, w+8, 15);
-    ctx.fillStyle='#e6e9ef'; ctx.fillText(t, x, y+radius(n)+14);
+  // labels by tier: which nodes label (degree budget for the altitude) + how the type reads. Landmarks
+  // (hover/selected/focus) always label; viewport-culled + capped so a low altitude doesn't flood.
+  // Type encodes PROMINENCE, not just camera altitude. A node that BELONGS at this tier (deg ≥ threshold) gets
+  // the tier's grand type; a punch-through node you merely selected/hovered that does NOT belong (a minor node)
+  // gets a muted focus style — so clicking a town at country zoom doesn't render it as a country. (Real cure for
+  // "one name for the group" at altitude is the deferred community labels; this keeps the metaphor honest meanwhile.)
+  const FOCUS={size:12.5, w:'500', fam:FF.sans, track:0, ink:'#dfe4ee'};
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  const always=n=> n===hoverNode||n===selected||(focusSet&&focusSet.has(n.id));
+  const vis0=NODES.filter(n=> !(focusSet&&!focusSet.has(n.id)))
+    .map(n=>{ const [x,y]=toScreen(n.x,n.y); return {n,x,y}; })
+    .filter(o=> o.x>-60&&o.x<W+60&&o.y>-30&&o.y<H+30);
+  const keep=vis0.filter(o=> always(o.n));  // landmarks/selection never evicted by the budget
+  const rest=vis0.filter(o=> !always(o.n) && o.n.deg>=tier.deg).sort((a,b)=> b.n.deg-a.n.deg).slice(0, Math.max(0, tier.budget-keep.length));
+  for(const {n,x,y} of keep.concat(rest)){
+    const T = (n.deg>=tier.deg) ? tier : FOCUS;   // belongs here → tier type; punch-through minor → muted focus
+    ctx.font=T.w+' '+T.size+'px '+T.fam;
+    try{ ctx.letterSpacing=((T.track||0)*T.size).toFixed(1)+'px'; }catch(e){}
+    let t=(n.label||''); if(T.caps) t=t.toUpperCase(); else if(T.title) t=titleCase(t); if(t.length>44) t=t.slice(0,43)+'…';
+    const by=y+radius(n)+4, w=ctx.measureText(t).width;
+    ctx.fillStyle='rgba(10,12,17,0.66)'; ctx.fillRect(x-w/2-4, by, w+8, T.size+4);
+    ctx.fillStyle=T.ink; ctx.fillText(t, x, by+2);
   }
+  try{ ctx.letterSpacing='0px'; }catch(e){} ctx.textBaseline='alphabetic';
+  drawMinimap();
+  if(ti!==lastTi){ updateChrome(ti); lastTi=ti; }
   requestAnimationFrame(draw);
 }
 
@@ -271,6 +399,7 @@ function edgeAt(px,py){ let best=null,bd=7;
 const tip=$('tip');
 cv.addEventListener('mousemove', ev=>{
   const px=ev.clientX, py=ev.clientY;
+  if(mmDrag){ tip.style.display='none'; hoverNode=hoverEdge=null; return; } // don't hover-flicker while dragging the minimap
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
   if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
@@ -282,7 +411,7 @@ cv.addEventListener('mousemove', ev=>{
   else tip.style.display='none';
   cv.style.cursor=(hoverNode||hoverEdge)?'pointer':'grab';
 });
-cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
+cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; camAnim=null; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
 addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
   if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):showIdle(); } }
@@ -290,8 +419,8 @@ addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
 // right-click = deep inspect (node or edge)
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
   if(n){ walk=[]; openNode(n,true); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) openEdge(e); });
-cv.addEventListener('wheel', ev=>{ ev.preventDefault(); const [wx,wy]=toWorld(ev.clientX,ev.clientY);
-  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.15,Math.min(6,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
+cv.addEventListener('wheel', ev=>{ ev.preventDefault(); camAnim=null; const [wx,wy]=toWorld(ev.clientX,ev.clientY);
+  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.12,Math.min(8,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
 // --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
 const panel=$('panel'), pscroll=$('pscroll'), pactions=$('pactions'), crumb=$('crumb');
@@ -367,7 +496,7 @@ function openNode(n, deep){
           const dot=el('span','cd'); dot.style.background=colorFor(node); nm.appendChild(dot);
           const lnk=el('span','lnk',node.label||node.id); lnk.onclick=()=>walkTo(node); nm.appendChild(lnk); c.appendChild(nm);
           const wb=el('div','wbar'), tr=el('div','track'); tr.style.width='34px'; const fl=el('div','fill'); fl.style.width=Math.max(6,Math.min(100,(w/4)*100))+'%'; tr.appendChild(fl); wb.appendChild(tr); wb.appendChild(el('span','wv','w '+w)); c.appendChild(wb);
-          reasons.forEach(rr=>c.appendChild(el('div','quote','“'+rr+'”'))); sec.appendChild(c); });
+          reasons.forEach(rr=>c.appendChild(el('div','quote',rr))); sec.appendChild(c); });
       } else {
         const chips=el('div','chips'), list=kinds[k], cap=14;
         list.slice(0,cap).forEach(({node})=>chips.appendChild(chipEl(node)));
@@ -386,12 +515,13 @@ function openNode(n, deep){
     if(deep){ provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); }); }
     // focus mode: the source titles are clickable → walk to the PARENT profile (the persona PERSON node) or the
     // SOURCE document node. This is the ONLY way off an orphan (a node with 0 semantic links, e.g. "Fertilizer Ratios").
-    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.name===title)||nodes.find(x=>x.subtype==='document'&&x.name===title);
+    // viewer nodes expose `label` + `group` (NOT name/subtype — those live in the store); match on those.
+    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.label===title)||nodes.find(x=>x.group==='document'&&x.label===title);
       const row=el('div','src'+(target?' src-link':''), title); if(target) row.onclick=()=>revealAndGo(target); card.appendChild(row); }); }
     ap.appendChild(card); pscroll.appendChild(ap); }
 
   pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
-  pactions.appendChild(mkBtn('Save as scene',null,null)); // scenes deferred → disabled placeholder
+  pactions.appendChild(mkBtn('Save as scene',null,()=>saveScene(n.label))); // saves the current view, named for this node
   pactions.appendChild(deep ? mkBtn('Collapse','ghost right',()=>openNode(n,false)) : mkBtn('Deep inspect →','ghost right',()=>openNode(n,true)));
 }
 
@@ -413,7 +543,7 @@ function openEdge(e){
 
   const rsec=el('div','section'); rsec.appendChild(el('div','slabel','Reasons recorded'));
   const ordered=[...reasons].reverse(), showN=ordered.slice(0,3); // newest first (assertions stored oldest→newest)
-  showN.forEach((rr,i)=>{ const c=el('div','rcard'+(i===0?' newest':'')); c.appendChild(el('div','quote','“'+rr+'”')); rsec.appendChild(c); });
+  showN.forEach((rr,i)=>{ const c=el('div','rcard'+(i===0?' newest':'')); c.appendChild(el('div','quote',rr)); rsec.appendChild(c); });
   if(ordered.length>showN.length) rsec.appendChild(el('div','src','+'+(ordered.length-showN.length)+' more'));
   if(!ordered.length) rsec.appendChild(el('div','quote','(no reason recorded)'));
   pscroll.appendChild(rsec);
@@ -441,7 +571,61 @@ function rerender(){ if(selected){ NODES.includes(selected)?openNode(selected,pa
 // ✕ / esc steps back: a selection → idle, and idle → fully hidden (so you can see the whole graph on a narrow window).
 function deselect(){ if(selected||curEdge) showIdle(); else if(panel.classList.contains('open')) panel.classList.remove('open'); }
 $('pback').onclick=back; $('pclose').onclick=deselect;
-addEventListener('keydown', e=>{ if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
+addEventListener('keydown', e=>{
+  if(e.target && (e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')){ if(e.key==='Escape') e.target.blur(); return; } // don't hijack typing
+  if(tour){ if(e.key==='Escape') exitTour(); else if(e.key==='ArrowRight') tourStep(1); else if(e.key==='ArrowLeft') tourStep(-1); else if(e.key===' '){ e.preventDefault(); tourToggle(); } return; } // ←/→ step · space pause · esc exit
+  if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
+
+// --- scenes: save the current view (camera + provenance filter + selected node) and fly back to it later.
+// Persisted per-graph in localStorage — the exported viewer is offline HTML, so that's the natural sidecar. ---
+const SKEY='tessera-scenes-'+(GRAPH.name||'graph');
+let scenes=[], activeScene=null;
+function loadScenes(){ try{ scenes=JSON.parse(localStorage.getItem(SKEY))||[]; }catch(e){ scenes=[]; } }
+function persistScenes(){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)); }catch(e){} }
+function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); return; }
+  const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null };
+  scenes.push(s); activeScene=s.id; persistScenes(); renderScenes(); }
+function restoreScene(s){ activeScene=s.id;
+  if(!!s.showProv!==showProv){ showProv=!!s.showProv; rebuild(); }   // match the saved provenance filter
+  if(s.node){ const n=byId.get(s.node); if(n&&NODES.includes(n)){ walk=[]; openNode(n,false); } else showIdle(); } else showIdle();
+  flyTo(s.ox, s.oy, s.scale); renderScenes(); }                       // animate the camera rather than cutting
+function delScene(id){ scenes=scenes.filter(s=>s.id!==id); if(activeScene===id) activeScene=null; persistScenes(); renderScenes(); }
+function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChild(el('span','lab','scenes'));
+  scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
+    const x=el('span','x','×'); x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
+    c.onclick=()=>restoreScene(s); box.appendChild(c); });
+  const add=el('span','add','+'); add.title='save this view as a scene'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
+    add.replaceWith(inp); inp.focus();
+    inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
+    inp.addEventListener('blur', ()=> saveScene(inp.value)); };
+  box.appendChild(add);
+  if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); box.appendChild(pl); }
+}
+loadScenes(); renderScenes();
+
+// --- tours: play the saved scenes as a guided walkthrough — the camera flies stop→stop, narration per stop.
+// v1: one implicit tour = all scenes in save order; narration lives on the scene. (Named tours + drag-reorder next.) ---
+let tour=null;
+function playTour(){ if(!scenes.length) return; tour={ i:-1, playing:true, timer:0 }; $('scenes').style.display='none'; tourGo(0); }
+function tourGo(i){ if(!tour) return; tour.i=i; restoreScene(scenes[i]); renderNow(); if(tour.playing) armAutoplay(); }
+function armAutoplay(){ clearTimeout(tour.timer); tour.timer=setTimeout(()=>{ if(tour.i<scenes.length-1) tourGo(tour.i+1); else { tour.playing=false; renderNow(); } }, 8000); }
+function tourStep(d){ if(!tour) return; clearTimeout(tour.timer); tourGo(Math.max(0,Math.min(scenes.length-1,tour.i+d))); }
+function tourToggle(){ if(!tour) return; tour.playing=!tour.playing; if(tour.playing) armAutoplay(); else clearTimeout(tour.timer); renderNow(); }
+function exitTour(){ if(tour){ clearTimeout(tour.timer); tour=null; } $('nowplaying').style.display='none'; $('scenes').style.display=''; renderScenes(); }
+function renderNow(){ const np=$('nowplaying'); np.style.display='block'; np.innerHTML='';
+  const prog=el('div','prog'); scenes.forEach((s,i)=> prog.appendChild(el('i', i<=tour.i?'on':''))); np.appendChild(prog);
+  const body=el('div','body'), ctrl=el('div','ctrl');
+  const prev=el('span','b2','◀'); prev.onclick=()=>tourStep(-1);
+  const pp=el('span','b2 play', tour.playing?'❙❙':'▶'); pp.onclick=()=>tourToggle();
+  const next=el('span','b2','▶'); next.onclick=()=>tourStep(1);
+  ctrl.append(prev,pp,next); body.appendChild(ctrl);
+  const mid=el('div','mid'), s=scenes[tour.i];
+  mid.appendChild(el('div','st','stop '+(tour.i+1)+' of '+scenes.length+'  ·  '+(s.name||'')));
+  const ta=document.createElement('textarea'); ta.className='narr'; ta.rows=2; ta.placeholder='add narration for this stop…'; ta.value=s.narr||'';
+  ta.oninput=()=>{ s.narr=ta.value; persistScenes(); }; mid.appendChild(ta); body.appendChild(mid);
+  const ex=el('span','exit','exit'); ex.onclick=()=>exitTour(); body.appendChild(ex);
+  np.appendChild(body);
+}
 
 rebuild(); showIdle(); draw();
 </script>
