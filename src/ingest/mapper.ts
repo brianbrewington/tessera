@@ -17,7 +17,6 @@ export async function mapExtraction(
   embedder: Embedder,
   meta: Meta,
   ex: Extraction,
-  source: string, // doc path — for PERSON source-qualification
   known: Map<string, string>, // entity name (normalized) -> node id, across a doc's chunks
   chunk: { id: string; label: string },
 ): Promise<{ entityCount: number; edgeCount: number }> {
@@ -35,7 +34,7 @@ export async function mapExtraction(
     // content never collapses distinct ids (place\tjava vs concept\tjava; source-qualified people). A name that
     // yields two TYPED nodes in one chunk is a homograph — tracked as multiple ids so relations don't miswire.
     const put = await store.putNode(
-      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name, source), name: e.name.trim(), description: e.description },
+      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name), name: e.name.trim(), description: e.description },
       meta, vec,
     );
     if (!put.reinforced) entityCount++;

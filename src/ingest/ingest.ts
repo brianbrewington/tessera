@@ -9,7 +9,7 @@ import type { Meta } from "../schema.js";
 import { readDoc, isSupported } from "./adapters.js";
 import { chunk as splitChunks } from "./chunker.js";
 import { mapExtraction } from "./mapper.js";
-import { sourceIdentity, chunkIdentity } from "../extract/identity.js";
+import { sourceIdentity, chunkIdentity, docContentHash } from "../extract/identity.js";
 
 // Ingest owns identity via content_hash of the mapper's identity string; the store's default (no cosine
 // near-dup merge) means similar CONTENT never collapses distinct identities — so putNode needs no opts here.
@@ -36,13 +36,17 @@ export async function ingestFile(
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
   const doc = readDoc(path);
   const meta: Meta = { actor: "ingest", cause: `ingest ${doc.source}` };
+  // Content-addressed identity: the document IS its content. Two byte-identical files (rolled up, on another
+  // machine, behind a networked mount) dedup to one SOURCE; path is provenance only, never identity.
+  const srcHash = docContentHash(doc.text);
 
-  // SOURCE node — identity is the PATH (title is display); a re-ingest reinforces the same source.
+  // SOURCE node — identity is the doc CONTENT hash (title/path are display/provenance); re-ingesting the same
+  // content reinforces the same source.
   const srcVec = await graph.embedder.embed(doc.title);
   const src = await graph.store.putNode(
     {
       type: "SOURCE", subtype: "document", origin: "ingest",
-      text: sourceIdentity(doc.source), name: doc.title, description: `Document: ${doc.title}`,
+      text: sourceIdentity(srcHash), name: doc.title, description: `Document: ${doc.title}`,
       provenance: { path: doc.source },
     },
     meta, srcVec,
@@ -60,7 +64,7 @@ export async function ingestFile(
     const chunkNode = await graph.store.putNode(
       {
         type: "SOURCE", subtype: "chunk", origin: "ingest",
-        text: chunkIdentity(doc.source, c.text), name: label, description: c.text,
+        text: chunkIdentity(srcHash, c.text), name: label, description: c.text,
         provenance: { path: doc.source, index: i },
       },
       meta, cvec,
@@ -86,7 +90,7 @@ export async function ingestFile(
     const { extraction, parsed } = await extractor.extract(c.text, { subject: doc.subject });
     if (!parsed) parseFailures++;
     else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
-    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, doc.source, known, { id: chunkNode.id, label });
+    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, known, { id: chunkNode.id, label });
     entities += r.entityCount;
     edges += r.edgeCount;
     // Mark complete only on a successful PARSE (empty-but-parsed counts as done → don't re-pay the LLM for a
