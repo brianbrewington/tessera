@@ -43,9 +43,10 @@ export async function ingestFile(
 
   // File-level skip: an unchanged doc already ingested to completion is a true no-op — no re-embed / re-putNode
   // churn (a chunk-memo hit alone would still re-embed every chunk). Gated on status 'complete', so a prior
-  // 'partial'/'read_error' falls through and re-ingests (failed chunks retry via the chunk memo).
-  if (!opts.reextract && graph.store.getIngestedSource(srcHash)?.status === "complete") {
-    const prior = graph.store.getIngestedSource(srcHash)!;
+  // 'partial' (a chunk failed to parse) falls through and re-ingests, with the chunk memo retrying only the
+  // failed chunks. A read-failure wrote no row → also re-enters here as new.
+  const prior = graph.store.getIngestedSource(srcHash);
+  if (!opts.reextract && prior?.status === "complete") {
     return { source: doc.source, title: doc.title, chunks: prior.chunkCount, entities: 0, edges: 0, parseFailures: 0, emptyChunks: 0, reused: prior.chunkCount, skipped: true };
   }
 

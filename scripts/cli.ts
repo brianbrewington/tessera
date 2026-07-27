@@ -6,12 +6,12 @@
 // Env: TESSERA_EXTRACT_MODEL (default qwen2.5:14b), TESSERA_EMBED_MODEL (default nomic-embed-text).
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { Graph } from "../src/graph.js";
 import { OllamaChat } from "../src/llm.js";
 import { LlmExtractor } from "../src/extract/extractor.js";
 import { ingestFile } from "../src/ingest/ingest.js";
-import { collectDocs, readDoc } from "../src/ingest/adapters.js";
+import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
 import { docContentHash } from "../src/extract/identity.js";
 import { exportViewer } from "./export-viewer.js";
 import { report, printScorecard } from "./ingest-report.js";
@@ -43,22 +43,45 @@ async function main(): Promise<void> {
       const recursive = !flags.has("--no-recursive");
       const [name, ...inputs] = args.filter((a) => !a.startsWith("--"));
       if (!name || inputs.length === 0) usage();
+
+      // Validate EXPLICIT inputs loudly — a path the user TYPED that's missing or unsupported must not vanish
+      // silently (directory-walk skips stay quiet; a named input resolving to nothing is a reported error).
+      let badInputs = 0;
+      for (const p of inputs) {
+        if (!existsSync(p)) { console.error(`  not found: ${p}`); badInputs++; }
+        else if (statSync(p).isFile() && !isSupported(p)) { console.error(`  unsupported (skipped): ${p}`); badInputs++; }
+      }
+
       const docs = collectDocs(inputs, { recursive });
-      if (docs.length === 0) { console.error("no supported (.md/.txt) files found in the given path(s)"); process.exit(1); }
+      if (docs.length === 0) {
+        console.error("no supported (.md/.txt) files found in the given path(s)");
+        process.exit(1);
+      }
       const extractorModel = process.env.TESSERA_EXTRACT_MODEL || "qwen2.5:14b";
-      const graph = Graph.open(name);
-      try {
-        if (dryRun) {
-          let nw = 0, rt = 0, sk = 0;
+
+      if (dryRun) {
+        // Never CREATE a graph in a dry run: consult the manifest only if the graph already exists; survive a
+        // per-file read error rather than aborting the whole plan; honor --reextract (would re-run, so "new").
+        const g = existsSync(join(graphDir(name), "graph.db")) ? Graph.open(name) : null;
+        try {
+          let nw = 0, rt = 0, sk = 0, err = 0;
           for (const f of docs) {
-            const prior = graph.store.getIngestedSource(docContentHash(readDoc(f).text));
-            const cls = !prior ? "new" : prior.status === "complete" ? "skip" : "retry";
-            if (cls === "new") nw++; else if (cls === "skip") sk++; else rt++;
+            let cls: string;
+            try {
+              const prior = g?.store.getIngestedSource(docContentHash(readDoc(f).text)) ?? null;
+              cls = reextract || !prior ? "new" : prior.status === "complete" ? "skip" : "retry";
+            } catch { cls = "ERR"; err++; }
+            if (cls === "new") nw++; else if (cls === "skip") sk++; else if (cls === "retry") rt++;
             console.log(`  ${cls.padEnd(5)} ${f}`);
           }
-          console.log(`\nplan: ${nw} new, ${rt} retry (prior partial), ${sk} unchanged — ${docs.length} file(s). (dry-run — no writes)`);
-          break; // finally closes the graph
-        }
+          console.log(`\nplan: ${nw} new, ${rt} retry (prior partial), ${sk} unchanged, ${err} unreadable, ${badInputs} bad input(s) — ${docs.length} file(s). (dry-run — no writes)`);
+        } finally { g?.close(); }
+        if (badInputs > 0) process.exitCode = 1;
+        break;
+      }
+
+      const graph = Graph.open(name);
+      try {
         const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
         let ingested = 0, skipped = 0, partial = 0, failed = 0, entities = 0, edges = 0;
         for (const f of docs) {
@@ -75,8 +98,8 @@ async function main(): Promise<void> {
             console.error(`FAILED   ${f}: ${e instanceof Error ? e.message : e}`);
           }
         }
-        console.log(`\n--- ${docs.length} file(s): ${ingested} ingested (${partial} partial), ${skipped} unchanged, ${failed} failed  ·  +${entities} entities, +${edges} edges ---`);
-        if (failed > 0) process.exitCode = 1; // surface partial failure to the shell, but finish the run
+        console.log(`\n--- ${docs.length} file(s): ${ingested} ingested (${partial} partial), ${skipped} unchanged, ${failed} failed, ${badInputs} bad input(s)  ·  +${entities} entities, +${edges} edges ---`);
+        if (failed > 0 || badInputs > 0) process.exitCode = 1; // surface partial failure / bad inputs to the shell, but finish the run
       } finally {
         graph.close();
       }

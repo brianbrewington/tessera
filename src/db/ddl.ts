@@ -71,8 +71,9 @@ CREATE TABLE IF NOT EXISTS extracted_chunks (
 -- Ingest manifest: one row per SOURCE content hash (identity is path-free, so content_hash is the key). Records
 -- the FILE-level ingest state so a whole-corpus re-run skips an unchanged doc with ZERO writes — a chunk-memo
 -- hit still re-embeds and re-putNodes every chunk, so the file-level skip is what makes a re-run truly no-op.
--- status='complete' gates the skip; a 'partial' (a chunk parse-failed) or 'read_error' row re-enters ingest so
--- failures are never frozen (the F1 review trap). path/title are metadata — a moved file is the same content.
+-- status='complete' gates the skip; a 'partial' (a chunk parse-failed) row re-enters ingest so failures are
+-- never frozen (the F1 review trap). A file that fails to READ writes no row at all → it retries as new next
+-- run (correct, and simpler than a read_error state nothing could key by hash). path/title are metadata.
 -- No liveness column: supersession is v1.5 (this v1 is additive).
 CREATE TABLE IF NOT EXISTS ingest_sources (
   content_hash    TEXT PRIMARY KEY,

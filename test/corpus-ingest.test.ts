@@ -114,4 +114,45 @@ describe("ingestFile — the file-level manifest skip", () => {
     expect(calls).toBeGreaterThan(after1); // the failed chunk retried
     store.close();
   });
+
+  it("on partial re-ingest the GOOD chunk is a memo hit and only the failed chunk retries (C2 coverage)", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    const good = JSON.stringify({ entities: [{ name: "Zulu", type: "CONCEPT", description: "z" }], relations: [] });
+    let calls = 0;
+    // Only the very first extraction call parses; every later call in this store returns garbage. So chunk 1
+    // completes+memoizes, the rest fail → 'partial'; on re-ingest chunk 1 is a memo hit (no call) and the
+    // failed chunks retry — the file-level skip does NOT shadow this because status is 'partial'.
+    const extractor = new LlmExtractor(new StubChat(() => { calls++; return calls === 1 ? good : "not json"; }));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-memohit-"));
+    const p = join(dir, "doc.md");
+    const block = (w: string): string => `${w} `.repeat(400).trim(); // ~2k chars → forces a multi-chunk split
+    writeFileSync(p, `# Doc\n\n${block("alpha")}\n\n${block("omega")}\n`);
+
+    const r1 = await ingestFile(g, extractor, p);
+    expect(r1.chunks).toBeGreaterThanOrEqual(2); // precondition: the doc split (else the test is moot)
+    expect(r1.parseFailures).toBeGreaterThanOrEqual(1);
+    const after1 = calls;
+
+    const r2 = await ingestFile(g, extractor, p);
+    expect(r2.skipped).toBe(false); // 'partial' → re-enters
+    expect(r2.reused).toBe(1); // exactly the one good chunk was memoized and reused
+    expect(calls - after1).toBe(r1.chunks - 1); // every NON-memoized chunk retried, and only those
+    store.close();
+  });
+
+  it("a CHANGED file is never stale-skipped: new content hash = new source; old source remains (append-only)", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: emb });
+    const g = Graph.attach(store, emb);
+    const extractor = new LlmExtractor(new StubChat(JSON.stringify({ entities: [{ name: "Q", type: "CONCEPT", description: "q" }], relations: [] })));
+    const dir = mkdtempSync(join(tmpdir(), "tessera-changed-"));
+    const p = join(dir, "doc.md");
+    writeFileSync(p, "# V1\n\nfirst version mentioning Q.\n");
+    expect((await ingestFile(g, extractor, p)).skipped).toBe(false);
+    writeFileSync(p, "# V2\n\nSECOND, materially different version, still about Q.\n"); // edit in place
+    const r2 = await ingestFile(g, extractor, p);
+    expect(r2.skipped).toBe(false); // changed content = new hash → re-ingested, the core manifest property
+    expect(store.allNodes().filter((n) => n.subtype === "document").length).toBe(2); // old + new coexist (v1 additive)
+    store.close();
+  });
 });

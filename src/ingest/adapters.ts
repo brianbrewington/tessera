@@ -38,8 +38,8 @@ export function collectDocs(paths: string[], opts: { recursive?: boolean } = {})
       try { st = statSync(real); } catch { continue; }
       if (st.isDirectory()) {
         if (recursive && !entry.startsWith(".") && !SKIP_DIRS.has(entry)) walkDir(real);
-      } else if (isSupported(child)) {
-        out.add(real);
+      } else if (isSupported(child) && !entry.startsWith(".")) {
+        out.add(real); // skip dotfiles during a walk (e.g. macOS `._foo.md` junk); an explicit path still works
       }
     }
   };

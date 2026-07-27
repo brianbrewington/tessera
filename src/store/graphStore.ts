@@ -500,7 +500,7 @@ export class GraphStore {
   }
   recordIngestedSource(rec: {
     contentHash: string; path: string | null; title: string | null;
-    status: "complete" | "partial" | "read_error"; chunkCount: number; parseFailures: number;
+    status: "complete" | "partial"; chunkCount: number; parseFailures: number;
     extractorModel: string | null; at: number;
   }): void {
     this.db
