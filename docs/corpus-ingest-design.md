@@ -30,14 +30,20 @@ cross-document Connector, run as a documented sequence (ingest stays ingest-only
 ## 3. Identity model — the change (highest-risk section)
 
 Today (`src/extract/identity.ts`), identity is path-anchored:
-- SOURCE = `source\t<sourceKey(path)>`
+- SOURCE = `source\t<path>` (the raw resolved path, un-hashed)
 - CHUNK  = `chunk\t<sourceKey(path)>\t<sha16(text)>`
 - PERSON = `person\t<name>\t<sourceKey(path)>` (source-qualified so two personas' "Father"s stay distinct)
 
 Proposed (content-addressed):
 - SOURCE = `source\t<sha256(normalized full doc text)>` — a document IS its content. Two identical files → one
-  source. An edited file → a *new* source (its liveness handled in §4).
-- CHUNK  = `chunk\t<sha16(chunk text)>` — drop the path prefix. Identical chunk text anywhere → one chunk.
+  source. An edited file → a *new* source.
+- CHUNK  = `chunk\t<source-content-hash>\t<sha16(chunk text)>` — **qualified by the SOURCE's content hash, not
+  its path.** Path-free, but NOT pure-content: extraction is subject-aware (`extract(text, {subject})`), so the
+  same boilerplate chunk in two different docs must extract *twice* (under each subject). A pure content-hash
+  chunk id would dedup them to one node, the memo would mark it extracted after doc A, and doc B's subject-
+  specific extraction would be silently dropped (both reviewers, P0). Source-content-qualifying fixes it:
+  identical docs across machines still dedup (same source hash → same chunk id); the same text in *different*
+  docs stays distinct. (The extraction memo key must include the same qualifier.)
 - PERSON = `person\t<name>` — **drop source-qualification.** Consistent with how CONCEPT/PLACE/etc. already key
   (`<type>\t<name>`), and safe here because subject-aware extraction already names relational people distinctly
   ("Boitumelo Sebola's Wife", not a bare "Wife"). Genuine same-name-different-person collisions are the job of
@@ -156,3 +162,60 @@ elapsed); non-zero exit if any file failed; `read_error` rows so the next run an
 5. Anything the soft-supersession model quietly breaks: the Connector's `expert_surprise`/reinforcement over a
    graph that now contains superseded assertions; the vec index returning superseded chunks in kNN (must the
    vec query filter liveness?).
+
+---
+
+## 12. FINAL v1 CUT (post-second-review + check-in) — this section governs
+
+Both second reviews (Codex + Fable) returned **NO-GO as originally written but GO on all four foundations**
+(content-addressed identity, soft supersession, query-time liveness, rebuild-not-migrate). The blocker was that
+soft-supersession/liveness touches ~every read path (SQL views, a Connector rework, vec over-fetch) and *still*
+can't fully un-corrupt reinforced node rows — roughly doubling v1 on a surface we had under-estimated. Brian's
+decision: **take the clean cut.** Liveness/supersession becomes its own later slice; v1 is the bounded plumbing.
+
+### v1 (GO) — bounded plumbing, no read-path changes beyond identity
+1. **Content-addressed identity** (§3, with the corrected source-content-qualified CHUNK id). Path is metadata.
+2. **Corpus ingest**: recursive directory intake (shell handles globs), **additive + content-dedup'd**. New
+   content ingested; already-seen content skipped (file-level, via the manifest — truly zero-write, not just a
+   memo hit). No supersession in v1 — an edited doc *adds* its new content; the old content remains (append-
+   only), made **visible** by the audit below rather than filtered.
+3. **Assertion provenance recorded, SET-valued** (must-fix #6): stamp each assertion with the chunk(s) that
+   ground it; accumulate on reinforce (the current dedup path skips insertion — it must instead add to the
+   grounding set). This is the enabler for the v1.5 liveness work and is nearly-free now, unrecoverable later.
+4. **PERSON merge-audit surface** (must-fix #7, Fable — the sharpest v1 add): because generated corpora are
+   *known* to collapse onto stock names (the Elara-Vance trap in this very workstream), dropping PERSON source-
+   qualification could silently over-merge. v1 ships detection, not just a deferred dedup layer: a `report`
+   line listing PERSON nodes whose `APPEARED_IN` chunks span >1 source, ranked by strength; and a reinforce log
+   entry stamped with the incoming source when it differs from the node's origin. Over-merge becomes an
+   inspectable list, not invisible corruption.
+5. **In-db `sources` manifest** (§7), keyed on content hash, path as metadata, per-file `status`
+   (`complete`/`partial`/`read_error`) gating the skip (must-fix: a `partial` file re-enters the chunk loop so
+   a failed extraction is never frozen).
+6. **Run-level failure accounting** (per-file try/catch, run id, run-end summary, non-zero exit).
+7. **Rebuild** existing graphs onto the new identity (honest cost: `graphs/big` re-pays full extraction — the
+   memo keys all change; keep old db files, don't port their mutation_logs). Verify `persona.ts`'s divergent
+   scheme is unified by this (not yet code-checked).
+
+### v1.5 (DEFERRED) — the liveness / supersession subsystem, as its own slice
+- Liveness flag + query-time filtering via SQL views (`live_assertions → live_edges → live_nodes`), applied
+  across the full read surface (`allNodes`/`allEdges`/`querySimilar`/`getSubgraph`/`getNeighbors`/`buildAdjacency`).
+- **Mark-and-sweep supersession** — NOT in v1. When designed, use the conservative rule (sweep only when a run
+  covers *every* root the graph has ingested from; partial runs only add) or a `run_files` sightings table;
+  the single last-seen `path` in §7 is provably insufficient (moved-file / multi-path / read-error false-
+  supersedes — must-fix #2).
+- **Connector rework** (must-fix #3): doc-membership from `ORIGINATED_FROM` edges (a content-deduped chunk can
+  belong to >1 source, so `provenance.path` is wrong), live-filtered inputs, and the all-assertions-superseded
+  re-proposal decision.
+- **vec over-fetch-then-filter** (must-fix #5): vec0 can't push a liveness predicate; post-filtering top-k
+  silently returns <k. Over-fetch then filter.
+- **Physical GC** of superseded content (vec tables grow monotonically until then — a known, stated v1 limit).
+
+### Known v1 limitations (stated, not hidden)
+- Edited docs accumulate stale content (append-only, no filtering yet) — **visible** via the PERSON audit and a
+  stale-source count in `report`, but present in query results until v1.5 lands.
+- Reinforce overwrites a node's description+embedding from the newest contributing chunk (`graphStore.ts`
+  ~186-191); if that chunk is later superseded (v1.5), the row keeps dead content and liveness filtering can't
+  revert it. Mitigation now: stamp the reinforce log with its grounding chunk. True fix (per-source description
+  provenance) is deferred with v1.5.
+- Node `strength`/`hebbian_weight` accumulate across all versions → the scorecard is slightly inflated vs a
+  pure live slice. Accepted for v1.
