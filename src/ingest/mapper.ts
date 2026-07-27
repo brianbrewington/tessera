@@ -1,8 +1,9 @@
-// Graph-mapper — one chunk's Extraction -> graph writes, per docs/ingest-model.md. Entities become typed
-// nodes with an identity string (hubs merge by type+name; PERSON source-qualified), first-class
-// name+description, embedded on their CONTENT (not the identity string), each linked APPEARED_IN its chunk.
-// Relations become canonicalized RELATED edges whose reason is the assertion. `known` gives node-reuse
-// across a doc's chunks. All writes go through GraphStore.
+// Graph-mapper — one chunk's Extraction -> graph writes, per docs/corpus-ingest-design.md. Entities become
+// typed nodes with a content-addressed identity string (hubs merge by type+name — PERSON too, no source/path
+// qualifier), first-class name+description, embedded on their CONTENT (not the identity string), each linked
+// APPEARED_IN its chunk. Relations become canonicalized RELATED edges whose reason is the assertion; the chunk
+// is passed as grounding so provenance is recorded. `known` gives node-reuse across a doc's chunks. All writes
+// go through GraphStore.
 import type { GraphStore } from "../store/graphStore.js";
 import type { Embedder } from "../embedder.js";
 import type { Meta } from "../schema.js";

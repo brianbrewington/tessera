@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS edge_assertions (
   edge_id        TEXT NOT NULL REFERENCES edges(id),
   reason         TEXT NOT NULL,
   origin         TEXT NOT NULL,
-  grounding      TEXT,
+  grounding      TEXT, -- legacy single-valued slot, written NULL; SET-valued provenance lives in assertion_sources
   expert_surprise INTEGER,
   status         TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','durable')),
   version        INTEGER NOT NULL DEFAULT 1

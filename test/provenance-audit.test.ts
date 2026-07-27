@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
+import { mapExtraction } from "../src/ingest/mapper.js";
+import type { Extraction } from "../src/extract/extractor.js";
 import { report } from "../scripts/ingest-report.js";
 
 const meta = { actor: "test", cause: "unit" };
@@ -34,6 +36,33 @@ describe("assertion provenance (set-valued)", () => {
     const a = await mk("A"), b = await mk("B");
     const e = await store.putEdge({ from: a, to: b, kind: "RELATED", reason: "some link", origin: "connector" }, meta); // no grounding
     expect(store.assertionSources(e.assertionId)).toEqual([]);
+    store.close();
+  });
+
+  it("re-grounding the same (assertion, chunk) pair is idempotent — one row (INSERT OR IGNORE)", async () => {
+    const store = new GraphStore({ path: ":memory:", embedder: new StubEmbedder(64) });
+    const mk = async (t: string): Promise<string> => (await store.putNode({ type: "CONCEPT", origin: "user", text: t, name: t }, meta)).id;
+    const a = await mk("A"), b = await mk("B"), c = await mk("chunk");
+    const e1 = await store.putEdge({ from: a, to: b, kind: "RELATED", reason: "same reason", origin: "ingest" }, meta, undefined, c);
+    await store.putEdge({ from: a, to: b, kind: "RELATED", reason: "same reason", origin: "ingest" }, meta, undefined, c); // identical re-ingest
+    expect(store.assertionSources(e1.assertionId)).toEqual([c]); // not [c, c]
+    store.close();
+  });
+
+  it("PRODUCTION PATH: mapExtraction threads the chunk as grounding onto the edges it writes", async () => {
+    // The feature's real caller. Without this, deleting the chunk.id arg in the mapper leaves every other test green.
+    const store = new GraphStore({ path: ":memory:", embedder: new StubEmbedder(64) });
+    const emb = new StubEmbedder(64);
+    const chunk = (await store.putNode({ type: "SOURCE", subtype: "chunk", origin: "ingest", text: "chunk\th\t1", name: "c1", description: "raw" }, meta)).id;
+    const ex: Extraction = {
+      entities: [{ name: "Ann", type: "PERSON", description: "a" }, { name: "Ben", type: "PERSON", description: "b" }],
+      relations: [{ source: "Ann", target: "Ben", reason: "grew up on the same street" }],
+    };
+    await mapExtraction(store, emb, meta, ex, new Map(), { id: chunk, label: "c1" });
+    const rel = store.allEdges().find((e) => e.kind === "RELATED")!;
+    const aids = store.assertionIdsForEdge(rel.id);
+    expect(aids.length).toBeGreaterThanOrEqual(1);
+    expect(store.assertionSources(aids[0]!)).toContain(chunk); // the mapper recorded provenance end-to-end
     store.close();
   });
 });

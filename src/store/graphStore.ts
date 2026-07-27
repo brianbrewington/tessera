@@ -373,6 +373,7 @@ export class GraphStore {
         polarity: pol,
         expert_surprise: surprise,
         reason_embedding_b64: reasonB64,
+        grounding: grounding ?? null, // the log is replay-sufficient (carries embeddings); provenance belongs in it too (FD3)
         created,
       });
       return { edgeId, assertionId, created };
@@ -522,6 +523,9 @@ export class GraphStore {
   // Provenance read (see ddl `assertion_sources`): the grounding node ids recorded for an assertion, sorted.
   assertionSources(assertionId: string): string[] {
     return (this.db.prepare("SELECT source_id FROM assertion_sources WHERE assertion_id = ? ORDER BY source_id").all(assertionId) as { source_id: string }[]).map((r) => r.source_id);
+  }
+  assertionIdsForEdge(edgeId: string): string[] {
+    return (this.db.prepare("SELECT id FROM edge_assertions WHERE edge_id = ?").all(edgeId) as { id: string }[]).map((r) => r.id);
   }
   countAssertions(edgeId: string): number {
     return (
