@@ -1,8 +1,9 @@
-// Graph-mapper — one chunk's Extraction -> graph writes, per docs/ingest-model.md. Entities become typed
-// nodes with an identity string (hubs merge by type+name; PERSON source-qualified), first-class
-// name+description, embedded on their CONTENT (not the identity string), each linked APPEARED_IN its chunk.
-// Relations become canonicalized RELATED edges whose reason is the assertion. `known` gives node-reuse
-// across a doc's chunks. All writes go through GraphStore.
+// Graph-mapper — one chunk's Extraction -> graph writes, per docs/corpus-ingest-design.md. Entities become
+// typed nodes with a content-addressed identity string (hubs merge by type+name — PERSON too, no source/path
+// qualifier), first-class name+description, embedded on their CONTENT (not the identity string), each linked
+// APPEARED_IN its chunk. Relations become canonicalized RELATED edges whose reason is the assertion; the chunk
+// is passed as grounding so provenance is recorded. `known` gives node-reuse across a doc's chunks. All writes
+// go through GraphStore.
 import type { GraphStore } from "../store/graphStore.js";
 import type { Embedder } from "../embedder.js";
 import type { Meta } from "../schema.js";
@@ -17,7 +18,6 @@ export async function mapExtraction(
   embedder: Embedder,
   meta: Meta,
   ex: Extraction,
-  source: string, // doc path — for PERSON source-qualification
   known: Map<string, string>, // entity name (normalized) -> node id, across a doc's chunks
   chunk: { id: string; label: string },
 ): Promise<{ entityCount: number; edgeCount: number }> {
@@ -35,7 +35,7 @@ export async function mapExtraction(
     // content never collapses distinct ids (place\tjava vs concept\tjava; source-qualified people). A name that
     // yields two TYPED nodes in one chunk is a homograph — tracked as multiple ids so relations don't miswire.
     const put = await store.putNode(
-      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name, source), name: e.name.trim(), description: e.description },
+      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name), name: e.name.trim(), description: e.description },
       meta, vec,
     );
     if (!put.reinforced) entityCount++;
@@ -44,7 +44,7 @@ export async function mapExtraction(
     here.set(key, ids);
     await store.putEdge(
       { from: put.id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin: "ingest" },
-      meta,
+      meta, undefined, chunk.id,
     );
   }
 
@@ -67,7 +67,7 @@ export async function mapExtraction(
     const b = resolve(r.target);
     if (!a || !b || a === b) continue; // dangling or ambiguous endpoint -> drop the edge, don't guess
     const [from, to] = canonical(a, b); // undirected RELATED — canonical endpoint order
-    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin: "ingest" }, meta);
+    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin: "ingest" }, meta, undefined, chunk.id);
     if (pe.created) edgeCount++; // count real new edges, not reinforcements (honest re-ingest reporting)
   }
 

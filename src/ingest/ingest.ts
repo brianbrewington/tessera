@@ -9,7 +9,7 @@ import type { Meta } from "../schema.js";
 import { readDoc, isSupported } from "./adapters.js";
 import { chunk as splitChunks } from "./chunker.js";
 import { mapExtraction } from "./mapper.js";
-import { sourceIdentity, chunkIdentity } from "../extract/identity.js";
+import { sourceIdentity, chunkIdentity, docContentHash } from "../extract/identity.js";
 
 // Ingest owns identity via content_hash of the mapper's identity string; the store's default (no cosine
 // near-dup merge) means similar CONTENT never collapses distinct identities — so putNode needs no opts here.
@@ -23,6 +23,7 @@ export interface IngestResult {
   parseFailures: number; // chunks whose model reply couldn't be parsed
   emptyChunks: number; // chunks that parsed but extracted nothing
   reused: number; // chunks skipped because they were already extracted (deterministic chunk identity)
+  skipped: boolean; // the whole file was skipped (already ingested complete — zero writes)
 }
 
 // reextract: bypass the chunk memo (re-run extraction even for unchanged chunks) — use when the extraction
@@ -31,18 +32,31 @@ export async function ingestFile(
   graph: Graph,
   extractor: Extractor,
   path: string,
-  opts: { reextract?: boolean } = {},
+  opts: { reextract?: boolean; extractorModel?: string } = {},
 ): Promise<IngestResult> {
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
   const doc = readDoc(path);
   const meta: Meta = { actor: "ingest", cause: `ingest ${doc.source}` };
+  // Content-addressed identity: the document IS its content. Two byte-identical files (rolled up, on another
+  // machine, behind a networked mount) dedup to one SOURCE; path is provenance only, never identity.
+  const srcHash = docContentHash(doc.text);
 
-  // SOURCE node — identity is the PATH (title is display); a re-ingest reinforces the same source.
+  // File-level skip: an unchanged doc already ingested to completion is a true no-op — no re-embed / re-putNode
+  // churn (a chunk-memo hit alone would still re-embed every chunk). Gated on status 'complete', so a prior
+  // 'partial' (a chunk failed to parse) falls through and re-ingests, with the chunk memo retrying only the
+  // failed chunks. A read-failure wrote no row → also re-enters here as new.
+  const prior = graph.store.getIngestedSource(srcHash);
+  if (!opts.reextract && prior?.status === "complete") {
+    return { source: doc.source, title: doc.title, chunks: prior.chunkCount, entities: 0, edges: 0, parseFailures: 0, emptyChunks: 0, reused: prior.chunkCount, skipped: true };
+  }
+
+  // SOURCE node — identity is the doc CONTENT hash (title/path are display/provenance); re-ingesting the same
+  // content reinforces the same source.
   const srcVec = await graph.embedder.embed(doc.title);
   const src = await graph.store.putNode(
     {
       type: "SOURCE", subtype: "document", origin: "ingest",
-      text: sourceIdentity(doc.source), name: doc.title, description: `Document: ${doc.title}`,
+      text: sourceIdentity(srcHash), name: doc.title, description: `Document: ${doc.title}`,
       provenance: { path: doc.source },
     },
     meta, srcVec,
@@ -60,7 +74,7 @@ export async function ingestFile(
     const chunkNode = await graph.store.putNode(
       {
         type: "SOURCE", subtype: "chunk", origin: "ingest",
-        text: chunkIdentity(doc.source, c.text), name: label, description: c.text,
+        text: chunkIdentity(srcHash, c.text), name: label, description: c.text,
         provenance: { path: doc.source, index: i },
       },
       meta, cvec,
@@ -86,7 +100,7 @@ export async function ingestFile(
     const { extraction, parsed } = await extractor.extract(c.text, { subject: doc.subject });
     if (!parsed) parseFailures++;
     else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
-    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, doc.source, known, { id: chunkNode.id, label });
+    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, known, { id: chunkNode.id, label });
     entities += r.entityCount;
     edges += r.edgeCount;
     // Mark complete only on a successful PARSE (empty-but-parsed counts as done → don't re-pay the LLM for a
@@ -94,5 +108,12 @@ export async function ingestFile(
     if (parsed) graph.store.markExtracted(chunkNode.id);
   }
 
-  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused };
+  // Record the file-level manifest: 'complete' unless a chunk failed to parse (then 'partial' → re-ingested
+  // next run so the failed chunks retry). This is what a corpus re-run reads to skip unchanged docs.
+  graph.store.recordIngestedSource({
+    contentHash: srcHash, path: doc.source, title: doc.title,
+    status: parseFailures > 0 ? "partial" : "complete",
+    chunkCount: chunks.length, parseFailures, extractorModel: opts.extractorModel ?? null, at: Date.now(),
+  });
+  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused, skipped: false };
 }

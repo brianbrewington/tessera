@@ -45,6 +45,7 @@ export interface Scorecard {
   bannedPhraseReasons: { reason: string }[];
   buzzwordHubs: { name: string; type: string }[];
   orphanEntities: number; orphanPct: number; // entities with no RELATED edge
+  mergedPersons: { name: string; sources: number; strength: number }[]; // PERSON nodes spanning >1 source doc (merge audit)
 }
 
 export function report(dbPath: string): Scorecard {
@@ -106,6 +107,26 @@ export function report(dbPath: string): Scorecard {
     const orphanEntities = entities.filter((n) => (degree.get(n.id) ?? 0) === 0).length;
     const pct = (a: number, b: number): number => (b === 0 ? 0 : Math.round((a / b) * 1000) / 10);
 
+    // PERSON-merge audit (v1): PERSON identity is type+name (no source qualifier), so a same-named person from
+    // two docs is ONE node — intended for a real recurring person, but a genuine same-name-different-person
+    // collision merges silently. Surface every PERSON whose APPEARED_IN chunks trace to MORE THAN ONE source
+    // document (ranked by span, then strength) so a human can eyeball whether a merge was right.
+    const chunkSource = new Map<string, string>(); // chunk id -> its source-document id
+    for (const e of edges) if (e.kind === "ORIGINATED_FROM") chunkSource.set(e.from, e.to);
+    const personSources = new Map<string, Set<string>>();
+    for (const e of edges) {
+      if (e.kind !== "APPEARED_IN" || nodeById.get(e.from)?.type !== "PERSON") continue;
+      const src = chunkSource.get(e.to);
+      if (!src) continue;
+      let set = personSources.get(e.from);
+      if (!set) personSources.set(e.from, (set = new Set()));
+      set.add(src);
+    }
+    const mergedPersons = [...personSources.entries()]
+      .filter(([, srcs]) => srcs.size > 1)
+      .map(([id, srcs]) => ({ name: nodeById.get(id)?.name ?? id, sources: srcs.size, strength: nodeById.get(id)?.strength ?? 0 }))
+      .sort((a, b) => b.sources - a.sources || b.strength - a.strength);
+
     return {
       docs, chunks, edges: edges.length, entities: entities.length,
       entitiesPerDoc: docs === 0 ? 0 : Math.round((entities.length / docs) * 10) / 10,
@@ -117,6 +138,7 @@ export function report(dbPath: string): Scorecard {
       bannedPhraseReasons,
       buzzwordHubs,
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
+      mergedPersons,
     };
   } finally {
     store.close();
@@ -142,6 +164,8 @@ export function printScorecard(sc: Scorecard): void {
   p(`buzzword hubs (NEGATIVE_CONSTRAINTS leaks): ${sc.buzzwordHubs.length}  — target 0`);
   for (const b of sc.buzzwordHubs.slice(0, 10)) p(`    ! ${b.name}  [${b.type}]`);
   p(`orphan entities (no RELATED edge): ${sc.orphanEntities}  (${sc.orphanPct}%)  — high = fragmentation`);
+  p(`PERSON-merge audit (nodes spanning >1 source doc): ${sc.mergedPersons.length}  — eyeball for wrong same-name merges`);
+  for (const m of sc.mergedPersons.slice(0, 10)) p(`    ~ ${m.name}  (${m.sources} sources, x${m.strength})`);
 }
 
 // Resolve a bare graph name to graphs/<name>/graph.db; otherwise treat the arg as a direct path.

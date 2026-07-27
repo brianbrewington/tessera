@@ -75,6 +75,24 @@ first when it does:
   on every committed assertion — geometry re-enters as a stored per-assertion score. Harmless until something
   downstream ranks by surprise; if it does, geometry is back in the deciding seat through the side door.
 
+## Relational-term over-merge under content-addressed PERSON identity (FOUND on the graphs/big rebuild)
+Content-addressed PERSON identity (`person\t<name>`, no source qualifier) is correct for a real recurring
+person, but the graphs/big rebuild's PERSON-merge audit surfaced the cost: **bare relational terms merge across
+personas** — "Grandmother" (3 source docs, strength 7), "Father" (3), "Mother" (2) collapsed into one node
+each, conflating every persona's relatives. Common given names (Thandi/Sipho/Thembi) also merged — some
+legitimate (Cissie Gool, a real shared Cape Town figure — a *correct* cross-doc merge), some collisions. The
+audit works (it caught this, visibly); the question is the fix. Root cause: subject-aware extraction is
+supposed to name relational people "<Subject>'s <Relation>" but emits bare "Grandmother" in many chunks, so the
+identity change amplified an extraction gap. Options, in order of preference:
+1. **Extraction fix (I1):** make subject-qualification reliable so a bare relational term never reaches the
+   mapper — the cleanest, addresses root cause. Measure against this audit.
+2. **Disambiguation/dedup layer** (already backlogged): split a wrongly-merged PERSON by clustering its
+   descriptions/embeddings — the general answer, needed anyway.
+3. Do NOT re-introduce path qualification (Brian's steer stands). A *content*-based subject qualifier for bare
+   relational terms only would be a targeted middle path if 1+2 prove insufficient.
+**This is decision-relevant to merging feat/corpus-ingest → main:** the persona graph currently conflates
+relatives. Brian to weigh: merge now (audit makes it visible; fix as I1) vs. fix extraction first.
+
 ## Cross-persona dedup + resonance tuning
 Do together, done right per `embeddings_experiments`: raise resonance 0.85 → ~0.92 (0.85 catastrophically
 over-merged — "ANN" swallowed 92 entities), string-normalize/block first, canonical-by-frequency not length,

@@ -303,6 +303,7 @@ export class GraphStore {
     input: PutEdgeInput,
     meta: Meta,
     reasonVector?: Float32Array,
+    grounding?: string, // node id (chunk/source) that produced this assertion — recorded set-valued (FD3)
   ): Promise<{ edgeId: string; assertionId: string; created: boolean }> {
     const inp = PutEdgeInput.parse(input);
     const m = Meta.parse(meta);
@@ -359,6 +360,11 @@ export class GraphStore {
           .prepare("INSERT INTO vec_assert_quarantine (assert_id, embedding) VALUES (?, ?)")
           .run(assertionId, toBlob(rvec));
       }
+      // Provenance (FD3): record the grounding node set-valued. Done even when the reason was a DUPLICATE
+      // (dupAssert) so a relationship re-asserted from another chunk accumulates both sources, not just the first.
+      if (grounding) {
+        this.db.prepare("INSERT OR IGNORE INTO assertion_sources (assertion_id, source_id) VALUES (?, ?)").run(assertionId, grounding);
+      }
 
       this.log(m, at, created ? "putEdge" : "reinforceEdge", edgeId, null, {
         edgeId,
@@ -367,6 +373,7 @@ export class GraphStore {
         polarity: pol,
         expert_surprise: surprise,
         reason_embedding_b64: reasonB64,
+        grounding: grounding ?? null, // the log is replay-sufficient (carries embeddings); provenance belongs in it too (FD3)
         created,
       });
       return { edgeId, assertionId, created };
@@ -487,6 +494,38 @@ export class GraphStore {
   }
   isExtracted(chunkId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM extracted_chunks WHERE chunk_id = ?").get(chunkId);
+  }
+
+  // Ingest manifest (see ddl `ingest_sources`). File-level record keyed on doc content hash — lets a corpus
+  // re-run skip an unchanged doc with zero writes, and gates the skip on status='complete' so a partially-
+  // failed ingest re-enters rather than freezing. `path`/`title` are metadata (a moved file is same content).
+  getIngestedSource(contentHash: string): { status: string; chunkCount: number; parseFailures: number; path: string | null } | null {
+    const r = this.db
+      .prepare("SELECT status, chunk_count AS chunkCount, parse_failures AS parseFailures, path FROM ingest_sources WHERE content_hash = ?")
+      .get(contentHash) as { status: string; chunkCount: number; parseFailures: number; path: string | null } | undefined;
+    return r ?? null;
+  }
+  recordIngestedSource(rec: {
+    contentHash: string; path: string | null; title: string | null;
+    status: "complete" | "partial"; chunkCount: number; parseFailures: number;
+    extractorModel: string | null; at: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO ingest_sources (content_hash, path, title, status, chunk_count, parse_failures, extractor_model, ingested_at)
+         VALUES (@contentHash, @path, @title, @status, @chunkCount, @parseFailures, @extractorModel, @at)
+         ON CONFLICT(content_hash) DO UPDATE SET
+           path=@path, title=@title, status=@status, chunk_count=@chunkCount,
+           parse_failures=@parseFailures, extractor_model=@extractorModel, ingested_at=@at`,
+      )
+      .run(rec);
+  }
+  // Provenance read (see ddl `assertion_sources`): the grounding node ids recorded for an assertion, sorted.
+  assertionSources(assertionId: string): string[] {
+    return (this.db.prepare("SELECT source_id FROM assertion_sources WHERE assertion_id = ? ORDER BY source_id").all(assertionId) as { source_id: string }[]).map((r) => r.source_id);
+  }
+  assertionIdsForEdge(edgeId: string): string[] {
+    return (this.db.prepare("SELECT id FROM edge_assertions WHERE edge_id = ?").all(edgeId) as { id: string }[]).map((r) => r.id);
   }
   countAssertions(edgeId: string): number {
     return (

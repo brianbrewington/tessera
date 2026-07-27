@@ -1,27 +1,34 @@
-// Identity policy (ingest-layer, per docs/ingest-model.md). The store dedups on content_hash(text); the
-// mapper constructs `text` as the identity string so the store stays domain-agnostic. Hubs merge by
-// type+name (the trope signal); PERSON is source-qualified so distinct same-named people stay distinct;
-// SOURCE is path-keyed; CHUNK is source+text-keyed (so re-ingesting a doc reinforces its chunks).
+// Identity policy (ingest-layer, per docs/corpus-ingest-design.md). The store dedups on
+// content_hash(text); the mapper constructs `text` as the identity string so the store stays
+// domain-agnostic. Identity is CONTENT-ADDRESSED — file path never appears (so identical content dedups
+// across machines / rolled-up / networked mounts). Hubs merge by type+name; PERSON is NOT source-qualified
+// (a real person in two docs is ONE node — same-name collisions are the dedup/disambiguation layer's job,
+// which path-qualification used to fight); SOURCE is its document's content hash; CHUNK is qualified by the
+// SOURCE's content hash (path-free, but not pure-content: keeps the same boilerplate chunk in two different
+// docs distinct, so subject-aware extraction runs once per doc rather than being silently memo-skipped).
 import { createHash } from "node:crypto";
 import type { EntityType } from "./extractor.js";
 
-export function sourceKey(source: string): string {
-  return createHash("sha256").update(source).digest("hex").slice(0, 8);
-}
 const norm = (s: string): string => s.trim().toLowerCase();
 const sha16 = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 16);
+const sha32 = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 
-/** identity string (node.text) for an extracted entity. */
-export function entityIdentity(type: EntityType, name: string, source: string): string {
-  return type === "PERSON"
-    ? `person\t${norm(name)}\t${sourceKey(source)}`
-    : `${type.toLowerCase()}\t${norm(name)}`;
+/** Content hash of a whole document's text — the path-free anchor for SOURCE and CHUNK identity. */
+export function docContentHash(text: string): string {
+  return sha32(text.normalize("NFC"));
 }
-export function sourceIdentity(path: string): string {
-  return `source\t${path}`;
+
+/** identity string (node.text) for an extracted entity — type+name, no source/path qualifier. */
+export function entityIdentity(type: EntityType, name: string): string {
+  return `${type.toLowerCase()}\t${norm(name)}`;
 }
-export function chunkIdentity(source: string, rawText: string): string {
-  return `chunk\t${sourceKey(source)}\t${sha16(rawText)}`;
+/** SOURCE identity — the document IS its content (identical content across machines dedups to one source). */
+export function sourceIdentity(contentHash: string): string {
+  return `source\t${contentHash}`;
+}
+/** CHUNK identity — qualified by the SOURCE's content hash (NOT its path). */
+export function chunkIdentity(sourceContentHash: string, rawText: string): string {
+  return `chunk\t${sourceContentHash}\t${sha16(rawText)}`;
 }
 
 /** Canonical undirected endpoint order (kills A->B / B->A double edges for undirected kinds). */
