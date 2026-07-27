@@ -303,6 +303,7 @@ export class GraphStore {
     input: PutEdgeInput,
     meta: Meta,
     reasonVector?: Float32Array,
+    grounding?: string, // node id (chunk/source) that produced this assertion — recorded set-valued (FD3)
   ): Promise<{ edgeId: string; assertionId: string; created: boolean }> {
     const inp = PutEdgeInput.parse(input);
     const m = Meta.parse(meta);
@@ -358,6 +359,11 @@ export class GraphStore {
         this.db
           .prepare("INSERT INTO vec_assert_quarantine (assert_id, embedding) VALUES (?, ?)")
           .run(assertionId, toBlob(rvec));
+      }
+      // Provenance (FD3): record the grounding node set-valued. Done even when the reason was a DUPLICATE
+      // (dupAssert) so a relationship re-asserted from another chunk accumulates both sources, not just the first.
+      if (grounding) {
+        this.db.prepare("INSERT OR IGNORE INTO assertion_sources (assertion_id, source_id) VALUES (?, ?)").run(assertionId, grounding);
       }
 
       this.log(m, at, created ? "putEdge" : "reinforceEdge", edgeId, null, {
@@ -512,6 +518,10 @@ export class GraphStore {
            parse_failures=@parseFailures, extractor_model=@extractorModel, ingested_at=@at`,
       )
       .run(rec);
+  }
+  // Provenance read (see ddl `assertion_sources`): the grounding node ids recorded for an assertion, sorted.
+  assertionSources(assertionId: string): string[] {
+    return (this.db.prepare("SELECT source_id FROM assertion_sources WHERE assertion_id = ? ORDER BY source_id").all(assertionId) as { source_id: string }[]).map((r) => r.source_id);
   }
   countAssertions(edgeId: string): number {
     return (

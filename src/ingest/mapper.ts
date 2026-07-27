@@ -43,7 +43,7 @@ export async function mapExtraction(
     here.set(key, ids);
     await store.putEdge(
       { from: put.id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin: "ingest" },
-      meta,
+      meta, undefined, chunk.id,
     );
   }
 
@@ -66,7 +66,7 @@ export async function mapExtraction(
     const b = resolve(r.target);
     if (!a || !b || a === b) continue; // dangling or ambiguous endpoint -> drop the edge, don't guess
     const [from, to] = canonical(a, b); // undirected RELATED — canonical endpoint order
-    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin: "ingest" }, meta);
+    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin: "ingest" }, meta, undefined, chunk.id);
     if (pe.created) edgeCount++; // count real new edges, not reinforcements (honest re-ingest reporting)
   }
 

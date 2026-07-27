@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS ingest_sources (
   ingested_at     INTEGER NOT NULL
 );
 
+-- Assertion provenance (FD3): which SOURCE/CHUNK node(s) grounded each edge assertion. SET-valued — several
+-- chunks can assert the same relationship, so provenance accumulates across reinforcements (INSERT OR IGNORE),
+-- never collapses to one. Recorded now even though liveness/retraction is v1.5: it is the enabler for that
+-- work and is unrecoverable retroactively (a graph built without it can't be pruned without re-paying the LLM).
+CREATE TABLE IF NOT EXISTS assertion_sources (
+  assertion_id TEXT NOT NULL REFERENCES edge_assertions(id),
+  source_id    TEXT NOT NULL,
+  PRIMARY KEY (assertion_id, source_id)
+);
+
 CREATE TABLE IF NOT EXISTS mutation_log (
   event_id     INTEGER PRIMARY KEY AUTOINCREMENT,
   effective_at INTEGER NOT NULL,
