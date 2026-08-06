@@ -602,6 +602,75 @@ export class GraphStore {
    * calls. Callers intersect with the visible set themselves (design §3.3); this is deliberately unfiltered
    * so slice 4 can use it for provenance without a second method.
    */
+  // --- scenes (design §4) ---------------------------------------------------------------------------
+
+  /**
+   * Import scenes, idempotent on CONTENT rather than on the incoming id (design §5). The localStorage id is
+   * milliseconds-since-page-load and collides across sessions, so keying on it would silently merge or drop
+   * distinct scenes at the one-way door. Unresolvable anchors are dropped with a count; a scene left with no
+   * resolvable anchor is skipped rather than written empty, because an anchorless scene cannot be restored.
+   */
+  importScenes(
+    scenes: ReadonlyArray<{
+      name: string; narr?: string | null; scale: number; showProv: boolean;
+      focusNode?: string | null; anchors: string[]; legacyId?: string | null; ordinal: number;
+      contentKey: string;
+    }>,
+    meta: Meta,
+  ): { imported: number; duplicates: number; skipped: number; droppedAnchors: number } {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    const tx = this.db.transaction(() => {
+      const nodeExists = this.db.prepare("SELECT 1 FROM nodes WHERE id = ?");
+      const seen = this.db.prepare("SELECT 1 FROM scenes WHERE content_key = ?");
+      const insScene = this.db.prepare(
+        `INSERT INTO scenes (id, name, narr, scale, show_prov, focus_node, ordinal, legacy_id, content_key, version, created_at)
+         VALUES (@id, @name, @narr, @scale, @showProv, @focusNode, @ordinal, @legacyId, @contentKey, 1, @at)`,
+      );
+      const insAnchor = this.db.prepare("INSERT OR IGNORE INTO scene_anchors (scene_id, node_id) VALUES (?, ?)");
+      let imported = 0, duplicates = 0, skipped = 0, droppedAnchors = 0;
+      for (const sc of scenes) {
+        const resolved = sc.anchors.filter((a) => !!nodeExists.get(a));
+        droppedAnchors += sc.anchors.length - resolved.length;
+        if (resolved.length === 0) { skipped++; continue; }
+        if (seen.get(sc.contentKey)) { duplicates++; continue; }
+        const id = `scn_${randomUUID()}`;
+        insScene.run({
+          id, name: sc.name, narr: sc.narr ?? null, scale: sc.scale, showProv: sc.showProv ? 1 : 0,
+          focusNode: sc.focusNode && nodeExists.get(sc.focusNode) ? sc.focusNode : null,
+          ordinal: sc.ordinal, legacyId: sc.legacyId ?? null, contentKey: sc.contentKey, at,
+        });
+        for (const a of resolved) insAnchor.run(id, a);
+        imported++;
+      }
+      if (imported > 0) this.log(m, at, "importScenes", null, null, { imported, duplicates, skipped, droppedAnchors });
+      return { imported, duplicates, skipped, droppedAnchors };
+    });
+    return tx.immediate();
+  }
+
+  allScenes(): Array<{
+    id: string; name: string; narr: string | null; scale: number; showProv: boolean;
+    focusNode: string | null; ordinal: number; legacyId: string | null; contentKey: string;
+    version: number; anchors: string[];
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, name, narr, scale, show_prov AS showProv, focus_node AS focusNode,
+                ordinal, legacy_id AS legacyId, content_key AS contentKey, version
+         FROM scenes ORDER BY ordinal, rowid`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    const anchorStmt = this.db.prepare("SELECT node_id AS nodeId FROM scene_anchors WHERE scene_id = ? ORDER BY node_id");
+    return rows.map((r) => ({
+      id: r.id as string, name: r.name as string, narr: (r.narr as string | null) ?? null,
+      scale: r.scale as number, showProv: !!r.showProv, focusNode: (r.focusNode as string | null) ?? null,
+      ordinal: r.ordinal as number, legacyId: (r.legacyId as string | null) ?? null,
+      contentKey: r.contentKey as string, version: r.version as number,
+      anchors: (anchorStmt.all(r.id) as Array<{ nodeId: string }>).map((a) => a.nodeId),
+    }));
+  }
+
   nodesLackingLayout(): string[] {
     return (
       this.db

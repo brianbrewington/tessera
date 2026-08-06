@@ -125,6 +125,39 @@ CREATE TABLE IF NOT EXISTS pyramid (
   PRIMARY KEY (zoom, tile_id, node_id)
 );
 
+-- Scenes: saved views, ANCHORED TO NODE IDS rather than to camera coordinates (design §4).
+-- The camera-coordinate version in browser localStorage worked only by accident: the seed is deterministic
+-- and the node set was fixed, so every re-export re-settled identically. One ingest breaks that silently —
+-- no error, just a scene framing the wrong region. Anchors survive any re-settle by construction.
+--
+-- id is minted HERE. The localStorage id was 'sc' + performance.now() — milliseconds since PAGE LOAD, so
+-- two scenes saved at similar page ages in different sessions collide, and delScene() deleted all matches.
+-- It is kept only as legacy_id, for provenance, and is never a key.
+--
+-- content_key is the import idempotency key and INCLUDES focus_node, which is independent of the anchors:
+-- two scenes differing only in panel selection are different scenes, and keying without it would silently
+-- merge them at the one-way door.
+CREATE TABLE IF NOT EXISTS scenes (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  narr        TEXT,
+  scale       REAL NOT NULL,
+  show_prov   INTEGER NOT NULL DEFAULT 0,
+  focus_node  TEXT REFERENCES nodes(id),
+  ordinal     INTEGER NOT NULL,
+  legacy_id   TEXT,
+  content_key TEXT NOT NULL,
+  version     INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scenes_content ON scenes(content_key);
+
+CREATE TABLE IF NOT EXISTS scene_anchors (
+  scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+  node_id  TEXT NOT NULL REFERENCES nodes(id),
+  PRIMARY KEY (scene_id, node_id)
+);
+
 -- Vectors: four tiers, split by kind × (quarantine|shared). Every embedding lands in a
 -- quarantine table; a promote txn copies it to the matching shared table (spec §3, §5.2).
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_node_quarantine   USING vec0(node_id TEXT PRIMARY KEY, embedding float[${dim}]);
