@@ -131,8 +131,9 @@ confirmed all of them. Two additions it found are marked ★.
   reloads** (live delta-patching is deferred, §5) — stated so nobody discovers it as a surprise. If scene
   `name`/`narr` are injected as a JSON literal, they need the same `<` escaping as
   `export-viewer.ts:35`.
-- **D7. Deny-by-default on the network surface — MEASURED, not derived.** Observed headers from a real Chrome
-  hitting a real probe server on `127.0.0.1:7777` (`scratchpad/probe.mjs`; curl rows included for contrast):
+- **D7. Deny-by-default on the network surface — MEASURED in two engines, not derived.** Observed headers from
+  real Chrome **and real Firefox** hitting a probe server on `127.0.0.1:7777` (`scratchpad/probe.mjs`; curl rows
+  included for contrast). **Both engines agreed on every field below** — no divergence:
 
   | request | `Origin` | `Host` | `Sec-Fetch-Site` |
   |---|---|---|---|
@@ -140,6 +141,10 @@ confirmed all of them. Two additions it found are marked ★.
   | `GET /events` — the page's own `EventSource` | **absent** | `127.0.0.1:7777` | `same-origin` |
   | `POST /ingest` — the page's own `fetch` | `http://127.0.0.1:7777` | `127.0.0.1:7777` | `same-origin` |
   | any curl / non-browser client | absent | (as sent) | **absent** |
+
+  Incidental but useful for D9: an `EventSource` **auto-reconnects** when the server comes back, and the
+  reconnect carries the same headers — so the progress stream self-heals across a server restart without client
+  code, and the rule above must hold for reconnects too (it does; they are indistinguishable).
 
   **The EventSource connected and received messages**, confirming F3 empirically: a same-origin GET carries no
   `Origin`, so v2's "reject missing `Origin`" would have rejected the app's own SSE client.
@@ -254,10 +259,11 @@ change the asymptote); live delta-patching of an open map; named tours; drag-reo
 
 - ~~Per-chunk end-to-end latency~~ — **MEASURED, closed.** See D9: 9.9 s/chunk, 97% extraction, ~6 min for a
   20-page drop; the chunk memo makes SSE sufficient and keeps the queue deferred.
-- ~~D7's header behaviour~~ — **MEASURED in Chrome, closed.** See D7's table. F3 confirmed, plus a second bug
-  (navigation sends `Sec-Fetch-Site: none`) caught before it was written. **Still open: Firefox.** The rule
-  above is derived from one engine; re-run the probe there before the spec is final, since the `Sec-Fetch-*`
-  family is where engines have historically differed.
+- ~~D7's header behaviour~~ — **MEASURED in Chrome and Firefox, closed.** Both engines agree on every field;
+  see D7's table. F3 confirmed, plus a second bug (navigation sends `Sec-Fetch-Site: none`) caught before it
+  was written.
+
+**§7 is now empty of blocking unknowns.** What remains below is product judgement, not missing measurement.
 - Does `view.html` survive as a "share a snapshot" artifact once `serve` exists? (It should.)
 - Re-dropping an *edited* file re-extracts and may only reinforce existing entities — no new node ids, no
   visible map change. Surprising enough to need UI feedback?
