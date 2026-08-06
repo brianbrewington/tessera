@@ -14,6 +14,7 @@ Each script is standalone and read-only with respect to the repo. Run from the r
 | `header-probe.mjs` | What headers does a real browser send to a local server? | design §7.2 |
 | `seed-fallback-rate.ts` | How often does centroid seeding actually fire? | design §3.3.1 |
 | `newcomer-topology.ts` | Do a dropped doc's entities form one component, and does it touch the map? | design §3.3.1, §10 |
+| `semantic-anchor-floor.ts` | **Calibrates `SEMANTIC_FLOOR`.** At what cosine do rules (b) and (c) both stay reachable? | design §3.3 |
 
 ## Running them
 
@@ -49,6 +50,11 @@ NODE_PATH="$PWD/node_modules" npx tsx scripts/bench/seed-fallback-rate.ts
   component with only **2** edges into the rest of the map; every visible-endpoint edge is `RELATED`. This is
   why design §3.3 places *components*, not nodes — a node-first rule scatters one arriving document across 28
   positions.
+- **Semantic-anchor floor:** 6 components miss rule (a); their best-cosine-to-A is
+  0.616 / 0.646 / 0.691 / 0.715 / 0.772 / 0.774. Floor 0.60 → (b) 6, **(c) 0 (dead branch)**; 0.70 → 3/3;
+  **0.75 → 2/4 (shipped)**; 0.80 → 0/6. No clean gap in the distribution, so this is a judgement over one
+  corpus — which is why it is calibrated here rather than fixed in prose. **Re-run before changing it, and
+  re-run when the corpus or embedding model changes.**
 - **Seed fallback:** the graph-anchor rule alone falls through to the ring for **89.7%** of newcomers
   (half-split) and **92.9%** (last-document, the real drop case).
 

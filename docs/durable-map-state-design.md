@@ -96,12 +96,41 @@ N = nodesLackingLayout() ∩ visible()          ← the ∩ visible() is load-be
 3. Seed each component C by the first rule that applies:
      a. GRAPH ANCHOR    anch = { neighbours(c) ∩ A : c ∈ C } over visible-endpoint edges
                         if anch ≠ ∅ → seedPoint = centroid(anch)
-     b. SEMANTIC ANCHOR else: for the 3 highest-degree members of C, run
-                        querySimilar(text, {k: 25}), keep hits in A, take the single
-                        best by cosine. Accept only if cosine ≥ 0.60.
+     b. SEMANTIC ANCHOR else: for the 3 highest-degree members of C, call the REAL API
+                        querySimilar(vec, k, { index: "quarantine" })
+                          vec   = the member's STORED embedding — read it, do not re-embed
+                                  (re-embedding would make `tessera view` require an embedder)
+                          k     = 25
+                          index = "quarantine": every node is inserted there
+                                  (graphStore.ts:221). "shared" is sparse, and choosing it
+                                  would make this rule silently never fire.
+                        keep hits in A, take the single best by cosine.
+                        Accept only if cosine ≥ SEMANTIC_FLOOR (calibrated — see below).
                         → seedPoint = that node's position
      c. MAP SEED        else → seedPoint = bbox-centroid of A, displaced by
-                        r = 220 + 60*j , θ = j * 2.399963 rad   (j = component index)
+                        r = 220 + 60*j , θ = j * 2.399963 rad
+                        j = the component's index after ordering components by their
+                        MINIMUM member rowid. The partition step yields no inherent order,
+                        so DFS vs BFS would otherwise produce different r/θ.
+
+   **SEMANTIC_FLOOR is a CALIBRATED PARAMETER, not a number chosen in prose.** Current value
+   **0.75**, derived by `scripts/bench/semantic-anchor-floor.ts` against `graphs/big`; re-derive
+   it when the corpus or the embedding model changes. Measured best-cosine-to-A for the 6
+   components that miss rule (a) — sizes 1,1,1,1,2,31 — is
+   0.616 / 0.646 / 0.691 / 0.715 / 0.772 / 0.774:
+
+     | floor | (b) fires | (c) fires        |
+     |-------|-----------|------------------|
+     | 0.60  | 6         | **0 — dead branch** |
+     | 0.70  | 3         | 3                |
+     | 0.75  | 2         | 4                |
+     | 0.80  | 0         | 6                |
+
+   The distribution has no clean gap, so any absolute floor is a judgement call over one corpus.
+   That is precisely why it is a calibrated parameter with a checked-in harness, and why §10
+   asserts both branches stay reachable **under the production value on the real graph** — not
+   in a fixture that can force the branch.
+
    Then place every c ∈ C at seedPoint + jitter(c), so the component lands TOGETHER:
      jitter(c) = (ρ cos φ, ρ sin φ),  ρ = 18·√(m+1),  φ = m · 2.399963 rad   [golden angle]
      where m = c's index within C, ordered by rowid. Deterministic; Math.random() forbidden.
@@ -152,8 +181,12 @@ That kills two designs, and the second one was mine:
   improvement: at least the clump kept the document together.
 
 Hence: **place components, not nodes.** A dropped document is one thing arriving, and it should land in one
-place. The semantic rule now has a cosine floor (0.60) so it can decline, and it runs *per component* rather
-than per node, so it can no longer preempt the map-seed rule.
+place. The semantic rule runs *per component* rather than per node, so it can no longer preempt the map-seed rule by
+construction. **A floor alone did not achieve that** — the first floor written here (0.60) sat below the
+minimum observed best-cosine-to-A (0.616), so rule (b) still fired for all 6 components and rule (c) was dead
+again. Three rewrites, three versions of the same defect: a constant chosen in prose and never measured.
+Hence SEMANTIC_FLOOR is now calibrated by a checked-in harness, and §10 asserts branch reachability under the
+production value rather than in a fixture that can force the branch.
 
 Correction to the previous draft: `knnNodes` is **private** (`src/store/graphStore.ts:129`). The public vector
 API is **`querySimilar`** (`:265`), which is what §3.3(b) calls.
@@ -458,8 +491,12 @@ unwired, not merely if an algorithm changes.
   breaks; a shared wrong assumption is invisible to a self-consistent test.
 - **(wiring) Layout reaches the `file://` bundle:** `tessera view` on a laid-out graph emits HTML whose
   `GRAPH.layout` is populated, and the rendered positions equal the stored ones (§3.5).
-- **Mixed-layout is all-or-nothing:** delete one visible node's layout row → assert the viewer runs the full
-  fallback settle and does **not** render a half-stored map (§3.4).
+- **Mixed-layout is all-or-nothing — assert the OUTPUT, not that settle ran.** Delete one visible node's layout
+  row, then assert the rendered positions are **bit-identical to a pure-seed full settle** of the same graph.
+  Asserting only "settle ran" and "not half-stored" passes while the implementation pre-applies the 386 stored
+  positions, seeds the 1 missing, and settles from that hybrid — the exact forbidden trajectory, since
+  `settle()` never re-seeds (`template.html:242`). Comparing against the pure-seed result is the only assertion
+  that can tell the two apart.
 - **Provenance stays unlaid until slice 4:** after `view` + `ingest`, assert zero `layout` rows for
   `SOURCE/chunk` and `SOURCE/document` nodes — the test that fails if `N` loses its `∩ visible()`.
 - **(wiring) Additive settle through the real path:** `tessera ingest` on a laid-out graph → every
@@ -472,8 +509,16 @@ unwired, not merely if an algorithm changes.
   - the newcomer component's post-settle bbox diagonal is within **2×** the median diagonal of comparable
     existing clusters — **this is the assertion that fails a scatter implementation**;
   - its centroid is within **1.5×** the seed radius of the `seedPoint` §3.3 chose;
-  - each seeding rule (a)/(b)/(c) is exercised by at least one component in the fixture, so (b)'s cosine floor
-    and (c)'s reachability are both proven rather than assumed.
+  - **branch reachability under the PRODUCTION constants, on `graphs/big`** — not on a fixture. Assert that
+    rules (a), (b) and (c) each fire for at least one component with `SEMANTIC_FLOOR` and `k` at their shipped
+    values. A hand-built fixture can always force (c) by mocking an empty A; that test would have gone green
+    while the shipped floor made (c) unreachable, which is exactly the defect that survived two rewrites.
+  - **`seedPoint` proximity is asserted per rule, since only (c) defines a radius:** for (a) and (b) the
+    component centroid must land within `2 × jitterRadius(|C|)` of `seedPoint`, where
+    `jitterRadius(n) = 18·√n`; for (c) the existing `1.5 × r` bound applies. The previous single
+    "1.5× the seed radius" assertion was undefined for the two rules that actually fire on the drop-file case.
+  - "comparable existing clusters" means: connected components of the visible graph with size within ±50% of
+    `|C|`. Undefined before; two implementers would have measured different medians.
 
   A fallback-*rate* metric cannot police this: a scatter and a cohesive placement both score ~0%. That was the
   hole in the previous draft's acceptance target.
@@ -510,7 +555,11 @@ D6's no-new-*runtime*-dependencies rule.
 **Slice 1 — geometry-preserving layout.** `putLayout`/`putLayoutBatch`/`getLayout`/`nodesLackingLayout`;
 verbatim visible-set settle port with `ORDER BY rowid`; anchored incremental settle; CLI writes layout on
 `ingest`/`view`; viewer reads it via the §3.4 all-or-nothing branch, keeps the fallback. **`exportViewer()` gains the `layout` field (§3.5)** — slice 1 DOES change the `file://` export, and an earlier draft's "export unchanged" silently revoked its own fix, since §11 governs. The export stays a working offline artifact; only the bundle grows. **Ships with:**
-geometry-preservation test, poisoned-layout wiring test, additive-settle test, no-op test.
+geometry-preservation test, poisoned-layout wiring test, additive-settle test, no-op test, **component-cohesion
+test, branch-reachability-under-production-constants test, mixed-layout all-or-nothing test, layout-reaches-the-
+bundle test, provenance-stays-unlaid test.** The last five were in §10 but absent from this list in an earlier
+draft — and since §11 governs, the only tests that can police scatter and hybrid-start would have sat outside
+the governing checklist. Same class as the "export unchanged" revocation, quieter.
 
 **Slice 2 — the one-way door.** Scene anchoring; `scenes` + `scene_anchors`; the `file://` export control;
 `tessera scenes import`. **Ships with:** the colliding-id migration test, anchor-survives-re-settle test,
