@@ -1,8 +1,9 @@
 // Cohesion where the SEED is load-bearing: a component with no edge into the anchored field (rule c).
-import { GraphStore } from "/home/brian-brewington/code/tessera/src/store/graphStore.js";
-import { StubEmbedder } from "/home/brian-brewington/code/tessera/src/embedder.js";
-import { layoutPass } from "/home/brian-brewington/code/tessera/src/layout/pass.js";
-import { placeComponent } from "/home/brian-brewington/code/tessera/src/layout/incremental.js";
+import { GraphStore } from "../../src/store/graphStore.js";
+import { StubEmbedder } from "../../src/embedder.js";
+import { layoutPass } from "../../src/layout/pass.js";
+import { placeComponent, settleIncremental, type AnchoredPoint } from "../../src/layout/incremental.js";
+import type { LayoutNode } from "../../src/layout/settle.js";
 
 const meta = { actor: "t", cause: "t" };
 const HI = (t: string) => `alpha beta gamma delta ${t}`;
@@ -25,10 +26,18 @@ async function build(size: number, mode: "cohesive"|"scatter") {
   for (let i=1;i<comp.length;i++) await link(comp[i-1]!, comp[i]!);
 
   if (mode === "scatter") {
-    // the defect the ladder exists to prevent: each member seeded independently, then relaxed
+    // The defect the ladder exists to prevent: each member seeded at its OWN nearest-anchor position.
+    // Both arms then run the IDENTICAL relax, so the only difference is seed policy.
+    const anchored: AnchoredPoint[] = anchor.map(id => ({ id, x: L0.get(id)!.x, y: L0.get(id)!.y }));
     const anchPts = anchor.map(id=>L0.get(id)!);
-    const seeds = comp.map((id,i)=>({ nodeId:id, ...placeComponent(anchPts[i%anchPts.length]!, 1)[0]! }));
-    s.putLayoutBatch(seeds, meta);
+    const newcomers: LayoutNode[] = comp.map((id,i) => {
+      const seed = placeComponent(anchPts[i%anchPts.length]!, 1)[0]!;
+      return { id, x: seed.x, y: seed.y, vx: 0, vy: 0 };
+    });
+    const idx = new Map(comp.map((id,i)=>[id,i]));
+    const incEdges = comp.slice(1).map((id,i)=>({ a: idx.get(comp[i]!)!, b: idx.get(id)! }));
+    settleIncremental(anchored, newcomers, incEdges);
+    s.putLayoutBatch(newcomers.map(n=>({nodeId:n.id,x:n.x,y:n.y})), meta);
   } else {
     await layoutPass(s, meta);
   }

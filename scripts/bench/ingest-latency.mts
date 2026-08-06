@@ -1,10 +1,10 @@
 // Measure the per-chunk cost composition of tessera ingest (outline §7 open question, gates D9).
 // Uses the REAL components — same chat, embedder, extractor, chunker as `tessera ingest`.
 import { readFileSync } from "node:fs";
-import { OllamaChat } from "/home/brian-brewington/code/tessera/src/llm.js";
-import { OllamaEmbedder } from "/home/brian-brewington/code/tessera/src/embedder.js";
-import { LlmExtractor } from "/home/brian-brewington/code/tessera/src/extract/extractor.js";
-import { chunk as splitChunks } from "/home/brian-brewington/code/tessera/src/ingest/chunker.js";
+import { OllamaChat } from "../../src/llm.js";
+import { OllamaEmbedder } from "../../src/embedder.js";
+import { LlmExtractor } from "../../src/extract/extractor.js";
+import { chunk as splitChunks } from "../../src/ingest/chunker.js";
 
 async function main(): Promise<void> {
   const path = process.argv[2]!;

@@ -115,52 +115,82 @@ describe("layout pass — additive placement", () => {
     s.close();
   });
 
-  it("SEED INFLUENCE — for a small component, where it is seeded determines where it lands", async () => {
-    // Measured (scripts/bench/cohesion-metric.mts): a cohesive placement separates from a scattered one by
-    // 1.68x on intra/inter distance at size 4 — but the separation INVERTS at sizes 12 and 28. See the
-    // skipped test below; this asserts only the range the data supports.
+  it("THE RELAX ACTUALLY RUNS — deleting settleIncremental must fail a test", async () => {
+    // Both reviewers predicted this mutation was untried, and they were right: removing the
+    // settleIncremental call from pass.ts left all 15 tests green. The relax is §3.3 step 4 — the core of
+    // the incremental placement — and nothing guarded it.
+    //
+    // Threshold measured, not guessed: springs pull chained neighbours toward rest=90, while the raw jitter
+    // spiral packs them at ~18*sqrt(m+1). Mean nearest-neighbour distance, seeds-only vs relaxed:
+    //   size  4 : 33.2 -> 103.8      size 12 : 30.3 -> 72.5      size 28 : 30.4 -> 72.4
+    // 50 separates them at every size with margin on both sides.
     const s = mkStore();
     const anchor = await anchoredMap(s);
     const comp: string[] = [];
-    for (let i = 0; i < 4; i++) comp.push(await addNode(s, HI(`member${i}`), `member${i}`));
+    for (let i = 0; i < 12; i++) comp.push(await addNode(s, HI(`relaxed${i}`), `relaxed${i}`));
     for (let i = 1; i < comp.length; i++) await link(s, comp[i - 1]!, comp[i]!);
-    await link(s, comp[0]!, anchor[3]!);
+    await link(s, comp[0]!, anchor[2]!);
     await layoutPass(s, meta);
 
-    const cPts = posOf(s, comp);
-    const aPts = posOf(s, anchor);
-    const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
-    const intra: number[] = [];
-    for (let i = 0; i < cPts.length; i++)
-      for (let j = i + 1; j < cPts.length; j++) intra.push(Math.hypot(cPts[i]!.x - cPts[j]!.x, cPts[i]!.y - cPts[j]!.y));
-    const inter: number[] = [];
-    for (const c of cPts) for (const a of aPts) inter.push(Math.hypot(c.x - a.x, c.y - a.y));
-    expect(mean(intra) / mean(inter)).toBeLessThan(0.75); // measured cohesive 0.53, scattered 0.90
+    const pts = posOf(s, comp);
+    const nn = pts.map((p, i) =>
+      Math.min(...pts.filter((_, j) => j !== i).map((q) => Math.hypot(p.x - q.x, p.y - q.y))),
+    );
+    const meanNN = nn.reduce((a, b) => a + b, 0) / nn.length;
+    expect(meanNN).toBeGreaterThan(50); // un-relaxed seeds sit at ~30
     s.close();
   });
 
-  it.skip("COMPONENT COHESION at realistic sizes — NO WORKING METRIC YET (design §10 is wrong)", () => {
-    // Deliberately skipped, not deleted, because the gap is real and should stay visible.
+  it("SEED POLICY is policed PRE-RELAX — the component is placed as one thing", async () => {
+    // Two failed attempts got here, both making the same mistake:
+    //   1. an absolute post-relax threshold with no control — a scattered placement passed it too;
+    //   2. a two-armed post-relax comparison whose "scatter" arm pre-wrote layout rows, which put those
+    //      nodes in A, so layoutPass saw N = ∅ and no-opped. The scatter arm never relaxed. That is the
+    //      SAME confound as the benchmark bug the reviewers caught, reproduced one level down.
     //
-    // Design §10 asserts a dropped component's bbox diagonal must sit "within 2x the median diagonal of
-    // comparable existing clusters". Measured on the real pass (scripts/bench/cohesion-metric.mts), that
-    // criterion does not measure cohesion — it is INVERTED:
+    // Post-relax shape cannot police seed policy: measured separation is 1.90x at size 4 but 1.05x at
+    // sizes 12 and 28 — the relax washes the seed out. So assert the thing that IS determined by the
+    // policy: before the relax, every member sits within the jitter spiral of ONE seedPoint.
+    const s = mkStore();
+    const anchor = await anchoredMap(s);
+    const comp: string[] = [];
+    for (let i = 0; i < 16; i++) comp.push(await addNode(s, HI(`seed${i}`), `seed${i}`));
+    for (let i = 1; i < comp.length; i++) await link(s, comp[i - 1]!, comp[i]!);
+    await link(s, comp[0]!, anchor[5]!);
+
+    const r = await layoutPass(s, meta);
+    expect(r.components).toBe(1);
+    // jitter spiral bound: rho = 18*sqrt(m+1), so max radius is 18*sqrt(|C|)
+    expect(r.preRelaxSpread).toBeLessThanOrEqual(18 * Math.sqrt(comp.length) + 1e-9);
+    // and it is not trivially zero — the members really are spread within that disc, never coincident
+    expect(r.preRelaxSpread).toBeGreaterThan(18);
+    s.close();
+  });
+
+  it.skip("COMPONENT COHESION at realistic sizes — NO POST-RELAX METRIC WORKS (design §10)", () => {
+    // Skipped, not deleted: the gap is real and should stay visible.
     //
-    //   size  4 : cohesive span 180  scattered 194   (cohesive is tighter — as assumed)
-    //   size 12 : cohesive span 513  scattered 351   (cohesive is WIDER)
-    //   size 28 : cohesive span 704  scattered 357   (cohesive is much WIDER)
+    // CORRECTION. An earlier version of this note reported that the bbox criterion was INVERTED
+    // (cohesive 513 vs scattered 351 at size 12). That was an artifact of my own benchmark: the scatter
+    // arm wrote seed coordinates and never relaxed, so it compared relaxed-cohesive against
+    // unrelaxed-scattered. Both cross-agent reviewers caught it independently. The comment in that harness
+    // said "then relaxed" while the code did not — I read my comment instead of my code.
     //
-    // Two further candidates fail the same way: nearest-neighbour purity (0.17 vs 0.08 at size 12) and
-    // intra/inter distance ratio (1.17 vs 1.02 at size 12, inverted). A test built on any of them would
-    // reject good placements and accept scatters.
+    // Re-measured with BOTH arms relaxed (scripts/bench/cohesion-metric.mts), intra/inter ratio:
+    //   size  4 : cohesive 0.53  scattered 1.02   -> 1.90x separation (real)
+    //   size 12 : cohesive 1.17  scattered 1.22   -> 1.05x (none)
+    //   size 28 : cohesive 1.25  scattered 1.32   -> 1.05x (none)
     //
-    // The cause looks structural rather than metric-shaped: 500 iterations of the relax, with gravity
-    // pulling to the origin and springs at rest 90, converge to an equilibrium largely independent of where
-    // the component started — even for a component with NO edge into the anchored field, where the seed is
-    // supposed to be load-bearing. If that holds, the seeding ladder matters far less above small sizes than
-    // three rounds of design review assumed, and §10's acceptance criterion needs rethinking rather than
-    // retuning. Flagged for cross-agent review; do not un-skip this until there is a metric shown to
-    // discriminate on measured data.
+    // So the inversion was false, but the conclusion survives in narrower form: post-relax geometry cannot
+    // police seed policy above |C| ~= 4, because 500 iterations of gravity + springs converge to an
+    // equilibrium that washes the seed out. Seed policy is therefore asserted PRE-relax (see the
+    // "SEED POLICY is policed PRE-RELAX" test), which is what a reviewer recommended and what actually
+    // discriminates.
+    //
+    // Still open: whether rule (c)'s peripheral park (r = 220 + 60j) means anything after the relax pulls
+    // unlinked components ~200 units back toward the origin. If the product intent is that stranded
+    // components STAY peripheral, that is a physics change (weaker gravity, fewer iterations, or a soft
+    // pin), not a metric retune. Do not un-skip this until that is decided.
   });
 
   it("newcomers never coincide — the welding guard, end to end through the real pass", async () => {

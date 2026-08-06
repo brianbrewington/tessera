@@ -508,18 +508,29 @@ unwired, not merely if an algorithm changes.
 - **(wiring) Additive settle through the real path:** `tessera ingest` on a laid-out graph → every
   pre-existing node's stored position byte-identical. Must exercise CLI → `putLayoutBatch`, not a free function.
 - **`putLayout` no-ops:** a second `tessera view` with no graph change appends **zero** `mutation_log` ops.
-> **§10 COHESION CRITERION IS DISPROVEN BY MEASUREMENT — see `scripts/bench/cohesion-metric.mts`.**
-> Running the implemented pass shows the bbox-diagonal criterion below does not measure cohesion; it is
-> inverted at realistic sizes (cohesive span 513 vs scattered 351 at size 12; 704 vs 357 at size 28). Two
-> further candidates — nearest-neighbour purity and intra/inter distance ratio — fail the same way. A test
-> built on any of them would reject good placements and accept scatters.
-> The cause appears structural: 500 relax iterations with gravity and springs converge to an equilibrium
-> largely independent of the seed, even for a component with no edge into the anchored field where the seed
-> is supposed to be load-bearing. If that holds, the seeding ladder matters far less above small sizes than
-> rounds 3–5 assumed, and this criterion needs rethinking rather than retuning.
-> `test/layout-pass.test.ts` carries a deliberately skipped test recording the numbers. **Open for review.**
+> **§10's COHESION CRITERION DOES NOT WORK — replaced by a pre-relax assertion. Corrected 2026-08-06.**
+>
+> *First claim (WRONG):* the bbox criterion is inverted at realistic sizes. That came from a benchmark whose
+> scatter arm never relaxed — relaxed-cohesive vs unrelaxed-scattered. Both cross-agent reviewers caught it.
+>
+> *Corrected measurement* (`scripts/bench/cohesion-metric.mts`, both arms relaxed, intra/inter ratio):
+> size 4 → 0.53 vs 1.02 (**1.90× separation**); size 12 → 1.17 vs 1.22 (**1.05×**); size 28 → 1.25 vs 1.32
+> (**1.05×**). No inversion — but no discrimination either, above |C| ≈ 4.
+>
+> **Conclusion:** post-relax geometry cannot police seed policy. 500 iterations of gravity + springs converge
+> to an equilibrium that washes the seed out. Assert seed policy **PRE-relax** instead — every member within
+> the jitter spiral of one `seedPoint` — which is directly determined by the policy and catches a scatter.
+> `layoutPass` returns `preRelaxSpread` for exactly this.
+>
+> **Consequently the acceptance set is:** (1) pre-relax component cohesion; (2) rule selection under the
+> shipped `SEMANTIC_FLOOR`; (3) A never moves; (4) the relax actually ran (mean nearest-neighbour > 50 —
+> measured: seeds-only ~30, relaxed ~72–104).
+>
+> **Still open:** rule (c) parks stranded components at r = 220 + 60j, but the relax pulls them ~200 units
+> back toward the origin, so the park is largely transient. If the intent is that they STAY peripheral, that
+> is a physics change (weaker gravity, fewer iterations, a soft pin), not a metric retune.
 
-- **Placement acceptance — COMPONENT COHESION, against a pinned fixture** *(superseded — see the box above)*. The dominant real case (§3.3.1) is
+ The dominant real case (§3.3.1) is
   a single newcomer component of ~28 nodes with 2 links into the map, so a test covering only the
   "≥1 anchored neighbour" node tests ~7% of reality. Assert, on a **checked-in fixture graph** (not "a real
   corpus" — a corpus-dependent threshold lets two runs both claim correctness):

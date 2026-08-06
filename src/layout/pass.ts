@@ -34,6 +34,13 @@ export interface LayoutPassResult {
   components: number;
   /** How many components each seeding rule claimed — the branch-reachability evidence (design §10). */
   byRule: Record<SeedRule, number>;
+  /**
+   * Max distance from any newcomer to its own component's seedPoint, BEFORE the relax. This is the
+   * honest place to police seed policy: post-relax shape cannot do it (measured — the relax washes the
+   * seed out above |C| ~= 4), whereas this directly asserts "the component was placed as one thing".
+   * Bounded by the jitter spiral: 18*sqrt(|C|).
+   */
+  preRelaxSpread: number;
 }
 
 const EMPTY_RULES = (): Record<SeedRule, number> => ({ graph: 0, semantic: 0, map: 0 });
@@ -55,7 +62,7 @@ export async function layoutPass(store: GraphStore, meta: Meta): Promise<LayoutP
   const newIds = visibleIds.filter((id) => !layout.has(id));
 
   if (newIds.length === 0) {
-    return { mode: "noop", laidOut: 0, written: 0, unchanged: 0, components: 0, byRule: EMPTY_RULES() };
+    return { mode: "noop", laidOut: 0, written: 0, unchanged: 0, components: 0, byRule: EMPTY_RULES(), preRelaxSpread: 0 };
   }
 
   // visible-endpoint adjacency (all edge kinds, matching what the browser settle springs over)
@@ -83,6 +90,7 @@ export async function layoutPass(store: GraphStore, meta: Meta): Promise<LayoutP
       unchanged: r.unchanged,
       components: 1,
       byRule: EMPTY_RULES(),
+      preRelaxSpread: 0,
     };
   }
 
@@ -105,12 +113,16 @@ export async function layoutPass(store: GraphStore, meta: Meta): Promise<LayoutP
   const byRule = EMPTY_RULES();
 
   const placed = new Map<string, { x: number; y: number }>();
+  let preRelaxSpread = 0;
   for (let j = 0; j < comps.length; j++) {
     const C = comps[j]!;
 
     // (a) GRAPH ANCHOR — any member with an edge into the anchored field
-    const anchorPts: AnchoredPoint[] = [];
-    for (const c of C) for (const nb of adj.get(c) ?? []) if (anchoredPos.has(nb)) anchorPts.push(anchoredPos.get(nb)!);
+    // design §3.3(a) says anch is a SET: two members linking the SAME anchored node must not
+    // double-weight it, or the centroid drifts toward whichever anchor happens to be linked twice.
+    const anchorIds = new Set<string>();
+    for (const c of C) for (const nb of adj.get(c) ?? []) if (anchoredPos.has(nb)) anchorIds.add(nb);
+    const anchorPts: AnchoredPoint[] = [...anchorIds].map((id) => anchoredPos.get(id)!);
     let seed: { x: number; y: number } | null = null;
     let rule: SeedRule = "map";
     if (anchorPts.length) {
@@ -145,7 +157,10 @@ export async function layoutPass(store: GraphStore, meta: Meta): Promise<LayoutP
     byRule[rule]++;
     // members land TOGETHER around one seed; the jitter guarantees distinct points, which is a
     // correctness requirement — settle() can never separate coincident nodes
-    placeComponent(seed, C.length).forEach((pt, m) => placed.set(C[m]!, pt));
+    placeComponent(seed, C.length).forEach((pt, m) => {
+      placed.set(C[m]!, pt);
+      preRelaxSpread = Math.max(preRelaxSpread, Math.hypot(pt.x - seed!.x, pt.y - seed!.y));
+    });
   }
 
   const newcomers: LayoutNode[] = newIds.map((id) => ({ id, ...placed.get(id)!, vx: 0, vy: 0 }));
@@ -169,5 +184,6 @@ export async function layoutPass(store: GraphStore, meta: Meta): Promise<LayoutP
     unchanged: r.unchanged,
     components: comps.length,
     byRule,
+    preRelaxSpread,
   };
 }
