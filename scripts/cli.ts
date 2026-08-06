@@ -6,7 +6,7 @@
 // Env: TESSERA_EXTRACT_MODEL (default qwen2.5:14b), TESSERA_EMBED_MODEL (default nomic-embed-text).
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, readFileSync } from "node:fs";
 import { Graph } from "../src/graph.js";
 import { OllamaChat } from "../src/llm.js";
 import { LlmExtractor } from "../src/extract/extractor.js";
@@ -17,13 +17,14 @@ import { exportViewer } from "./export-viewer.js";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { layoutPass } from "../src/layout/pass.js";
+import { contentKey } from "../src/scenes/scene.js";
 import { report, printScorecard } from "./ingest-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera view <name>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -132,6 +133,45 @@ async function main(): Promise<void> {
       const out = join(graphDir(name), "view.html");
       const n = exportViewer(db, out, name);
       console.log(`wrote ${out}  (${n} nodes) — open it in a browser`);
+      break;
+    }
+    case "scenes": {
+      // The CLI half of the one-way door (design §5). The file:// viewer downloads scenes.json; this reads
+      // it into the graph. Must be run BEFORE `serve` exists — after the origin moves, the browser-side
+      // scenes are unreachable and this file is the only copy.
+      if (args[0] !== "import") usage();
+      const [, name, file] = args;
+      if (!name || !file) usage();
+      const db = join(graphDir(name), "graph.db");
+      if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
+      if (!existsSync(file)) { console.error(`no such file: ${file}`); process.exit(1); }
+      const raw = JSON.parse(readFileSync(file, "utf8")) as { graph?: string; scenes?: unknown[] };
+      if (!Array.isArray(raw.scenes)) { console.error(`${file}: not a tessera scenes export (no 'scenes' array)`); process.exit(1); }
+      if (raw.graph && raw.graph !== name) {
+        console.warn(`!  this export came from graph '${raw.graph}', importing into '${name}' — anchors are node ids and will mostly not resolve`);
+      }
+      const parsed = raw.scenes.map((x, i) => {
+        const sc = x as Record<string, unknown>;
+        const e = {
+          name: String(sc.name ?? `scene ${i + 1}`),
+          narr: (sc.narr as string | null) ?? null,
+          scale: Number(sc.scale ?? 1),
+          showProv: !!sc.showProv,
+          focusNode: (sc.focusNode as string | null) ?? null,
+          anchors: Array.isArray(sc.anchors) ? (sc.anchors as string[]) : [],
+          legacyId: (sc.legacyId as string | null) ?? null,
+          ordinal: Number.isFinite(sc.ordinal) ? Number(sc.ordinal) : i,
+        };
+        return { ...e, contentKey: contentKey(e) };
+      });
+      const store = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
+      try {
+        const r = store.importScenes(parsed, { actor: "cli", cause: `scenes import ${file}` });
+        console.log(`imported ${r.imported} scene(s), ${r.duplicates} already present, ${r.skipped} skipped (no resolvable anchor), ${r.droppedAnchors} anchor(s) dropped`);
+        if (r.skipped > 0) process.exitCode = 1; // a lost scene is not a silent success
+      } finally {
+        store.close();
+      }
       break;
     }
     case "report": {

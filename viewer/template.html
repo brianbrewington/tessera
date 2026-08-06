@@ -609,6 +609,8 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
   scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
     const x=el('span','x','×'); x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
     c.onclick=()=>restoreScene(s); box.appendChild(c); });
+  const exp=el('span','add','⤓ export'); exp.title='export scenes to a file, so `tessera scenes import` can move them into the graph';
+  exp.onclick=()=>exportScenes(); box.appendChild(exp);
   const add=el('span','add','+'); add.title='save this view as a scene'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
     add.replaceWith(inp); inp.focus();
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
@@ -617,6 +619,38 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
   if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); box.appendChild(pl); }
 }
 loadScenes(); renderScenes();
+
+// --- scene EXPORT: the one-way door (design §5). localStorage is origin-scoped, so once tessera serves the
+// viewer over http://127.0.0.1:PORT these scenes are unreachable from the new page. A file:// page cannot
+// write SQLite, so the crossing is a two-artifact bridge: download here, `tessera scenes import` there.
+//
+// Each saved scene stores only a CAMERA (ox/oy/scale). We recover anchors by replaying that camera and
+// asking which nodes were in frame — so a scene stops meaning "point the camera here" and starts meaning
+// "show me these things", which survives any future re-settle.
+//
+// Mirrors selectAnchors() in src/scenes/scene.ts; test/scenes-bridge.test.ts extracts this function and
+// asserts the two agree on the same input, so they cannot drift apart.
+const ANCHOR_CAP=12, ANCHOR_FALLBACK=3;
+function anchorsForCamera(cam){
+  const inView = nodes.filter(n=>{ const sx=n.x*cam.scale+cam.ox, sy=n.y*cam.scale+cam.oy;
+    return sx>=0 && sx<=W && sy>=0 && sy<=H; });
+  if(inView.length) return inView.slice().sort((a,b)=> b.deg-a.deg || (a.id<b.id?-1:1)).slice(0,ANCHOR_CAP).map(n=>n.id);
+  const cx=(W/2-cam.ox)/cam.scale, cy=(H/2-cam.oy)/cam.scale;
+  return nodes.slice().sort((a,b)=> Math.hypot(a.x-cx,a.y-cy)-Math.hypot(b.x-cx,b.y-cy) || (a.id<b.id?-1:1))
+    .slice(0,ANCHOR_FALLBACK).map(n=>n.id);
+}
+function exportScenes(){
+  if(!scenes.length){ alert('No scenes saved in this browser to export.'); return; }
+  const payload = { graph: GRAPH.name||'graph',
+    scenes: scenes.map((s,i)=>({ name:s.name||'', narr:s.narr||null, scale:s.scale, showProv:!!s.showProv,
+      focusNode:s.node||null, anchors:anchorsForCamera(s), legacyId:s.id||null, ordinal:i })) };
+  const blob = new Blob([JSON.stringify(payload,null,1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (GRAPH.name||'graph')+'-scenes.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+}
 
 // --- tours: play the saved scenes as a guided walkthrough — the camera flies stop→stop, narration per stop.
 // v1: one implicit tour = all scenes in save order; narration lives on the scene. (Named tours + drag-reorder next.) ---
