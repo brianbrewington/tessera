@@ -134,6 +134,12 @@ N = nodesLackingLayout() ∩ visible()          ← the ∩ visible() is load-be
    Then place every c ∈ C at seedPoint + jitter(c), so the component lands TOGETHER:
      jitter(c) = (ρ cos φ, ρ sin φ),  ρ = 18·√(m+1),  φ = m · 2.399963 rad   [golden angle]
      where m = c's index within C, ordered by rowid. Deterministic; Math.random() forbidden.
+     **The jitter MUST yield distinct positions for distinct m — this is a correctness
+     requirement, not cosmetics.** Two nodes at exactly the same coordinates never separate:
+     with dx = dy = 0 the repulsion is fx = f·dx/d = 0 for any softening value, so the
+     `|| 0.01` guard prevents a 0/0 NaN and nothing else. Coincident seeds are welded
+     together permanently. Found by mutation-testing the settle port; pinned by
+     test/layout-settle.test.ts (coincident case) and the incremental placement tests.
    There is no ring rule. The `Math.cos(i)*220` ring is the FULL-settle seed (§3.2) and has
    no place here — it was what parked newcomers on the periphery.
 4. Relax for **500 iterations with §3.2's exact constants** (kRep 5200, kSpring 0.045,
