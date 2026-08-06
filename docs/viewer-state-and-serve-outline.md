@@ -149,10 +149,29 @@ confirmed all of them. Two additions it found are marked ★.
   needs the new node ids, which `IngestResult` doesn't carry — resolve with **`nodesLackingLayout()` as the
   primary mechanism** (rather than extending `IngestResult`), because it heals *any* writer path, including
   `connect --commit` (§2 ★) and anything added later, instead of only the one the drop target calls.
-- **D9. Progress is streamed, and the latency budget is worse than v1 assumed.** A chunk costs an embedding +
-  an extraction chat + one embedding per entity + one per edge reason — a 20-page drop is *hundreds* of
-  sequential model calls, not 40–60. Still unmeasured (§7); leans harder toward a real job queue than v1
-  implied.
+- **D9. Progress is streamed; SSE is sufficient for v1, and the job queue stays deferred. MEASURED.**
+  11 chunks of `docs/corpus/immune-system-as-adversarial-attention.md`, `qwen2.5:14b` + `nomic-embed-text`,
+  warm model:
+
+  | | per chunk | share |
+  |---|---|---|
+  | extraction chat | **9.6 s** | **97%** |
+  | chunk embedding | 0.02 s | 0% |
+  | entity + reason embeddings (avg 6.8 + 3.0 per chunk) | 0.3 s | 3% |
+  | **total** | **9.9 s** (range 5.5–20.6, tracking output size) | |
+
+  Cold start adds ~15 s to the first chunk only (22.3 s cold vs 7.6 s warm on a comparable chunk) — and a
+  drop after an idle period is exactly when that hits, so first feedback is the slow one.
+
+  **This corrects the v1→v3 framing in both directions.** The high *call count* is real (Codex was right) but
+  is latency noise — embeddings are ~0.03 s each. The dominant term is one extraction chat per chunk. So a
+  20-page drop ≈ 35 chunks ≈ **6 minutes**; `graphs/big`'s 199 chunks ≈ **33 minutes**.
+
+  Six minutes is too long to hold a tab hostage — but **the chunk memo already provides the durability a queue
+  would buy**: `markExtracted()` commits per chunk (`ingest.ts:108`), so an aborted ingest resumes and skips
+  completed chunks. A dropped connection costs the tail of one document, not the document. That, not
+  throughput, is why the queue is deferred. Progress-bar ETAs will swing ±2× with output size; report chunks
+  done, not time remaining.
 - **D10. Provenance nodes enter the layout — in slice 4, not v1.** *(Round 2, F5: this was mis-framed as a
   timing risk.)* Putting 199 chunk + 12 doc nodes into the force field doesn't just cost more; it **re-clusters
   the semantic map around document structure** and leaves voids where hidden provenance sits. It is a different
@@ -207,10 +226,15 @@ change the asymptote); live delta-patching of an open map; named tours; drag-reo
 
 ## 7. Open questions (genuinely unknown)
 
-- **Per-chunk end-to-end latency is unmeasured** — Ollama was down when this was gathered. Gates D9.
-- **D7's header behaviour wants empirical confirmation** before it becomes spec text: does the served page's own
-  `EventSource` connect under the rewritten rules, in Chrome and Firefox, and what headers does it actually
-  send? The v2 bug came from reasoning about this instead of checking it.
+- ~~Per-chunk end-to-end latency~~ — **MEASURED, closed.** See D9: 9.9 s/chunk, 97% extraction, ~6 min for a
+  20-page drop; the chunk memo makes SSE sufficient and keeps the queue deferred.
+- **D7's header behaviour still wants empirical confirmation** before it becomes spec text: does the served
+  page's own `EventSource` connect under the rewritten rules, in Chrome and Firefox, and what headers does it
+  actually send? Fable's F3 derivation from the Fetch spec is convincing and I have not independently confirmed
+  it — the v2 bug came from reasoning about exactly this instead of checking it, so the rule is: **do not write
+  D7 into the spec until a real browser has been observed hitting a real `/events`.** A probe server
+  (`scratchpad/probe.mjs`) logs `Origin` / `Host` / `Sec-Fetch-*` per route and reports whether the page's own
+  EventSource connected; it needs one browser load to answer.
 - Does `view.html` survive as a "share a snapshot" artifact once `serve` exists? (It should.)
 - Re-dropping an *edited* file re-extracts and may only reinforce existing entities — no new node ids, no
   visible map change. Surprising enough to need UI feedback?
