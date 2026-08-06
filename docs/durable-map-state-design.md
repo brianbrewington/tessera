@@ -91,27 +91,36 @@ A = visible nodes WITH layout rows (anchored)
 N = nodesLackingLayout() ∩ visible()          ← the ∩ visible() is load-bearing; see below
 
 1. Load A positions via getLayout().
-2. Seed each n ∈ N by the first rule that applies (see §3.3.1 for why this ladder exists):
-     a. GRAPH ANCHOR    nbrs = neighbours(n) ∩ A over RELATED edges
-                        → centroid(nbrs) + jitter
-     b. SEMANTIC ANCHOR nearest node in A by cosine over the existing node embeddings
-                        (knnNodes on vec_node_quarantine, results filtered to A)
-                        → that node's position + jitter
-     c. COMPONENT SEED  n's newcomer-component has no link and no usable neighbour in A
-                        → seed the whole component at the map bbox centroid, offset per
-                          component index so components don't overlap
-     d. RING            declared fallback, now genuinely rare
-   jitter(n) = (r*cos(θ), r*sin(θ)) with r = 18, θ = (idx(n) * 2.399963) rad   [golden angle]
-     — deterministic and index-derived; Math.random() is forbidden (reproducibility).
-3. Relax for `iterations` steps:
-     - A exerts repulsion and spring force on N, and never moves
-     - N ↔ N repel and spring each other        ← without this, several entities from one chunk
-                                                   sharing a neighbour stack on one point
+2. Partition N into CONNECTED COMPONENTS over visible-endpoint edges within N.
+   ** The component, not the node, is the unit that gets placed.** See §3.3.1.
+3. Seed each component C by the first rule that applies:
+     a. GRAPH ANCHOR    anch = { neighbours(c) ∩ A : c ∈ C } over visible-endpoint edges
+                        if anch ≠ ∅ → seedPoint = centroid(anch)
+     b. SEMANTIC ANCHOR else: for the 3 highest-degree members of C, run
+                        querySimilar(text, {k: 25}), keep hits in A, take the single
+                        best by cosine. Accept only if cosine ≥ 0.60.
+                        → seedPoint = that node's position
+     c. MAP SEED        else → seedPoint = bbox-centroid of A, displaced by
+                        r = 220 + 60*j , θ = j * 2.399963 rad   (j = component index)
+   Then place every c ∈ C at seedPoint + jitter(c), so the component lands TOGETHER:
+     jitter(c) = (ρ cos φ, ρ sin φ),  ρ = 18·√(m+1),  φ = m · 2.399963 rad   [golden angle]
+     where m = c's index within C, ordered by rowid. Deterministic; Math.random() forbidden.
+   There is no ring rule. The `Math.cos(i)*220` ring is the FULL-settle seed (§3.2) and has
+   no place here — it was what parked newcomers on the periphery.
+4. Relax for **500 iterations with §3.2's exact constants** (kRep 5200, kSpring 0.045,
+   rest 90, grav 0.012, alpha = max(0.03, 0.992^it), damp 0.82) — the incremental pass must
+   not have its own physics, or incremental and full maps diverge:
+     - A exerts repulsion and spring force on N, and never moves (one-sided: full force
+       applied to the N endpoint, none to the A endpoint)
+     - N ↔ N repel and spring each other (else members of one component stack on a point)
      - repulsion population is N×A plus N×N — never A×A (that is what makes the cost linear)
-     - springs act on GRAPH EDGES only (RELATED between visible endpoints), not on all pairs
-     - gravity applies to N only
-     - integrate N only
-4. putLayoutBatch(positions of N)
+     - springs act on **all visible-endpoint graph edges**, matching what the browser settle
+       does (`template.html:211, 251-252`) — not a RELATED-only subset. On `graphs/big` every
+       visible-endpoint edge is RELATED today, but `RESONATES_WITH` enters the visible set
+       after `connect --commit`, and a RELATED-only rule would silently diverge from the full
+       settle at exactly that point.
+     - gravity applies to N only; integrate N only
+5. putLayoutBatch(positions of N)
 ```
 
 **`N` must be intersected with the visible set until slice 4.** `nodesLackingLayout()` alone returns every
@@ -124,19 +133,36 @@ Cost is **O(|N|·(|A|+|N|)) per iteration — linear in the existing map**, not 
 400-node map is ~30×430 pair-ops per iteration, i.e. free. This is the property that makes the drop target
 viable at a scale where a full re-settle is not.
 
-### 3.3.1 Why the seeding ladder, and not just "centroid of anchored neighbours"
+### 3.3.1 Why component-first, and why the earlier node-first ladder was wrong
 
-**Measured on `graphs/big`:** the graph-anchor rule (a) alone would fall through to the ring for **89.7%** of
-newcomers under a half-split proxy, and **92.9%** under the faithful one — the entities exclusive to the most
-recently ingested document, which is exactly the drop-a-file case. New entities overwhelmingly link to *each
-other and their own chunk*, not into the existing map.
+**Measured on `graphs/big`** (`scripts/bench/seed-fallback-rate.ts`, and the topology check in §10's fixture):
+taking the entities exclusive to the most recently ingested document — exactly the drop-a-file case — gives
+**N = 28**, of which only **2** have any edge into the existing map, and **all 28 form a single connected
+component**. Under a half-split proxy the same "no anchored neighbour" rate is 89.7%; under this faithful one
+it is **92.9%**.
 
-So a ladder that stops at (a) parks ~93% of every dropped document on the ring — reproducing the very failure
-mode the anchored design exists to prevent. Rules (b) and (c) are not embellishment; without them D1 does not
-do its job. Rule (b) is cheap and tessera-native: every node already carries an embedding in
-`vec_node_quarantine`, so "which existing node is this new one most like?" is a `knnNodes` call the store
-already supports. **Acceptance target: ring-fallback rate below 10% on a real corpus** — measured, not assumed
-(§10).
+That kills two designs, and the second one was mine:
+
+- **A node-first rule that stops at "centroid of anchored neighbours" parks ~93% of every dropped document on
+  the fallback** — the exact failure the anchored design exists to prevent.
+- **A node-first ladder with a semantic rule ahead of a component rule is worse.** "Nearest node in A by
+  cosine" *always* succeeds — `putNode` inserts an embedding for every node (`graphStore.ts:221`) and A is
+  non-empty — so the component rule becomes unreachable dead code, and the one coherent 28-node document is
+  seeded at **28 different scattered positions**. Trading a peripheral clump for a scatter is not an
+  improvement: at least the clump kept the document together.
+
+Hence: **place components, not nodes.** A dropped document is one thing arriving, and it should land in one
+place. The semantic rule now has a cosine floor (0.60) so it can decline, and it runs *per component* rather
+than per node, so it can no longer preempt the map-seed rule.
+
+Correction to the previous draft: `knnNodes` is **private** (`src/store/graphStore.ts:129`). The public vector
+API is **`querySimilar`** (`:265`), which is what §3.3(b) calls.
+
+**Acceptance criteria (§10) — ring-rate alone is blind.** A scatter implementation and a cohesive one both
+post a ~0% fallback rate, so that metric cannot police the thing that actually matters. The discriminating
+criterion is **component cohesion**: after settle, the newcomer component's bounding-box diagonal must be
+within 2× the median diagonal of comparable existing clusters, and its centroid must be within 1.5× the seed
+radius of `seedPoint`. That fails the scatter and passes the intended placement.
 
 ### 3.4 Read path and fallback — ALL-OR-NOTHING
 
@@ -168,10 +194,33 @@ Both readers get the same shape:
 - `exportViewer()` adds `layout: { [nodeId]: [x, y] }` to the bundle, sourced from `getLayout()`, absent-keyed
   for nodes without rows (which §3.4 then reads as "incomplete → fallback").
 - `GET /` injects the identical field.
-- The viewer applies `GRAPH.layout[id]` at construction *in place of* the seed formula, and `rebuild()` skips
-  `settle()` when §3.4's completeness test passes.
+- The viewer runs **§3.4's completeness test first, before applying anything**, and then takes exactly one of
+  two branches — never a mixture:
+  - **complete** → construct every node at its `GRAPH.layout[id]`, and never call `settle()`;
+  - **incomplete** → **ignore `GRAPH.layout` entirely**, construct from §3.2's seed formula, and run the full
+    `settle()`.
 
-### 3.5 What this fixes, quantified
+  Applying stored positions per-node and *then* settling is forbidden and would silently break §3.4: today's
+  `settle()` does not re-seed (`template.html:242` zeroes velocities only), so it would start from a
+  stored/seeded hybrid and move every anchored node along a trajectory that depends on which rows happened to
+  exist. Both reviewers read the previous wording as licensing exactly that.
+
+### 3.6 `tessera view` / `ingest` on a partially-laid-out graph
+
+One rule covers bootstrap, incremental, and every mixed state, so no caller has to decide:
+
+**Always compute `N = nodesLackingLayout() ∩ visible()` and run §3.3 on it.**
+
+- `A = ∅` (nothing laid out yet) → §3.3 degenerates to the full settle: one component containing everything,
+  seeded by §3.2's full-graph-index formula. This is the bootstrap path and it is the *only* path that may
+  move existing nodes, because there are none.
+- `N = ∅` → no work, no writes, no `mutation_log` ops (§3.1's no-op rule).
+- otherwise → incremental, and **A never moves**.
+
+A naive "if anything is missing, re-run the full settle" would move all of A and rewrite the geometry F-2
+exists to protect. It is not an option at any point after the bootstrap.
+
+### 3.7 What this fixes, quantified
 
 `settle()` runs synchronously before first paint: 0.26 s at today's 387 visible nodes, 1.50 s at 1,000, 6.00 s
 at 2,000 (~60 documents), 23.6 s at 4,000. Reading stored positions removes that stall entirely. It does **not**
@@ -351,7 +400,7 @@ reasoning; both were caught by one browser load. **Do not modify §7.2 without r
 
 ```
 event: {phase:'chunk', i, of}      per chunk
-event: {phase:'done', chunks, entities, edges, newNodes}
+event: {phase:'done', chunks, entities, edges, laidOut}
 event: {phase:'error', message}
 ```
 
@@ -416,12 +465,18 @@ unwired, not merely if an algorithm changes.
 - **(wiring) Additive settle through the real path:** `tessera ingest` on a laid-out graph → every
   pre-existing node's stored position byte-identical. Must exercise CLI → `putLayoutBatch`, not a free function.
 - **`putLayout` no-ops:** a second `tessera view` with no graph change appends **zero** `mutation_log` ops.
-- **Placement acceptance — must cover the DOMINANT path, not the rare one.** A newcomer with ≥1 anchored
-  neighbour lands near that neighbourhood's centroid; two newcomers sharing one neighbour do not coincide
-  (stacking). **And the case that actually happens:** ingest a fresh document into a laid-out graph and assert
-  the **ring-fallback rate is under 10%** (§3.3.1 measured 92.9% for the graph-anchor rule alone) and that the
-  new component lands within the existing map's bbox rather than outside it. A placement test covering only
-  the ≥1-anchored-neighbour case tests ~7% of real newcomers.
+- **Placement acceptance — COMPONENT COHESION, against a pinned fixture.** The dominant real case (§3.3.1) is
+  a single newcomer component of ~28 nodes with 2 links into the map, so a test covering only the
+  "≥1 anchored neighbour" node tests ~7% of reality. Assert, on a **checked-in fixture graph** (not "a real
+  corpus" — a corpus-dependent threshold lets two runs both claim correctness):
+  - the newcomer component's post-settle bbox diagonal is within **2×** the median diagonal of comparable
+    existing clusters — **this is the assertion that fails a scatter implementation**;
+  - its centroid is within **1.5×** the seed radius of the `seedPoint` §3.3 chose;
+  - each seeding rule (a)/(b)/(c) is exercised by at least one component in the fixture, so (b)'s cosine floor
+    and (c)'s reachability are both proven rather than assumed.
+
+  A fallback-*rate* metric cannot police this: a scatter and a cohesive placement both score ~0%. That was the
+  hole in the previous draft's acceptance target.
 - **Ordering invariant:** `allNodes()` returns `ORDER BY rowid` and the port consumes the same order.
 - **Writer invariant:** `connect --commit` adds no nodes, so `nodesLackingLayout()` stays complete.
 - **Scene anchoring survives a re-settle:** save → force a full re-settle (via a deliberate test-only escape
@@ -454,7 +509,7 @@ D6's no-new-*runtime*-dependencies rule.
 
 **Slice 1 — geometry-preserving layout.** `putLayout`/`putLayoutBatch`/`getLayout`/`nodesLackingLayout`;
 verbatim visible-set settle port with `ORDER BY rowid`; anchored incremental settle; CLI writes layout on
-`ingest`/`view`; viewer reads it, skips settle, keeps the fallback. `file://` export unchanged. **Ships with:**
+`ingest`/`view`; viewer reads it via the §3.4 all-or-nothing branch, keeps the fallback. **`exportViewer()` gains the `layout` field (§3.5)** — slice 1 DOES change the `file://` export, and an earlier draft's "export unchanged" silently revoked its own fix, since §11 governs. The export stays a working offline artifact; only the bundle grows. **Ships with:**
 geometry-preservation test, poisoned-layout wiring test, additive-settle test, no-op test.
 
 **Slice 2 — the one-way door.** Scene anchoring; `scenes` + `scene_anchors`; the `file://` export control;

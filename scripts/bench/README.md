@@ -9,10 +9,11 @@ Each script is standalone and read-only with respect to the repo. Run from the r
 
 | script | answers | asserted in |
 |---|---|---|
-| `settle-cost.mjs` | What does the viewer's O(n²) settle cost at N nodes? | design §3.5, outline §2 |
+| `settle-cost.mjs` | What does the viewer's O(n²) settle cost at N nodes? | design §3.7, outline §2 |
 | `ingest-latency.mts` | What does a chunk actually cost, and what fraction is extraction? | design §7.4, D9 |
 | `header-probe.mjs` | What headers does a real browser send to a local server? | design §7.2 |
 | `seed-fallback-rate.ts` | How often does centroid seeding actually fire? | design §3.3.1 |
+| `newcomer-topology.ts` | Do a dropped doc's entities form one component, and does it touch the map? | design §3.3.1, §10 |
 
 ## Running them
 
@@ -44,9 +45,16 @@ NODE_PATH="$PWD/node_modules" npx tsx scripts/bench/seed-fallback-rate.ts
 - **Headers:** Chrome and Firefox agreed on every field — navigation sends `Sec-Fetch-Site: none` and no
   `Origin`; the page's own `EventSource` sends `same-origin` and **no `Origin`**; `fetch` POST sends both;
   non-browser clients send no `Sec-Fetch-*` at all.
+- **Newcomer topology:** the last document's exclusive entities are **28** nodes forming **one** connected
+  component with only **2** edges into the rest of the map; every visible-endpoint edge is `RELATED`. This is
+  why design §3.3 places *components*, not nodes — a node-first rule scatters one arriving document across 28
+  positions.
 - **Seed fallback:** the graph-anchor rule alone falls through to the ring for **89.7%** of newcomers
-  (half-split) and **92.9%** (last-document, the real drop case). This is why design §3.3 has a ladder
-  instead of one rule.
+  (half-split) and **92.9%** (last-document, the real drop case).
 
-Re-run and update this table when the corpus, the models, or the machine changes. The `seed-fallback-rate`
-number in particular is corpus-dependent and is an acceptance target in design §10, not a constant.
+Re-run and update this table when the corpus, the models, or the machine changes.
+
+**These numbers are diagnostics, not acceptance criteria.** A fallback *rate* cannot distinguish a cohesive
+placement from a scattered one — both score ~0%. Design §10's acceptance criterion is component cohesion,
+measured against a checked-in fixture, precisely because a corpus-dependent rate lets two different
+implementations both claim correctness.
