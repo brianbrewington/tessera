@@ -80,7 +80,10 @@ describe("settle port — geometry preservation", () => {
     // together forever, because nothing in the physics can push them apart.
     //
     // §3.3 seeds every member of a component from one seedPoint, so this is a live constraint there: the
-    // jitter MUST produce distinct positions. src/layout/incremental.ts is tested for that separately.
+    // jitter MUST produce distinct positions. That guard is src/layout/incremental.ts and it is enforced by
+    // test/layout-incremental.test.ts ("never places two members of a component at the same point"), which
+    // is the test that actually protects the map. THIS test only characterises the welding — on its own it
+    // documents the defect without preventing it.
     const edges: LayoutEdge[] = [{ a: 0, b: 1 }];
     const mk = () => [
       { x: 100, y: 100, vx: 0, vy: 0 },
