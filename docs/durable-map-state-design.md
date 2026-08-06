@@ -54,7 +54,7 @@ Contract:
 - **Batch form is the normal path** — 387 individual transactions is the wrong shape. `putLayoutBatch` runs one
   `BEGIN IMMEDIATE`, applies the no-op rule per row, and emits **one** `mutation_log` op summarising the batch.
 - **`nodesLackingLayout()` is the primary newcomer mechanism** (round 2). It heals *any* writer path —
-  including `connect --commit`, which writes edges today (`scripts/connect.ts:64`) and could write nodes
+  including `connect --commit`, which writes edges today (`src/connect/connector.ts:549`) and could write nodes
   tomorrow — rather than only the path the drop target calls. `IngestResult` is left alone.
 
 ### 3.2 The settle port (`src/layout/settle.ts`)
@@ -69,43 +69,107 @@ per iteration:  pairwise repulsion kRep/d² → gravity (-pos*grav) → springs 
                 → integrate x += vx*alpha ; damp vx *= 0.82
 ```
 
-Two requirements that make "verbatim" mean something:
+Three requirements that make "verbatim" mean something. The first two are separate populations and conflating
+them is the single easiest way to build this wrong:
 
 - **Node ordering is load-bearing**, because the seed is index-derived. The viewer's order is `allNodes()`
   order, which is `SELECT * FROM nodes` with no `ORDER BY` — de facto rowid order. The port and `allNodes()`
   both become explicit **`ORDER BY rowid`**: identical to today's behaviour, no longer implicit.
-- **Population is the visible set** — provenance nodes excluded, exactly as `rebuild()` does
+- **SEEDING population is the FULL node list, provenance included.** `template.html:199` maps over
+  `GRAPH.nodes` — the complete `allNodes()` array — so each node's seed index `i` is its position among *all*
+  598 nodes, not among the 387 visible ones. **Assign seeds before filtering, and never reindex after.**
+  Seeding over the visible-filtered list instead would change the seed of **387 of 387** visible nodes on
+  `graphs/big` — a different map, which silently voids slice 1's geometry-preservation guarantee and re-opens
+  the migration door under a new mechanism.
+- **FORCE population is the visible set** — provenance excluded, exactly as `rebuild()` does
   (`template.html:209-215`). Slice 4 changes this; slices 1–3 must not.
 
 ### 3.3 Anchored incremental settle
 
 ```
-A = nodes with layout rows (anchored)     N = nodesLackingLayout() (newcomers)
+A = visible nodes WITH layout rows (anchored)
+N = nodesLackingLayout() ∩ visible()          ← the ∩ visible() is load-bearing; see below
 
 1. Load A positions via getLayout().
-2. Seed each n ∈ N:
-     nbrs = neighbours(n) ∩ A
-     if nbrs ≠ ∅ : centroid(nbrs) + deterministic jitter (index-derived, never Math.random)
-     else        : ring formula at the next ring index (declared fallback)
+2. Seed each n ∈ N by the first rule that applies (see §3.3.1 for why this ladder exists):
+     a. GRAPH ANCHOR    nbrs = neighbours(n) ∩ A over RELATED edges
+                        → centroid(nbrs) + jitter
+     b. SEMANTIC ANCHOR nearest node in A by cosine over the existing node embeddings
+                        (knnNodes on vec_node_quarantine, results filtered to A)
+                        → that node's position + jitter
+     c. COMPONENT SEED  n's newcomer-component has no link and no usable neighbour in A
+                        → seed the whole component at the map bbox centroid, offset per
+                          component index so components don't overlap
+     d. RING            declared fallback, now genuinely rare
+   jitter(n) = (r*cos(θ), r*sin(θ)) with r = 18, θ = (idx(n) * 2.399963) rad   [golden angle]
+     — deterministic and index-derived; Math.random() is forbidden (reproducibility).
 3. Relax for `iterations` steps:
      - A exerts repulsion and spring force on N, and never moves
      - N ↔ N repel and spring each other        ← without this, several entities from one chunk
-                                                   sharing a neighbour stack on one point (round 2, F12)
+                                                   sharing a neighbour stack on one point
+     - repulsion population is N×A plus N×N — never A×A (that is what makes the cost linear)
+     - springs act on GRAPH EDGES only (RELATED between visible endpoints), not on all pairs
      - gravity applies to N only
      - integrate N only
 4. putLayoutBatch(positions of N)
 ```
 
+**`N` must be intersected with the visible set until slice 4.** `nodesLackingLayout()` alone returns every
+node without a row — which after slice 1 includes all **211** provenance nodes in `graphs/big` (199 chunks +
+12 documents). Unfiltered, the first `ingest` after a `view` would pull them into the force field and write
+them positions: slice 4's geometry, delivered in slice 1, with scenes not yet anchored. Provenance nodes are
+*deliberately* left without layout rows until slice 4.
+
 Cost is **O(|N|·(|A|+|N|)) per iteration — linear in the existing map**, not quadratic. Adding 30 nodes to a
 400-node map is ~30×430 pair-ops per iteration, i.e. free. This is the property that makes the drop target
 viable at a scale where a full re-settle is not.
 
-### 3.4 Read path and fallback (round 2, F8)
+### 3.3.1 Why the seeding ladder, and not just "centroid of anchored neighbours"
 
-Precedence: **stored layout ≻ fallback settle ≻ error.** The viewer keeps `settle()` and uses it when a node
-has no stored position — old dbs have zero `layout` rows, and `scripts/export-viewer.ts:42-46` is a standalone
-entry point that bypasses `tessera view` entirely. The in-browser settle is **not** dead code; it is the
-fallback, and it must stay correct.
+**Measured on `graphs/big`:** the graph-anchor rule (a) alone would fall through to the ring for **89.7%** of
+newcomers under a half-split proxy, and **92.9%** under the faithful one — the entities exclusive to the most
+recently ingested document, which is exactly the drop-a-file case. New entities overwhelmingly link to *each
+other and their own chunk*, not into the existing map.
+
+So a ladder that stops at (a) parks ~93% of every dropped document on the ring — reproducing the very failure
+mode the anchored design exists to prevent. Rules (b) and (c) are not embellishment; without them D1 does not
+do its job. Rule (b) is cheap and tessera-native: every node already carries an embedding in
+`vec_node_quarantine`, so "which existing node is this new one most like?" is a `knnNodes` call the store
+already supports. **Acceptance target: ring-fallback rate below 10% on a real corpus** — measured, not assumed
+(§10).
+
+### 3.4 Read path and fallback — ALL-OR-NOTHING
+
+Precedence: **complete stored layout ≻ full fallback settle.** The decision is made once, over the whole
+visible set, never per node:
+
+- **every** visible node has a stored position → use them, never call `settle()`;
+- **any** visible node is missing one → run the full in-browser `settle()` over the visible set and write
+  nothing.
+
+Per-node mixing is **forbidden**. Today's `settle()` moves *every* node it is given (`template.html:240-254`),
+so "settle just the missing ones" using the existing function would move every anchored node too — one missing
+row would destroy the additive guarantee for the whole map. A browser-side anchored settle matching §3.3 is a
+possible future refinement; v1 does not have one, so v1 takes the coarse rule.
+
+Reachable mixed states this covers: an `ingest` that ran before any `view`; a crash between the ingest and the
+layout batch; and `scripts/export-viewer.ts:42-46`, a standalone entry point that bypasses `tessera view`
+entirely. The in-browser settle is **not** dead code — it is the fallback, and it must stay correct.
+
+### 3.5 Layout must reach the viewer — both paths
+
+`exportViewer()` currently emits `{nodes, edges, name}` (`scripts/export-viewer.ts:35`). Nothing in the bundle
+carries positions, so without this section slice 1 would write layout to SQLite that the default `file://` path
+could never read — and the geometry-preservation and poisoned-layout tests would be unimplementable for the
+path they matter most on.
+
+Both readers get the same shape:
+
+- `exportViewer()` adds `layout: { [nodeId]: [x, y] }` to the bundle, sourced from `getLayout()`, absent-keyed
+  for nodes without rows (which §3.4 then reads as "incomplete → fallback").
+- `GET /` injects the identical field.
+- The viewer applies `GRAPH.layout[id]` at construction *in place of* the seed formula, and `rebuild()` skips
+  `settle()` when §3.4's completeness test passes.
 
 ### 3.5 What this fixes, quantified
 
@@ -153,11 +217,21 @@ only as `legacy_id`, for provenance, and is never used as a key.
   nodes to viewport centre** — a scene must always resolve to something.
 - **Save-from-node-panel** (`template.html:527`) yields exactly one anchor: that node. This case must work and
   gets its own test.
-- **Framing at restore:** compute the bounding box of the anchors' *current* positions; centre on the bbox
-  centre; **scale = min(stored scale, fit scale)** where fit-scale makes the bbox occupy ~70% of the viewport.
-  Rationale: honour the user's zoom intent, but if the cluster has spread since the scene was saved, zoom out
-  enough that they still see the thing they saved. Pure stored-scale would frame the centre of a cluster that
-  no longer fits; pure refit would discard a deliberate close-up.
+- **Framing at restore — the actual equations**, because "centre on the bbox" has several implementations and
+  the anchor-survives-re-settle test would pass all of them. The camera is `screen = world*scale + o`
+  (`template.html:toScreen`), and `centerOn` is `ox = W/2 - n.x*scale` (`:441`). So:
+
+  ```
+  bbox over anchors' CURRENT positions → (minX,minY,maxX,maxY), cx,cy = centre
+  bw = max(maxX-minX, ε)   bh = max(maxY-minY, ε)        ε guards the single-anchor case
+  fit   = min( W*0.70/bw , H*0.70/bh )                   min over BOTH axes → whole bbox fits
+  scale = min( storedScale , fit )                       single anchor (bw=bh=ε) → fit is huge → storedScale
+  ox    = W/2 - cx*scale        oy = H/2 - cy*scale
+  ```
+
+  Rationale for `min`: honour the user's zoom intent, but if the cluster has spread since the scene was saved,
+  zoom out enough that they still see the thing they saved. Pure stored-scale would frame the centre of a
+  cluster that no longer fits; pure refit would discard a deliberate close-up.
 - `focus_node` still restores the panel selection, exactly as today. Anchors govern the camera; `focus_node`
   governs the panel. They are independent (round 1 established the first, round 2 corrected the framing of it).
 
@@ -176,8 +250,19 @@ therefore land **in slice 2, before `serve` exists** (F-3, F-2).
 **Artifact 2 — CLI side.** `tessera scenes import <graph> <scenes.json>`:
 1. resolve every anchor id against `nodes`; drop unresolvable ids with a **counted warning**, never silently;
 2. a scene whose anchors *all* fail to resolve is reported and skipped, not written empty;
-3. mint `id`, preserve `legacy_id`, compute `content_key = sha256(name ⧺ narr ⧺ sorted(anchors) ⧺ scale ⧺
-   show_prov)`;
+3. mint `id`, preserve `legacy_id`, compute
+
+   ```
+   content_key = sha256( name ⧺ "\x00" ⧺ (narr ?? "") ⧺ "\x00" ⧺ sorted(anchors).join(",")
+                         ⧺ "\x00" ⧺ scale.toFixed(6) ⧺ "\x00" ⧺ (showProv ? "1" : "0")
+                         ⧺ "\x00" ⧺ (focusNode ?? "") )
+   ```
+
+   **`focus_node` is in the key** — it is independent of the anchors (§4.2), so two scenes differing only in
+   panel selection are *different scenes*. Omitting it lets the unique index silently collapse them and lose
+   the selection intent — and the colliding-id test would not catch it (both reviewers found this
+   independently). `scale` is serialised at fixed 6 decimals so float formatting can't change the key. Fields
+   are NUL-separated so `("ab","c")` and `("a","bc")` cannot collide.
 4. **idempotent on `content_key`**, not on the incoming id — re-running the import is a no-op.
 
 **Fidelity is best-effort, and the user must be told.** A scene's camera coordinates are only meaningful
@@ -201,12 +286,21 @@ store rather than by synchronising it.
 ### 7.1 Routes
 
 ```
-GET  /            → template + graph data + stored layout + scenes (read-only bundle)
-POST /ingest      → one .md/.txt → { chunks, entities, edges, newNodes }
+GET  /            → template + graph data + layout (§3.5) + scenes (read-only bundle)
+POST /ingest      → one .md/.txt → { chunks, entities, edges, laidOut }
 GET  /events      → SSE progress
 GET  /scenes      → scenes + anchors
-PUT  /scenes      → replace list (per-scene `version`; stale version → 409)
+PUT  /scenes      → all-or-nothing replace (per-scene `version`; any stale → 409, nothing applied)
 ```
+
+`laidOut` is **the count returned by `putLayoutBatch`** after the post-ingest settle pass — *not* a new field
+on `IngestResult`, which stays as it is (§3.1). Naming it `newNodes` invited exactly the ambiguity a reviewer
+flagged: two engineers, two sources of truth, one of them wrong.
+
+`PUT /scenes` is **all-or-nothing**: the server checks every incoming `version` first, and if any is stale it
+applies nothing and returns 409 with the list of conflicting scene ids. Partial application would leave the
+client's list and the db diverged with no way to tell which half landed. Deferring multi-user does not excuse
+an ambiguous single-user contract.
 
 `node:http`, **no new runtime dependencies**. Bind `127.0.0.1` explicitly, never `0.0.0.0`. Default port 7777,
 pinned for UX predictability (not for durability — §4.1 solved that).
@@ -240,10 +334,16 @@ reasoning; both were caught by one browser load. **Do not modify §7.2 without r
 
 - `Content-Length` cap of **4 MB**, enforced before reading the body and again while streaming.
 - Stream to a server-generated temp path; **`finally` unlink** on every exit path including crash (round 2).
-- The client-supplied filename is used **only** to test `isSupported()` (`src/ingest/adapters.ts`) and to set
-  the SOURCE title. It never contributes to a filesystem path.
-- Then `ingestFile()` unchanged — content-hash dedup already makes a repeat drop a true no-op
-  (`ingest.ts:48-50`).
+- The client-supplied filename is used **only** to test `isSupported()` (`src/ingest/adapters.ts:13-16`) and
+  to set the SOURCE title/provenance. It never contributes to a filesystem path.
+- **`ingestFile()` therefore is NOT unchanged, and §3.1's "leave `IngestResult` alone" does not extend to its
+  inputs.** `readDoc(path)` derives both `source` and `title` from the resolved path
+  (`src/ingest/adapters.ts:57-77`), so a drop through an untouched `ingestFile()` would persist the server's
+  temp filename as the document's title and provenance forever. `ingestFile` gains an optional
+  `opts.display?: {title?: string; source?: string}` passed through to the SOURCE node, defaulting to today's
+  behaviour when absent. Content identity is unaffected — it is the content hash, never the path
+  (`ingest.ts:42`).
+- Content-hash dedup still makes a repeat drop a true no-op (`ingest.ts:48-50`).
 - **Single-flight per graph.** A second concurrent `POST /ingest` gets **409**, rather than interleaving LLM
   calls against a serialised SQLite writer.
 
@@ -287,8 +387,9 @@ tessera serve <name> [--port 7777]           # slice 3
 |---|---|
 | crash mid-ingest | chunk memo resumes; unmarked chunks retry (existing behaviour, unchanged) |
 | crash mid-layout-write | batch is one transaction — all or nothing; newcomers stay in `nodesLackingLayout()` and are settled next run |
-| upload crash / abort | temp file unlinked in `finally` |
-| concurrent ingest | 409, single-flight |
+| upload crash / abort | temp unlinked in `finally` on every **handled** exit path. A `SIGKILL`/power loss cannot run `finally` — so `serve` **also sweeps its temp dir at startup**, unlinking anything older than 1 h. Stated because "unlinked on every exit path including crash" was an impossible guarantee. |
+| concurrent ingest via `serve` | 409, single-flight |
+| `tessera ingest` (CLI) run while `serve` is ingesting | **not covered by the HTTP single-flight** — two processes, one SQLite writer. `serve` takes an advisory lock file in the graph dir on ingest; the CLI refuses with a clear message if held, and vice versa. |
 | stale scene write | 409 on `version` mismatch |
 | unresolvable anchor on import | counted warning; scene with zero resolvable anchors is skipped, not written empty |
 | no layout rows (old db, or standalone `export-viewer`) | fallback to in-browser settle (§3.4) |
@@ -303,11 +404,24 @@ unwired, not merely if an algorithm changes.
   deterministic.
 - **Geometry preservation:** the TS port's output matches the browser's settle for the same graph within a
   stated tolerance. This is the test that protects every pre-existing scene, and it is what makes slice 1 safe.
+  **The reference must be the real template algorithm — full-graph seed indices, visible-set forces (§3.2).**
+  If the port and the reference both seed over the visible list, the test passes green while every scene
+  breaks; a shared wrong assumption is invisible to a self-consistent test.
+- **(wiring) Layout reaches the `file://` bundle:** `tessera view` on a laid-out graph emits HTML whose
+  `GRAPH.layout` is populated, and the rendered positions equal the stored ones (§3.5).
+- **Mixed-layout is all-or-nothing:** delete one visible node's layout row → assert the viewer runs the full
+  fallback settle and does **not** render a half-stored map (§3.4).
+- **Provenance stays unlaid until slice 4:** after `view` + `ingest`, assert zero `layout` rows for
+  `SOURCE/chunk` and `SOURCE/document` nodes — the test that fails if `N` loses its `∩ visible()`.
 - **(wiring) Additive settle through the real path:** `tessera ingest` on a laid-out graph → every
   pre-existing node's stored position byte-identical. Must exercise CLI → `putLayoutBatch`, not a free function.
 - **`putLayout` no-ops:** a second `tessera view` with no graph change appends **zero** `mutation_log` ops.
-- **Placement acceptance:** a newcomer with ≥1 anchored neighbour lands within N units of that neighbourhood's
-  centroid (catches ring-parking); two newcomers sharing one neighbour do not coincide (catches stacking).
+- **Placement acceptance — must cover the DOMINANT path, not the rare one.** A newcomer with ≥1 anchored
+  neighbour lands near that neighbourhood's centroid; two newcomers sharing one neighbour do not coincide
+  (stacking). **And the case that actually happens:** ingest a fresh document into a laid-out graph and assert
+  the **ring-fallback rate is under 10%** (§3.3.1 measured 92.9% for the graph-anchor rule alone) and that the
+  new component lands within the existing map's bbox rather than outside it. A placement test covering only
+  the ≥1-anchored-neighbour case tests ~7% of real newcomers.
 - **Ordering invariant:** `allNodes()` returns `ORDER BY rowid` and the port consumes the same order.
 - **Writer invariant:** `connect --commit` adds no nodes, so `nodesLackingLayout()` stays complete.
 - **Scene anchoring survives a re-settle:** save → force a full re-settle (via a deliberate test-only escape
@@ -315,12 +429,17 @@ unwired, not merely if an algorithm changes.
 - **(wiring) Migration crosses the door:** a real localStorage payload including `name`, `narr`, and **two
   scenes with colliding `performance.now()` ids** → export → import → both present, lossless, idempotent on a
   second run.
+- **`content_key` separates what differs:** two scenes identical except for `focus_node` import as **two**
+  rows; two panel-saves of the same node with empty `narr` collapse to one. The colliding-id test above does
+  not cover this — it was the failure both round-3 reviewers found independently.
 - **Server:** `Host` mismatch rejected on **every** route including `GET /`; foreign `Origin` rejected on
   mutating routes; navigation with `Sec-Fetch-Site: none` **accepted**; oversized body rejected; unsupported
   extension rejected; repeat drop of identical bytes writes nothing; concurrent double-POST → 409.
 - **(wiring) The served page's own `EventSource` connects and receives events during a real ingest.** The
   outline's earlier "rejects missing `Origin` on `/events`" test would have passed *while enforcing the bug*.
-- **Benchmark harness checked in**, so the settle timings are reproducible rather than author-asserted.
+- **Benchmark harnesses are checked in** at `scripts/bench/` (settle cost, ingest latency, header probe, seed
+  fallback rate) with a README recording the results of record. Every number this document asserts is
+  reproducible from repo state rather than from a local run nobody else can repeat.
 
 **Harness decision (round 2, F7).** The repo is vitest-only — no jsdom/playwright/puppeteer, and `test/` is
 entirely Node-side. Resolution: **extract layout and scene logic into `src/layout/` and `src/scenes/` as
