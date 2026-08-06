@@ -195,8 +195,12 @@ const $=id=>document.getElementById(id);
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 // --- model (positions seeded on a ring, then settled) ---
+// Seed positions are index-derived over the FULL node list (provenance included) — see design §3.2.
+// `sx/sy` keep the seed so the fallback can restart from it; `x/y` may be replaced by stored layout below.
 const nodes = GRAPH.nodes.map((n,i)=>({ ...n,
+  sx: Math.cos(i)*220 + (i%7-3)*30, sy: Math.sin(i)*220 + (i%5-2)*30,
   x: Math.cos(i)*220 + (i%7-3)*30, y: Math.sin(i)*220 + (i%5-2)*30, vx:0, vy:0, deg:0 }));
+const LAYOUT = GRAPH.layout || {};
 const byId = new Map(nodes.map(n=>[n.id,n]));
 const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) })).filter(e=>e.a&&e.b);
 
@@ -212,7 +216,15 @@ function rebuild(){
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
-  settle(); computeBounds(); renderMMDots(); buildLegend(); updateCounts();
+  // --- design §3.4: ALL-OR-NOTHING. One decision over the whole visible set, never per node.
+  // complete   -> use every stored position and never settle (the map you learned stays put)
+  // incomplete -> ignore stored layout ENTIRELY, restart from the seeds, and run the full settle.
+  // Mixing is forbidden: settle() does not re-seed (it zeroes velocities only), so a stored/seeded hybrid
+  // would move anchored nodes along a trajectory that depends on which rows happened to exist.
+  const complete = NODES.length>0 && NODES.every(n=>LAYOUT[n.id]);
+  if(complete){ for(const n of NODES){ const p=LAYOUT[n.id]; n.x=p[0]; n.y=p[1]; n.vx=0; n.vy=0; } }
+  else { for(const n of NODES){ n.x=n.sx; n.y=n.sy; n.vx=0; n.vy=0; } settle(); }
+  computeBounds(); renderMMDots(); buildLegend(); updateCounts();
 }
 function updateCounts(){
   $('gname').textContent = GRAPH.name || 'graph';

@@ -14,6 +14,9 @@ import { ingestFile } from "../src/ingest/ingest.js";
 import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
 import { docContentHash } from "../src/extract/identity.js";
 import { exportViewer } from "./export-viewer.js";
+import { GraphStore } from "../src/store/graphStore.js";
+import { StubEmbedder } from "../src/embedder.js";
+import { layoutPass } from "../src/layout/pass.js";
 import { report, printScorecard } from "./ingest-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -98,7 +101,11 @@ async function main(): Promise<void> {
             console.error(`FAILED   ${f}: ${e instanceof Error ? e.message : e}`);
           }
         }
+        // One layout pass for the whole run: newcomers relax against the frozen existing map, and every
+        // pre-existing node keeps its exact position (design §3.3, F-2). Cheap — O(|new|·|existing|).
+        const lay = await layoutPass(graph.store, { actor: "cli", cause: `ingest ${name}` });
         console.log(`\n--- ${docs.length} file(s): ${ingested} ingested (${partial} partial), ${skipped} unchanged, ${failed} failed, ${badInputs} bad input(s)  ·  +${entities} entities, +${edges} edges ---`);
+        if (lay.mode !== "noop") console.log(`layout: ${lay.mode} — ${lay.laidOut} new node(s) in ${lay.components} component(s) (graph ${lay.byRule.graph}, semantic ${lay.byRule.semantic}, map ${lay.byRule.map})`);
         if (failed > 0 || badInputs > 0) process.exitCode = 1; // surface partial failure / bad inputs to the shell, but finish the run
       } finally {
         graph.close();
@@ -106,9 +113,24 @@ async function main(): Promise<void> {
       break;
     }
     case "view": {
+      // Settle and persist first, then export — the bundle must carry the stored layout or the map is
+      // durable in SQLite and still reshuffles in the product (design §3.5). layoutPass reads STORED
+      // vectors and never embeds, so this needs no live embedder: the StubEmbedder only satisfies the ctor.
       const name = args[0] ?? usage();
+      const db = join(graphDir(name), "graph.db");
+      if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
+      const store = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
+      try {
+        const r = await layoutPass(store, { actor: "cli", cause: `view ${name}` });
+        if (r.mode !== "noop") {
+          const rules = r.mode === "incremental" ? `  (graph ${r.byRule.graph}, semantic ${r.byRule.semantic}, map ${r.byRule.map})` : "";
+          console.log(`layout: ${r.mode} — ${r.laidOut} node(s) placed in ${r.components} component(s)${rules}`);
+        }
+      } finally {
+        store.close();
+      }
       const out = join(graphDir(name), "view.html");
-      const n = exportViewer(join(graphDir(name), "graph.db"), out, name);
+      const n = exportViewer(db, out, name);
       console.log(`wrote ${out}  (${n} nodes) — open it in a browser`);
       break;
     }
