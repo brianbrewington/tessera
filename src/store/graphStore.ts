@@ -476,11 +476,138 @@ export class GraphStore {
     return computeAffinity(this.connectiveAdjacency(opts.kinds), a, b, opts);
   }
 
+  // ORDER BY rowid is EXPLICIT, not decorative (design §3.2). Layout seeds are index-derived
+  // (`Math.cos(i)*220`), so this order is part of the map's geometry: change it and every stored position
+  // becomes wrong. `SELECT *` with no ORDER BY happened to return rowid order, and the viewer has always
+  // depended on that accident. Making it explicit is behaviour-preserving and takes the dependency out of
+  // SQLite's discretion. test/layout-store.test.ts pins it.
   allNodes(): NodeRecord[] {
-    return (this.db.prepare("SELECT * FROM nodes").all() as NodeRow[]).map(hydrate);
+    return (this.db.prepare("SELECT * FROM nodes ORDER BY rowid").all() as NodeRow[]).map(hydrate);
   }
   allEdges(): EdgeRecord[] {
-    return (this.db.prepare("SELECT * FROM edges").all() as EdgeRow[]).map(hydrateEdge);
+    return (this.db.prepare("SELECT * FROM edges ORDER BY rowid").all() as EdgeRow[]).map(hydrateEdge);
+  }
+
+  // --- layout (design §3.1) ------------------------------------------------------------------------
+  // The `layout` table is a seam the store spec reserved for the Resonator (`docs/specs/graph-store-spec-v2.md:33,64`).
+  // We implement the spec'd putLayout rather than writing the table ad hoc, so the Resonator inherits a
+  // working API instead of colliding with one.
+
+  /**
+   * Write one node's position. Returns `changed:false` and does nothing at all when the coordinates are
+   * unchanged — no version bump, no mutation_log row. That no-op rule is load-bearing: without it every
+   * `tessera view` rewrites N rows, churns N versions, and appends N log ops, and the byte-identical-position
+   * test that protects the map from drifting becomes meaningless.
+   */
+  putLayout(
+    nodeId: string,
+    pos: { x: number; y: number; zoomMin?: number | null },
+    opts: { expectedVersion?: number },
+    meta: Meta,
+  ): { version: number; changed: boolean } {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
+      throw new Error(`putLayout: non-finite position for ${nodeId} (${pos.x}, ${pos.y})`);
+    }
+    const zoomMin = pos.zoomMin ?? null;
+    const tx = this.db.transaction((): { version: number; changed: boolean } => {
+      const before = this.db
+        .prepare("SELECT x, y, zoom_min AS zoomMin, version FROM layout WHERE node_id = ?")
+        .get(nodeId) as { x: number; y: number; zoomMin: number | null; version: number } | undefined;
+
+      if (opts.expectedVersion !== undefined && (before?.version ?? 0) !== opts.expectedVersion) {
+        throw new Error(
+          `putLayout: version conflict for ${nodeId} (expected ${opts.expectedVersion}, found ${before?.version ?? 0})`,
+        );
+      }
+      if (before && before.x === pos.x && before.y === pos.y && before.zoomMin === zoomMin) {
+        return { version: before.version, changed: false }; // no-op: identical coordinates
+      }
+      if (!before) {
+        const exists = this.db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(nodeId);
+        if (!exists) throw new Error(`putLayout: no such node ${nodeId}`);
+        this.db
+          .prepare("INSERT INTO layout (node_id, x, y, zoom_min, version) VALUES (?, ?, ?, ?, 1)")
+          .run(nodeId, pos.x, pos.y, zoomMin);
+        this.log(m, at, "putLayout", nodeId, null, { x: pos.x, y: pos.y, zoomMin, version: 1 });
+        return { version: 1, changed: true };
+      }
+      const version = before.version + 1;
+      this.db
+        .prepare("UPDATE layout SET x = ?, y = ?, zoom_min = ?, version = ? WHERE node_id = ?")
+        .run(pos.x, pos.y, zoomMin, version, nodeId);
+      this.log(m, at, "putLayout", nodeId, before, { x: pos.x, y: pos.y, zoomMin, version });
+      return { version, changed: true };
+    });
+    return tx.immediate();
+  }
+
+  /**
+   * The normal path — one transaction for the whole settle pass, and ONE summarising mutation_log op rather
+   * than one per node. Applies the same no-op rule per row, so a re-run with an unchanged map writes nothing
+   * and logs nothing.
+   */
+  putLayoutBatch(
+    entries: ReadonlyArray<{ nodeId: string; x: number; y: number; zoomMin?: number | null }>,
+    meta: Meta,
+  ): { written: number; unchanged: number } {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    for (const e of entries) {
+      if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) {
+        throw new Error(`putLayoutBatch: non-finite position for ${e.nodeId} (${e.x}, ${e.y})`);
+      }
+    }
+    const tx = this.db.transaction((): { written: number; unchanged: number } => {
+      const sel = this.db.prepare("SELECT x, y, zoom_min AS zoomMin, version FROM layout WHERE node_id = ?");
+      const ins = this.db.prepare("INSERT INTO layout (node_id, x, y, zoom_min, version) VALUES (?, ?, ?, ?, 1)");
+      const upd = this.db.prepare("UPDATE layout SET x = ?, y = ?, zoom_min = ?, version = version + 1 WHERE node_id = ?");
+      const exists = this.db.prepare("SELECT 1 FROM nodes WHERE id = ?");
+      let written = 0;
+      let unchanged = 0;
+      for (const e of entries) {
+        const zoomMin = e.zoomMin ?? null;
+        const before = sel.get(e.nodeId) as { x: number; y: number; zoomMin: number | null; version: number } | undefined;
+        if (before && before.x === e.x && before.y === e.y && before.zoomMin === zoomMin) {
+          unchanged++;
+          continue;
+        }
+        if (!before) {
+          if (!exists.get(e.nodeId)) throw new Error(`putLayoutBatch: no such node ${e.nodeId}`);
+          ins.run(e.nodeId, e.x, e.y, zoomMin);
+        } else {
+          upd.run(e.x, e.y, zoomMin, e.nodeId);
+        }
+        written++;
+      }
+      // One op for the batch. A wholly unchanged pass logs NOTHING — that is what makes "a second `view`
+      // appends zero mutation_log ops" a real assertion rather than a hopeful one.
+      if (written > 0) this.log(m, at, "putLayoutBatch", null, null, { written, unchanged, total: entries.length });
+      return { written, unchanged };
+    });
+    return tx.immediate();
+  }
+
+  getLayout(): Map<string, { x: number; y: number; zoomMin: number | null; version: number }> {
+    const rows = this.db
+      .prepare("SELECT node_id AS nodeId, x, y, zoom_min AS zoomMin, version FROM layout")
+      .all() as Array<{ nodeId: string; x: number; y: number; zoomMin: number | null; version: number }>;
+    return new Map(rows.map((r) => [r.nodeId, { x: r.x, y: r.y, zoomMin: r.zoomMin, version: r.version }]));
+  }
+
+  /**
+   * Nodes with no layout row, in rowid order. The primary newcomer mechanism (design §3.1): it heals ANY
+   * writer path — `connect --commit` today, anything added later — rather than only the one the drop target
+   * calls. Callers intersect with the visible set themselves (design §3.3); this is deliberately unfiltered
+   * so slice 4 can use it for provenance without a second method.
+   */
+  nodesLackingLayout(): string[] {
+    return (
+      this.db
+        .prepare("SELECT n.id AS id FROM nodes n LEFT JOIN layout l ON l.node_id = n.id WHERE l.node_id IS NULL ORDER BY n.rowid")
+        .all() as Array<{ id: string }>
+    ).map((r) => r.id);
   }
 
   countEdges(): number {
