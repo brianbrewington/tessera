@@ -15,6 +15,7 @@ Each script is standalone and read-only with respect to the repo. Run from the r
 | `seed-fallback-rate.ts` | How often does centroid seeding actually fire? | design §3.3.1 |
 | `newcomer-topology.ts` | Do a dropped doc's entities form one component, and does it touch the map? | design §3.3.1, §10 |
 | `semantic-anchor-floor.ts` | **Calibrates `SEMANTIC_FLOOR`.** At what cosine do rules (b) and (c) both stay reachable? | design §3.3 |
+| `cohesion-metric.mts` | Does any candidate metric actually separate a cohesive placement from a scatter? | design §10 (**answer so far: no**) |
 
 ## Running them
 
