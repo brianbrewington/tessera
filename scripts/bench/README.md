@@ -17,6 +17,8 @@ Each script is standalone and read-only with respect to the repo. Run from the r
 | `semantic-anchor-floor.ts` | **Calibrates `SEMANTIC_FLOOR`.** At what cosine do rules (b) and (c) both stay reachable? | design §3.3 |
 | `cohesion-metric.mts` | Does any candidate metric actually separate a cohesive placement from a scatter? | design §10 (**answer so far: no**) |
 | `scale-probe.mts` | Where does the map break as the graph grows — settle, incremental, bundle, draw? | scaling analysis |
+| `make-synthetic-graph.mts` | Builds a corpus-shaped graph at any scale, so the viewer can be tested on sizes we have no real corpus for | scaling analysis |
+| `h-toggle-cost.mts` | What does pressing `h` cost once provenance has no layout? | **known cliff — see below** |
 
 ## Running them
 
@@ -66,3 +68,16 @@ Re-run and update this table when the corpus, the models, or the machine changes
 placement from a scattered one — both score ~0%. Design §10's acceptance criterion is component cohesion,
 measured against a checked-in fixture, precisely because a corpus-dependent rate lets two different
 implementations both claim correctness.
+
+
+## Known cliff: the `h` toggle at scale (found 2026-08-06)
+
+Slice 1 made the default view instant — the viewer reads stored positions and never settles. Provenance nodes
+deliberately have **no** layout rows until slice 4, so pressing `h` (show provenance) makes the visible set
+incomplete, which correctly triggers design §3.4's all-or-nothing fallback: a **full settle over every node**.
+
+Measured on `graphs/synth10x` (4,975 nodes / 8,246 edges): **36.6 s of frozen main thread.**
+
+This is not a regression — before slice 1 *every* load paid a settle. But it is now the worst interaction in
+the viewer, and it got relatively worse because everything around it got fast. Slice 4 (provenance in the
+layout) removes it by construction. Until then, `h` on a large graph will appear to hang the tab.
