@@ -611,7 +611,7 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
     c.onclick=()=>restoreScene(s); box.appendChild(c); });
   const exp=el('span','add','⤓ export'); exp.title='export scenes to a file, so `tessera scenes import` can move them into the graph';
   exp.onclick=()=>exportScenes(); box.appendChild(exp);
-  const add=el('span','add','+'); add.title='save this view as a scene'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
+  const add=el('span','add','+'); add.title='save this view as a scene — captures the camera and, if a node is open, that node as the scene\'s focus (optional)'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
     add.replaceWith(inp); inp.focus();
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
     inp.addEventListener('blur', ()=> saveScene(inp.value)); };

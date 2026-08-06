@@ -105,6 +105,37 @@ describe("importScenes — crossing the one-way door", () => {
     s.close();
   });
 
+  it("a scene with NO focus node is fully supported — optional, not degraded", async () => {
+    // Saving a view without a node open is a legitimate workflow: anchors govern the camera, focus_node only
+    // restores the side panel, and the viewer's restoreScene() already falls through to showIdle(). This
+    // pins that as a guarantee rather than an accident, since 5 of Brian's 6 real scenes have no focus node.
+    const s = mkStore();
+    const [a, b] = await nodes(s, 2);
+    const r = s.importScenes(
+      [withKey({ name: "No focus", narr: "still restorable", scale: 1.4, showProv: false, focusNode: null, anchors: [a!, b!], ordinal: 0 })],
+      meta,
+    );
+    expect(r).toMatchObject({ imported: 1, skipped: 0 });
+    const got = s.allScenes()[0]!;
+    expect(got.focusNode).toBeNull();
+    expect(got.anchors.length).toBe(2); // the scene still resolves — that is what makes it restorable
+    expect(got.narr).toBe("still restorable");
+    s.close();
+  });
+
+  it("two focus-less scenes over the SAME view are one scene (nothing left to distinguish them)", async () => {
+    // Consequence worth stating: focus_node is in the content key to keep two scenes of one view distinct
+    // when they differ only by panel selection. With no focus node there is nothing to differ by, so they
+    // legitimately merge. This is why Brian's import reported "1 already present".
+    const s = mkStore();
+    const [a] = await nodes(s, 1);
+    const one = withKey({ name: "Same", narr: null, scale: 1, showProv: false, focusNode: null, anchors: [a!], ordinal: 0 });
+    const two = withKey({ name: "Same", narr: null, scale: 1, showProv: false, focusNode: null, anchors: [a!], ordinal: 1 });
+    const r = s.importScenes([one, two], meta);
+    expect(r).toMatchObject({ imported: 1, duplicates: 1 });
+    s.close();
+  });
+
   it("nulls a focus_node that no longer exists rather than failing the import", async () => {
     const s = mkStore();
     const [a] = await nodes(s, 1);
