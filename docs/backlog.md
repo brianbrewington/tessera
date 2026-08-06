@@ -205,3 +205,15 @@ just retrieval.
 ## Named-graph management
 switch / rename / merge / delete; per-graph config (extraction model, embedder); an in-db `meta` row instead of the
 `meta.json` sidecar.
+
+## `mutation_log` coverage is not universal (FOUND in the durable-map-state review, Codex 5.3)
+The store's replay-grade guarantee is narrower than the docs and comments imply. `putNode`/`putEdge`/
+`promoteNode` log correctly, but two mutating paths write without appending to `mutation_log`:
+`markExtracted()` (`src/store/graphStore.ts:492`, writes `extracted_chunks`) and `recordIngestedSource()`
+(`:508`, upserts `ingest_sources`). Consequence: a replay from `mutation_log` reconstructs the graph but NOT
+the ingest memo or the file-level manifest — so a replayed db would re-pay the LLM for every chunk and re-ingest
+every "unchanged" doc. Harmless today (nothing replays in anger); load-bearing the moment replay/restore is
+real, which `docs/specs/graph-store-spec-v2.md:178` (portable export) implies it will be.
+**Disposition: ACCEPTED-RISK for now** — not caused by and not blocking the durable-map-state work that found
+it. Fix options: log both as first-class ops, or explicitly document them as derived-cache tables excluded from
+replay (and make `export` carry them separately). Decide before the export/restore primitive lands.
