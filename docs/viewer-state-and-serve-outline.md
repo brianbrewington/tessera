@@ -131,7 +131,33 @@ confirmed all of them. Two additions it found are marked ★.
   reloads** (live delta-patching is deferred, §5) — stated so nobody discovers it as a surprise. If scene
   `name`/`narr` are injected as a JSON literal, they need the same `<` escaping as
   `export-viewer.ts:35`.
-- **D7. Deny-by-default on the network surface — rewritten after round 2 found two holes.**
+- **D7. Deny-by-default on the network surface — MEASURED, not derived.** Observed headers from a real Chrome
+  hitting a real probe server on `127.0.0.1:7777` (`scratchpad/probe.mjs`; curl rows included for contrast):
+
+  | request | `Origin` | `Host` | `Sec-Fetch-Site` |
+  |---|---|---|---|
+  | `GET /` — typed/opened URL (navigation) | **absent** | `127.0.0.1:7777` | **`none`** |
+  | `GET /events` — the page's own `EventSource` | **absent** | `127.0.0.1:7777` | `same-origin` |
+  | `POST /ingest` — the page's own `fetch` | `http://127.0.0.1:7777` | `127.0.0.1:7777` | `same-origin` |
+  | any curl / non-browser client | absent | (as sent) | **absent** |
+
+  **The EventSource connected and received messages**, confirming F3 empirically: a same-origin GET carries no
+  `Origin`, so v2's "reject missing `Origin`" would have rejected the app's own SSE client.
+
+  **And the check found a second self-inflicted bug before it was written:** a top-level navigation sends
+  `Sec-Fetch-Site: none`, so enforcing `same-origin` on *every* route — the natural reading of round 2's
+  proposed fix — **would block the initial page load itself.** The rule has to be per-route. Two consecutive
+  "obvious" hardening rules would each have broken the app; only measurement caught either.
+
+  The empirically-grounded rule:
+  - **`Host` on every route** ∈ {`127.0.0.1:PORT`, `localhost:PORT`} — present and correct on every observed
+    request, and the only thing that stops DNS rebinding.
+  - **Navigation (`GET /`): accept `Sec-Fetch-Site: none` or `same-origin`.** Never require `same-origin`.
+  - **API routes (`/events`, `/scenes`, `/ingest`): require `Sec-Fetch-Site: same-origin`.** Confirmed present
+    on both the EventSource GET and the fetch POST.
+  - **`Origin`: strict-compare when present; never require presence.** Present on POST, absent on the SSE GET.
+
+  Remaining rationale (unchanged):
   - **Validate the `Host` header on EVERY route**, against `127.0.0.1:PORT` / `localhost:PORT`. Binding to
     loopback does **not** stop DNS rebinding: a page on `evil.com` rebound to `127.0.0.1` is same-origin in the
     browser's eyes, sends no `Origin`, triggers no preflight, and `GET /` would hand it the entire personal
@@ -228,13 +254,10 @@ change the asymptote); live delta-patching of an open map; named tours; drag-reo
 
 - ~~Per-chunk end-to-end latency~~ — **MEASURED, closed.** See D9: 9.9 s/chunk, 97% extraction, ~6 min for a
   20-page drop; the chunk memo makes SSE sufficient and keeps the queue deferred.
-- **D7's header behaviour still wants empirical confirmation** before it becomes spec text: does the served
-  page's own `EventSource` connect under the rewritten rules, in Chrome and Firefox, and what headers does it
-  actually send? Fable's F3 derivation from the Fetch spec is convincing and I have not independently confirmed
-  it — the v2 bug came from reasoning about exactly this instead of checking it, so the rule is: **do not write
-  D7 into the spec until a real browser has been observed hitting a real `/events`.** A probe server
-  (`scratchpad/probe.mjs`) logs `Origin` / `Host` / `Sec-Fetch-*` per route and reports whether the page's own
-  EventSource connected; it needs one browser load to answer.
+- ~~D7's header behaviour~~ — **MEASURED in Chrome, closed.** See D7's table. F3 confirmed, plus a second bug
+  (navigation sends `Sec-Fetch-Site: none`) caught before it was written. **Still open: Firefox.** The rule
+  above is derived from one engine; re-run the probe there before the spec is final, since the `Sec-Fetch-*`
+  family is where engines have historically differed.
 - Does `view.html` survive as a "share a snapshot" artifact once `serve` exists? (It should.)
 - Re-dropping an *edited* file re-extracts and may only reinforce existing entities — no new node ids, no
   visible map change. Surprising enough to need UI feedback?
