@@ -19,6 +19,7 @@ import { StubEmbedder } from "../src/embedder.js";
 import { layoutPass } from "../src/layout/pass.js";
 import { prominencePass } from "../src/graph/prominence-pass.js";
 import { contentKey } from "../src/scenes/scene.js";
+import { acquireIngestLock } from "../src/serve/lock.js";
 import { report, printScorecard } from "./ingest-report.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +86,16 @@ async function main(): Promise<void> {
         break;
       }
 
+      // The OTHER half of the advisory lock (design §9). It was only ever taken by `serve`, so the mutual
+      // exclusion was documented and not implemented: a CLI ingest and a served drop could interleave
+      // transactions against one SQLite writer.
+      let releaseLock: () => void;
+      try {
+        releaseLock = acquireIngestLock(graphDir(name), `cli ingest ${name}`);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(1);
+      }
       const graph = Graph.open(name);
       try {
         const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
@@ -111,6 +122,7 @@ async function main(): Promise<void> {
         if (failed > 0 || badInputs > 0) process.exitCode = 1; // surface partial failure / bad inputs to the shell, but finish the run
       } finally {
         graph.close();
+        releaseLock();
       }
       break;
     }

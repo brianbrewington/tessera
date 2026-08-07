@@ -1,6 +1,6 @@
 // CLI half of `tessera serve` — wires the server to a real graph. Kept out of cli.ts so the server can be
 // tested with injected deps and no LLM.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTesseraServer, type IngestProgress } from "../src/serve/server.js";
 import { Graph } from "../src/graph.js";
@@ -14,23 +14,11 @@ import { layoutPass } from "../src/layout/pass.js";
 import { prominencePass } from "../src/graph/prominence-pass.js";
 import { exportViewer } from "./export-viewer.js";
 import { contentKey } from "../src/scenes/scene.js";
+import { acquireIngestLock, LockHeld } from "../src/serve/lock.js";
 
 export interface ServeCliOptions { name: string; port: number; graphDir: string; db: string }
 
-/** Advisory lock so a CLI `ingest` and a served drop cannot write the same graph at once. */
-function takeLock(dir: string): () => void {
-  const lock = join(dir, ".ingest.lock");
-  if (existsSync(lock)) {
-    const age = Date.now() - Number(readFileSync(lock, "utf8").trim() || 0);
-    if (age < 6 * 60 * 60 * 1000) throw new Error(`another tessera process holds ${lock} — refusing to serve`);
-    rmSync(lock, { force: true }); // stale
-  }
-  writeFileSync(lock, String(Date.now()));
-  return () => rmSync(lock, { force: true });
-}
-
 export async function serveCli(opts: ServeCliOptions): Promise<void> {
-  const release = takeLock(opts.graphDir);
   const out = join(opts.graphDir, "view.html");
 
   const { server, close } = createTesseraServer({
@@ -42,6 +30,15 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
       },
       isSupported,
       ingest: async (path, display, onProgress): Promise<IngestProgress> => {
+        // Take the lock only WHILE ingesting, not for the whole serve session — otherwise a running server
+        // blocks every CLI ingest even when idle, which is stricter than the design and still not mutual.
+        let release: () => void;
+        try {
+          release = acquireIngestLock(opts.graphDir, `serve drop ${display.title}`);
+        } catch (e) {
+          if (e instanceof LockHeld) throw new Error(`${e.message} — try again once it finishes`);
+          throw e;
+        }
         const graph = Graph.open(opts.name);
         try {
           const extractorModel = process.env.TESSERA_EXTRACT_MODEL || "qwen2.5:14b";
@@ -52,9 +49,10 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
           });
           const lay = await layoutPass(graph.store, { actor: "serve", cause: `drop ${display.title}` });
           prominencePass(graph.store, { actor: "serve", cause: `drop ${display.title}` });
-          return { phase: "done", chunks: r.chunks, entities: r.entities, edges: r.edges, laidOut: lay.laidOut };
+          return { phase: "done", chunks: r.chunks, entities: r.entities, edges: r.edges, laidOut: lay.laidOut, skipped: r.skipped };
         } finally {
           graph.close();
+          release();
         }
       },
       readScenes: () => {
@@ -93,7 +91,7 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
   console.log(`tessera serve — http://127.0.0.1:${opts.port}  (graph '${opts.name}')`);
   console.log(`  drop a .md or .txt onto the map to ingest it.  ctrl-c to stop.`);
 
-  const shutdown = async (): Promise<void> => { await close(); release(); process.exit(0); };
+  const shutdown = async (): Promise<void> => { await close(); process.exit(0); };
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 }

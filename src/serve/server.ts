@@ -7,7 +7,7 @@ import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { guard, isMutating, type RouteKind } from "./guard.js";
+import { allowedHosts, guard, isMutating, type RouteKind } from "./guard.js";
 
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 export const TEMP_MAX_AGE_MS = 60 * 60 * 1000;
@@ -20,6 +20,8 @@ export interface IngestProgress {
   entities?: number;
   edges?: number;
   laidOut?: number;
+  /** True when content-hash dedup recognised the document — a no-op, not a failure. */
+  skipped?: boolean;
   message?: string;
 }
 
@@ -28,7 +30,7 @@ export interface ServeDeps {
   /** The full exported page, regenerated per request so a drop is visible after reload. */
   renderPage: () => string;
   /** Ingest one file already on disk. Reports progress; resolves with the summary. */
-  ingest: (path: string, display: { title: string }, onProgress: (p: IngestProgress) => void) => Promise<IngestProgress>;
+  ingest: (path: string, display: { title: string; source: string }, onProgress: (p: IngestProgress) => void) => Promise<IngestProgress>;
   /** Reject a file the pipeline cannot read (extension allowlist). */
   isSupported: (filename: string) => boolean;
   readScenes: () => unknown;
@@ -90,7 +92,11 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 
 export function createTesseraServer(opts: ServeOptions): { server: Server; close: () => Promise<void> } {
   const { port, deps } = opts;
-  const expectedOrigin = `http://127.0.0.1:${port}`;
+  // Every Host form the guard accepts must also be an acceptable Origin. Allowing `localhost:PORT` as a
+  // Host while demanding Origin `http://127.0.0.1:PORT` meant opening http://localhost:7777 gave a page that
+  // looked fine and a drop target that 403'd.
+  const expectedOrigins = allowedHosts(port).map((h) => `http://${h}`);
+  const expectedOrigin = expectedOrigins[0]!;
   const temp = deps.tempDir ?? join(tmpdir(), "tessera-serve");
   mkdirSync(temp, { recursive: true });
   sweepTemp(temp);
@@ -99,6 +105,7 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
   // SQLite writer and produce a confusing progress stream for both.
   let ingesting = false;
   const listeners = new Set<ServerResponse>();
+  const MAX_LISTENERS = 8; // a page needs one; a runaway tab or local script should not open thousands
 
   const send = (res: ServerResponse, status: number, body: string, type = "text/plain; charset=utf-8"): void => {
     res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -132,7 +139,7 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
           kind,
         },
         port,
-        expectedOrigin,
+        expectedOrigins,
       );
       if (!verdict.ok) return send(res, verdict.status ?? 403, `refused: ${verdict.reason}`);
 
@@ -171,6 +178,10 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
             Connection: "keep-alive",
             "X-Accel-Buffering": "no",
           });
+          if (listeners.size >= MAX_LISTENERS) {
+            res.end(": too many progress listeners\n\n");
+            return;
+          }
           res.write(": connected\n\n");
           listeners.add(res);
           req.on("close", () => listeners.delete(res));
@@ -178,7 +189,14 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
         }
 
         if (path === "/ingest" && req.method === "POST") {
+          // Claim SYNCHRONOUSLY. The check and the set used to straddle `await readBody`, so two same-origin
+          // POSTs could both pass the check, both read their bodies, and both run the pipeline against one
+          // graph. Every early return below must release, hence the try/finally around the whole handler.
           if (ingesting) return send(res, 409, "an ingest is already running");
+          ingesting = true;
+          let claimed = true;
+          const release = (): void => { if (claimed) { claimed = false; ingesting = false; } };
+          try {
           const declared = Number(req.headers["content-length"] ?? 0);
           if (declared > MAX_UPLOAD_BYTES) return send(res, 413, `upload exceeds ${MAX_UPLOAD_BYTES} bytes`);
 
@@ -197,10 +215,12 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
 
           const ext = filename.toLowerCase().endsWith(".txt") ? ".txt" : ".md";
           const tmpPath = join(temp, `tessera-upload-${randomUUID()}${ext}`);
-          ingesting = true;
           try {
             writeFileSync(tmpPath, body);
-            const summary = await deps.ingest(tmpPath, { title: filename }, broadcast);
+            // `source` matters as much as `title`: without it readDoc() falls back to the resolved TEMP path,
+            // which is then written into provenance.path and the ingest manifest permanently. A stable
+            // synthetic source also means the same file dropped twice is recognised as the same document.
+            const summary = await deps.ingest(tmpPath, { title: filename, source: `drop:${filename}` }, broadcast);
             broadcast({ ...summary, phase: "done" });
             return send(res, 200, JSON.stringify(summary), "application/json");
           } catch (e) {
@@ -210,7 +230,9 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
           } finally {
             // every HANDLED exit path; a SIGKILL cannot run this, which is why sweepTemp exists
             rmSync(tmpPath, { force: true });
-            ingesting = false;
+          }
+          } finally {
+            release();
           }
         }
 

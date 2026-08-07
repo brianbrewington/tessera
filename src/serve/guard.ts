@@ -44,14 +44,15 @@ const deny = (status: number, reason: string): GuardVerdict => ({ ok: false, sta
  * DNS is rebound to loopback is same-origin in the browser's eyes, sends no Origin, and triggers no
  * preflight — so without a Host check `GET /` would hand it the entire personal knowledge graph.
  */
-export function guard(input: GuardInput, port: number, expectedOrigin: string): GuardVerdict {
+export function guard(input: GuardInput, port: number, expectedOrigin: string | readonly string[]): GuardVerdict {
   const hosts = allowedHosts(port);
   if (!input.host || !hosts.includes(input.host.toLowerCase())) {
     return deny(403, `bad Host header ${JSON.stringify(input.host ?? null)} — expected one of ${hosts.join(", ")}`);
   }
 
   // Origin: strict compare WHEN PRESENT. Never required — the page's own EventSource sends none.
-  if (input.origin !== undefined && input.origin !== "null" && input.origin !== expectedOrigin) {
+  const acceptable = typeof expectedOrigin === "string" ? [expectedOrigin] : expectedOrigin;
+  if (input.origin !== undefined && input.origin !== "null" && !acceptable.includes(input.origin)) {
     return deny(403, `foreign Origin ${input.origin}`);
   }
   if (input.origin === "null") {

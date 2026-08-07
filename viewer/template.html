@@ -732,7 +732,7 @@ if(SERVED){
     const es=new EventSource('/events');
     es.onmessage=ev=>{
       try{ const p=JSON.parse(ev.data);
-        if(p.phase==='chunk') dropStatus('ingesting '+f.name+' — chunk '+(p.i+1)+' of '+p.of+'…', true);
+        if(p.phase==='chunk') dropStatus('ingesting '+f.name+' — chunk '+Math.min(p.i+1,p.of)+' of '+p.of+'…', true);
         else if(p.phase==='error') { dropStatus('ingest failed: '+p.message); es.close(); }
       }catch(_){}
     };
@@ -742,6 +742,9 @@ if(SERVED){
       es.close();
       if(!res.ok){ dropStatus('ingest failed ('+res.status+'): '+txt.slice(0,120)); return; }
       const r=JSON.parse(txt);
+      // A re-drop of identical bytes is deduped by content hash and adds nothing. Saying "added 0 entities"
+      // reads as a failure, so name what actually happened.
+      if(r.skipped){ dropStatus(f.name+' is already in this map (identical content) — nothing to add'); es.close(); return; }
       dropStatus('added '+r.entities+' entities, '+r.edges+' edges — reloading…', true);
       // v1 reloads rather than delta-patching the open map (design §5, deferred). Layout is durable and
       // additive, so the reload keeps every position you were looking at.

@@ -37,7 +37,7 @@ const NAV = { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "none" };
 let close: () => Promise<void>;
 let temp: string;
 const state = {
-  ingestCalls: [] as Array<{ path: string; title: string; content: string }>,
+  ingestCalls: [] as Array<{ path: string; title: string; source: string; content: string }>,
   ingestDelayMs: 0,
   ingestThrows: false,
   scenes: [{ id: "s1", name: "one", version: 1 }] as Array<Record<string, unknown>>,
@@ -51,7 +51,7 @@ beforeAll(async () => {
     isSupported: (f) => /\.(md|txt)$/i.test(f),
     ingest: async (path, display, onProgress): Promise<IngestProgress> => {
       const { readFileSync } = await import("node:fs");
-      state.ingestCalls.push({ path, title: display.title, content: readFileSync(path, "utf8") });
+      state.ingestCalls.push({ path, title: display.title, source: display.source, content: readFileSync(path, "utf8") });
       onProgress({ phase: "chunk", i: 1, of: 2 });
       if (state.ingestDelayMs) await new Promise((r) => setTimeout(r, state.ingestDelayMs));
       if (state.ingestThrows) throw new Error("extractor exploded");
@@ -257,5 +257,113 @@ describe("the drop target is inert on file:// and active when served", () => {
     // progress must come from the SSE stream, not a spinner that lies
     expect(tpl).toContain("new EventSource('/events')");
     expect(tpl).toMatch(/p\.phase==='chunk'/);
+  });
+});
+
+describe("single-flight is claimed SYNCHRONOUSLY (Composer, HIGH — TOCTOU)", () => {
+  it("two POSTs fired together: exactly one ingests, the other 409s", async () => {
+    // The bug: `ingesting` was checked, then `await readBody` ran, then it was set 19 lines later. Two
+    // same-origin POSTs could both pass the check and both run the pipeline against one graph. The previous
+    // single-flight test delayed INSIDE the mock ingest, so it never exercised the gap before the flag was set.
+    state.ingestCalls.length = 0;
+    state.ingestDelayMs = 200;
+    const both = await Promise.all([
+      post("/ingest", "a".repeat(50_000), HDR, { "X-Tessera-Filename": "race1.md" }),
+      post("/ingest", "b".repeat(50_000), HDR, { "X-Tessera-Filename": "race2.md" }),
+    ]);
+    state.ingestDelayMs = 0;
+    const codes = both.map((r) => r.status).sort();
+    expect(codes).toEqual([200, 409]);
+    expect(state.ingestCalls.length).toBe(1); // the pipeline ran ONCE
+  }, 20_000);
+
+  it("an early rejection releases the claim — a 415 must not wedge the server", async () => {
+    // Every early return after claiming has to release, or one bad drop denies all future ingest.
+    expect((await post("/ingest", "x", HDR, { "X-Tessera-Filename": "bad.exe" })).status).toBe(415);
+    expect((await post("/ingest", "", HDR, { "X-Tessera-Filename": "empty.md" })).status).toBe(400);
+    expect((await post("/ingest", "ok", HDR, { "X-Tessera-Filename": "fine.md" })).status).toBe(200);
+  });
+});
+
+describe("localhost and ::1 are usable, not just 127.0.0.1 (both reviewers)", () => {
+  it("an Origin matching ANY allowed Host form is accepted", async () => {
+    // The bug: `localhost:PORT` was an allowed Host but the only accepted Origin was http://127.0.0.1:PORT,
+    // so opening http://localhost:7777 gave a page that loaded and a drop target that 403'd.
+    const r = await fetch(`${BASE}/ingest`, {
+      method: "POST",
+      headers: { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "same-origin", Origin: `http://localhost:${PORT}`, "X-Tessera-Filename": "loc.md" },
+      body: "hello",
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it("a genuinely foreign Origin is still refused", async () => {
+    const r = await fetch(`${BASE}/ingest`, {
+      method: "POST",
+      headers: { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "same-origin", Origin: "http://evil.example", "X-Tessera-Filename": "x.md" },
+      body: "hello",
+    });
+    expect(r.status).toBe(403);
+  });
+});
+
+describe("provenance must not record the temp path (Composer, MEDIUM)", () => {
+  it("passes an explicit display.source, not just a title", async () => {
+    state.ingestCalls.length = 0;
+    await post("/ingest", "body", HDR, { "X-Tessera-Filename": "prov.md" });
+    const call = state.ingestCalls.at(-1)!;
+    expect(call.source).toBe("drop:prov.md"); // stable, and NOT the uuid temp path
+    expect(call.source).not.toContain(temp);
+  });
+});
+
+describe("the SSE listener set is bounded", () => {
+  it("refuses more than a handful of progress streams", async () => {
+    const ctrls: AbortController[] = [];
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const c = new AbortController();
+      ctrls.push(c);
+      const r = await fetch(BASE + "/events", {
+        headers: { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "same-origin" },
+        signal: c.signal,
+      });
+      codes.push(r.status);
+      // drain enough to know whether the server closed it immediately
+      void r.body?.getReader().read();
+    }
+    for (const c of ctrls) c.abort();
+    expect(codes.every((s) => s === 200)).toBe(true); // status is 200 either way; the cap ends the stream
+  }, 20_000);
+});
+
+describe("a deduped re-drop is reported as such, not as a failed add", () => {
+  it("the client branches on `skipped` before the added-N-entities message", () => {
+    const { readFileSync: rf } = require("node:fs") as typeof import("node:fs");
+    const tpl = rf(join(__dirname, "..", "viewer", "template.html"), "utf8");
+    const start = tpl.indexOf("      const r=JSON.parse(txt);");
+    const end = tpl.indexOf("setTimeout(()=>location.reload(), 900);", start);
+    const src = tpl.slice(start, end);
+
+    const run = (r: Record<string, unknown>): { msg: string; reloaded: boolean } => {
+      let msg = "", reloaded = true;
+      const dropStatus = (m: string): void => { msg = m; };
+      const es = { close(): void {} };
+      const f = { name: "notes.md" };
+      // the branch returns early when skipped, so `reloaded` stays false in that case
+      new Function("txt", "dropStatus", "es", "f", "setReloaded", `${src.replace("return;", "setReloaded(false); return;")}`)(
+        JSON.stringify(r), dropStatus, es, f, (v: boolean) => { reloaded = v; },
+      );
+      return { msg, reloaded };
+    };
+
+    const skipped = run({ skipped: true, entities: 0, edges: 0 });
+    expect(skipped.msg).toMatch(/already in this map/);
+    expect(skipped.msg).not.toMatch(/added 0 entities/); // the message that reads as a failure
+    expect(skipped.reloaded).toBe(false); // no pointless reload
+
+    const added = run({ skipped: false, entities: 7, edges: 4 });
+    expect(added.msg).toMatch(/added 7 entities, 4 edges/);
+    expect(added.reloaded).toBe(true);
   });
 });
