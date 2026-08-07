@@ -217,3 +217,44 @@ real, which `docs/specs/graph-store-spec-v2.md:178` (portable export) implies it
 **Disposition: ACCEPTED-RISK for now** — not caused by and not blocking the durable-map-state work that found
 it. Fix options: log both as first-class ops, or explicitly document them as derived-cache tables excluded from
 replay (and make `export` carry them separately). Decide before the export/restore primitive lands.
+
+## Slice-3 (`tessera serve`) — open items with explicit dispositions
+
+Recorded because a finding without a disposition is a finding that quietly becomes the default behaviour.
+Each of these was raised by a slice-3 reviewer (Codex, Composer, or Fable) and is **not** fixed in the
+checkpoint that ships slice 3.
+
+### 1. Multi-file drop discards all but the first file — **SCHEDULED (next)**
+`viewer/template.html` takes `e.dataTransfer.files[0]`. Dropping three files ingests one and says nothing
+about the other two. Brian: *"multi file drop is common. we should support that."* Deferred only so the
+reviewed slice-3 checkpoint lands first; this is the next piece of work on the server, not an accepted
+limitation. Until then the UI is silently lossy, which is the part that makes it urgent rather than cosmetic.
+
+### 2. A hung extractor holds single-flight AND the advisory lock until restart — **ACCEPTED-RISK**
+`deps.ingest` has no timeout (`src/serve/server.ts`), so an Ollama call that never returns wedges further
+drops (409) and blocks CLI ingest (LockHeld) until the server is restarted.
+
+Accepted rather than fixed because **no honest timeout exists**: a legitimate ingest of `graphs/big` is 199
+chunks at ~10 s each — over half an hour — so any timeout generous enough not to kill real work is too
+generous to catch a hang promptly. Inventing a number would produce a limit that both fails to protect and
+occasionally destroys a long, expensive, half-finished ingest. Mitigations that already hold: the chunk memo
+commits per chunk, so a killed ingest resumes rather than restarting; the advisory lock records the holder's
+pid and is reclaimed automatically once that process is gone; and restarting the server clears it.
+**Revisit if** a per-chunk watchdog lands (bounding one LLM call rather than the whole document is the
+tractable version of this).
+
+### 3. `GET`/`PUT /scenes` exist but no client calls them — **ACCEPTED-RISK for the checkpoint**
+The served viewer still reads scenes from `localStorage` (`viewer/template.html`), so scenes imported into the
+`scenes` table are invisible on the served page. Design §6 says the db is the source of truth in served mode;
+slice 3 does not close that loop. Consequence, stated plainly: a user who followed the slice-2 migration will
+see **no scenes** when they open the served viewer, and may reasonably conclude the migration failed. The data
+is safe — `tessera scenes import` wrote it and `GET /scenes` returns it — but nothing displays it yet.
+**Revisit with** the multi-file work; it is the same file and the same slice.
+
+### 4. Two code paths exercised only as mocks — **TEST (pending)**
+- The supplemental no-Origin rule (`src/serve/server.ts`: browser-shaped request with `Sec-Fetch-*` but no
+  `Origin` on a mutating route) has no test; deleting it stays green.
+- `writeScenes`' real version/conflict/`contentKey` logic (`scripts/serve.ts`) is only ever run through an
+  injected mock in `test/serve-server.test.ts`.
+Both are cheap and neither changes behaviour — they are missing coverage, not missing function. Listed here so
+"tested" is not claimed for them.
