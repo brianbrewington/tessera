@@ -163,7 +163,14 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
         }
 
         if (path === "/scenes" && req.method === "PUT") {
-          const body = await readBody(req, MAX_UPLOAD_BYTES);
+          // .catch here, not just on /ingest: readBody's rejection carries status 413, and without this it
+          // fell through to the generic 500 handler. Same guard, both routes — fix the class, not the
+          // instance, which is the recurrence this repo keeps naming.
+          const body = await readBody(req, MAX_UPLOAD_BYTES).catch((e: Error & { status?: number }) => {
+            send(res, e.status ?? 400, e.message);
+            return null;
+          });
+          if (body === null) return;
           let parsed: unknown;
           try {
             parsed = JSON.parse(body.toString("utf8"));

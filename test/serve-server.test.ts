@@ -340,9 +340,13 @@ describe("the SSE listener set is bounded (Fable round 2, 8a — the old test as
     };
     for (let i = 0; i < 10; i++) readers.push(await open());
     await new Promise((r) => setTimeout(r, 120));
+    // assert the CAP's effect, not that a message string appears somewhere: the 9th stream must be ENDED,
+    // and the accepted ones must still be open. slice(8).some() also let a cap drift 8->9 pass silently.
+    const accepted = readers.slice(0, 8);
     const capped = readers.slice(8);
-    expect(capped.some((x) => /too many progress listeners/.test(x.body))).toBe(true);
-    for (const c of ctrls) c.abort();
+    expect(capped.length).toBeGreaterThan(0);
+    expect(capped.every((x) => x.done || /too many progress listeners/.test(x.body))).toBe(true);
+    expect(accepted.every((x) => !x.done)).toBe(true); // the ones under the cap stayed open
   }, 30_000);
 });
 
@@ -375,4 +379,45 @@ describe("oversize is rejected MID-STREAM, not only by declared length (Fable ro
     });
     expect(status).toBe(413);
   }, 30_000);
+});
+
+describe("a deduped re-drop is reported as such, not as a failed add", () => {
+  it("the client branches on `skipped` before the added-N-entities message", () => {
+    const { readFileSync: rf } = require("node:fs") as typeof import("node:fs");
+    const tpl = rf(join(__dirname, "..", "viewer", "template.html"), "utf8");
+    const start = tpl.indexOf("      const r=JSON.parse(txt);");
+    const end = tpl.indexOf("setTimeout(()=>location.reload(), 900);", start);
+    const src = tpl.slice(start, end);
+
+    const run = (r: Record<string, unknown>): { msg: string; reloaded: boolean } => {
+      let msg = "", reloaded = true;
+      const dropStatus = (m: string): void => { msg = m; };
+      const es = { close(): void {} };
+      const f = { name: "notes.md" };
+      // the branch returns early when skipped, so `reloaded` stays false in that case
+      new Function("txt", "dropStatus", "es", "f", "setReloaded", `${src.replace("return;", "setReloaded(false); return;")}`)(
+        JSON.stringify(r), dropStatus, es, f, (v: boolean) => { reloaded = v; },
+      );
+      return { msg, reloaded };
+    };
+
+    const skipped = run({ skipped: true, entities: 0, edges: 0 });
+    expect(skipped.msg).toMatch(/already in this map/);
+    expect(skipped.msg).not.toMatch(/added 0 entities/); // the message that reads as a failure
+    expect(skipped.reloaded).toBe(false); // no pointless reload
+
+    const added = run({ skipped: false, entities: 7, edges: 4 });
+    expect(added.msg).toMatch(/added 7 entities, 4 edges/);
+    expect(added.reloaded).toBe(true);
+  });
+});
+
+describe("oversize PUT /scenes returns 413, not 500 (Fable round 3)", () => {
+  it("both body-taking routes surface the size error, not a generic failure", async () => {
+    const big = "x".repeat(MAX_UPLOAD_BYTES + 10);
+    const scenes = await fetch(`${BASE}/scenes`, { method: "PUT", headers: { ...HDR, "Content-Type": "application/json" }, body: big });
+    expect(scenes.status).toBe(413); // was 500: readBody's 413 fell through to the generic handler
+    const ingest = await post("/ingest", big, HDR, { "X-Tessera-Filename": "big.md" });
+    expect(ingest.status).toBe(413);
+  }, 20_000);
 });

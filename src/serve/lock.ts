@@ -76,7 +76,7 @@ export function acquireIngestLock(graphDir: string, what: string): () => void {
         if (fd !== undefined) rmSync(p, { force: true });
         throw e;
       }
-      if (!reclaimStale(p)) throw new LockHeld(readLock(p) ?? { pid: -1, at: 0, what: "unknown", token: "" }, p);
+      if (!reclaimStale(p, graphDir)) throw new LockHeld(readLock(p) ?? { pid: -1, at: 0, what: "unknown", token: "" }, p);
     } finally {
       if (fd !== undefined) closeSync(fd);
     }
@@ -84,33 +84,63 @@ export function acquireIngestLock(graphDir: string, what: string): () => void {
   throw new LockHeld({ pid: -1, at: 0, what: "contended", token: "" }, p);
 }
 
+/** Guard file serialising RECLAIM itself. Short-lived; its own staleness covers a crash mid-reclaim. */
+export const reclaimGuardPath = (graphDir: string): string => `${lockPath(graphDir)}.reclaim`;
+const RECLAIM_GUARD_STALE_MS = 30_000;
+
 /**
  * Try to remove a lock that is provably abandoned. Returns true if the caller should retry.
- * The rename is what makes this safe under contention — only one racer can rename a given file.
+ *
+ * WHY A GUARD FILE, AND NOT JUST rename(): rename is atomic, but it acts on whatever is at the path WHEN IT
+ * RUNS — it is not bound to the snapshot that justified it. A reviewer demonstrated the hole by execution:
+ * if a rival completes its ENTIRE reclaim-and-acquire inside your read→rename gap, your rename succeeds on
+ * the rival's fresh, LIVE lock and you both proceed. Two processes held the lock for ~5 seconds. That is the
+ * exact defect the rename was introduced to fix, reproduced one layer up — the third time in this file that a
+ * fix for a race contained a race.
+ *
+ * The guard makes the whole judge-and-reclaim sequence exclusive rather than only its final step. A racer who
+ * cannot take the guard reports "held" — a spurious LockHeld is the correct failure direction here, since two
+ * writers on one graph is the outcome being prevented.
  */
-function reclaimStale(p: string): boolean {
-  const info = readLock(p);
-  let stale: boolean;
-  if (info === null) {
-    // Unreadable or empty — reachable by a crash between create and write, so it must NOT wedge forever.
-    // Fall back to the file's own mtime, which is what the comment always claimed and the code did not do:
-    // an unreadable lock is stale-if-old, never free-on-sight.
-    try {
-      stale = Date.now() - statSync(p).mtimeMs > LOCK_STALE_MS;
-    } catch {
-      return true; // vanished under us — the path is free, retry
-    }
-  } else {
-    stale = holderDead(info) || Date.now() - info.at > LOCK_STALE_MS;
-  }
-  if (!stale) return false;
-  const parked = `${p}.stale.${process.pid}.${Date.now()}`;
+function reclaimStale(p: string, graphDir: string): boolean {
+  const guard = reclaimGuardPath(graphDir);
+  let guardFd: number | undefined;
   try {
-    renameSync(p, parked); // atomic: exactly one racer wins
-    rmSync(parked, { force: true });
+    guardFd = openSync(guard, "wx");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    // Someone else is mid-reclaim, or crashed while reclaiming. Only the latter may be cleared.
+    let guardAge = 0;
+    try {
+      guardAge = Date.now() - statSync(guard).mtimeMs;
+    } catch {
+      return true; // vanished — retry the acquire
+    }
+    if (guardAge <= RECLAIM_GUARD_STALE_MS) return false; // a live reclaim is in progress: treat as held
+    rmSync(guard, { force: true });
+    return true; // retry; the next attempt takes the guard cleanly
+  }
+
+  try {
+    const info = readLock(p);
+    let stale: boolean;
+    if (info === null) {
+      // Unreadable or empty — reachable by a crash between create and write, so it must NOT wedge forever.
+      // Fall back to the file's own mtime: stale-if-old, never free-on-sight.
+      try {
+        stale = Date.now() - statSync(p).mtimeMs > LOCK_STALE_MS;
+      } catch {
+        return true; // vanished under us — the path is free, retry
+      }
+    } else {
+      stale = holderDead(info) || Date.now() - info.at > LOCK_STALE_MS;
+    }
+    if (!stale) return false;
+    // Safe now: no other process can be between judging and acting, because we hold the guard.
+    rmSync(p, { force: true });
     return true;
-  } catch {
-    // someone else reclaimed it first; they now hold it, so we are not stale-reclaiming anything
-    return false;
+  } finally {
+    if (guardFd !== undefined) closeSync(guardFd);
+    rmSync(guard, { force: true });
   }
 }

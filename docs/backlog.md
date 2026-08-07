@@ -234,7 +234,11 @@ limitation. Until then the UI is silently lossy, which is the part that makes it
 `deps.ingest` has no timeout (`src/serve/server.ts`), so an Ollama call that never returns wedges further
 drops (409) and blocks CLI ingest (LockHeld) until the server is restarted.
 
-Accepted rather than fixed because **no honest timeout exists**: a legitimate ingest of `graphs/big` is 199
+Partial mitigation that predates slice 3 and should be on the record: `src/llm.ts` already aborts an
+individual chat call after 600 s, so a single wedged request unblocks itself — the unbounded case is a model
+that streams slowly forever rather than one that hangs outright.
+
+Accepted rather than fixed because **no honest timeout exists** for the whole document: a legitimate ingest of `graphs/big` is 199
 chunks at ~10 s each — over half an hour — so any timeout generous enough not to kill real work is too
 generous to catch a hang promptly. Inventing a number would produce a limit that both fails to protect and
 occasionally destroys a long, expensive, half-finished ingest. Mitigations that already hold: the chunk memo

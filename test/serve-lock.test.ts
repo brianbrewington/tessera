@@ -4,7 +4,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireIngestLock, lockPath, LockHeld, LOCK_STALE_MS } from "../src/serve/lock.js";
+import { acquireIngestLock, lockPath, reclaimGuardPath, LockHeld, LOCK_STALE_MS } from "../src/serve/lock.js";
 
 const dirs: string[] = [];
 const mk = (): string => { const d = mkdtempSync(join(tmpdir(), "tessera-lock-")); dirs.push(d); return d; };
@@ -147,7 +147,13 @@ describe("RECLAIM is atomic, and release checks ownership (Fable round 2, HIGH)"
     expect(() => acquireIngestLock(d, "next")).toThrow(LockHeld);
   });
 
-  it("contended reclaim of a dead-holder lock yields exactly ONE winner", async () => {
+  it("contended reclaim: one winner (SMOKE — cannot detect the bug it was written for)", async () => {
+    // HONEST LABEL. A reviewer reverted reclaim to check-then-delete and ran this exact race four times:
+    // winners=1 every time. npx/tsx startup jitter is hundreds of ms; the read-overlap window is sub-ms, so
+    // the schedule almost never lands inside it. My own mutation table claimed this test "caught" that
+    // revert — it did not; a different test in the same file failed and I attributed the catch here.
+    // It is kept as a smoke test that concurrent acquisition does not blow up. The property is guarded
+    // deterministically by the reclaim-guard tests below.
     // The race the rename fixes: two processes starting against the same dead-holder lock could each read
     // the stale info, and the second could delete the FIRST's fresh lock and take one of its own — both
     // holding it. The 8-process test never caught this because it always started from an empty directory,
@@ -178,7 +184,9 @@ describe("RECLAIM is atomic, and release checks ownership (Fable round 2, HIGH)"
 });
 
 describe("the CALL SITES take the lock — not just the lock module (Fable round 2, HIGH)", () => {
-  it("`tessera ingest` REFUSES while the lock is held, and proceeds once it is released", async () => {
+  it("`tessera ingest` REFUSES while the lock is held (blocked half only — see note)", async () => {
+    // Renamed: the previous name promised "and proceeds once released", but the fixture directory is deleted
+    // right after release, so the unblocked run never happened. Only the blocked half is asserted.
     // Nothing proved anyone invoked acquireIngestLock: deleting it from scripts/cli.ts or scripts/serve.ts
     // left every test green, silently reverting round 1's mutual-exclusion fix. This is the call-site test.
     const { execFileSync } = await import("node:child_process");
@@ -216,4 +224,40 @@ describe("the CALL SITES take the lock — not just the lock module (Fable round
     expect(blocked.out).toMatch(/another tessera process is writing this graph/);
     expect(blocked.out).toMatch(/test holder/); // and it names WHO holds it
   }, 180_000);
+});
+
+describe("RECLAIM is exclusive, deterministically (Fable round 3, HIGH)", () => {
+  it("a live reclaim-in-progress makes a rival report HELD, not steal", () => {
+    // The demonstrated hole: rename is atomic but is not bound to the snapshot that justified it, so a rival
+    // completing its whole reclaim inside your read->rename gap left BOTH holding the lock. This is the
+    // deterministic version of that race: the guard file IS the rival's in-progress reclaim, so no scheduling
+    // luck is required to observe the behaviour — which is the point. Making the mechanism explicit made the
+    // property testable, where the timing-based test could not be.
+    const d = mk();
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 999_999, at: Date.now(), what: "dead holder" }));
+    writeFileSync(reclaimGuardPath(d), ""); // a rival is mid-reclaim
+    expect(() => acquireIngestLock(d, "rival")).toThrow(LockHeld);
+    expect(existsSync(lockPath(d))).toBe(true); // and it did NOT delete the lock being reclaimed
+  });
+
+  it("a STALE reclaim guard (crash mid-reclaim) does not wedge reclaim forever", () => {
+    const d = mk();
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 999_999, at: Date.now(), what: "dead" }));
+    writeFileSync(reclaimGuardPath(d), "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(reclaimGuardPath(d), old, old);
+    expect(() => acquireIngestLock(d, "next")).not.toThrow();
+  });
+
+  it("the guard is always cleaned up, on both the reclaim and no-reclaim paths", () => {
+    const d = mk();
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 999_999, at: Date.now(), what: "dead" }));
+    const rel = acquireIngestLock(d, "winner");
+    expect(existsSync(reclaimGuardPath(d))).toBe(false); // reclaimed, guard removed
+    rel();
+    const d2 = mk();
+    writeFileSync(lockPath(d2), JSON.stringify({ pid: process.pid, at: Date.now(), what: "live" }));
+    expect(() => acquireIngestLock(d2, "x")).toThrow(LockHeld); // no reclaim happened
+    expect(existsSync(reclaimGuardPath(d2))).toBe(false); // and the guard still got cleaned up
+  });
 });
