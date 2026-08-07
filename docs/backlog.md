@@ -309,3 +309,62 @@ safe across crashes, ingests longer than `LOCK_STALE_MS` (6 h), or mixed uids.
   heartbeat would be the minimum fix, and is cheaper than the full flock migration)
 - `tessera serve` is run as a service, or under a different user from the CLI
 - more than one person, or more than one machine, writes one graph directory
+
+## Async extraction: split ingest into a fast path and a dirty→clean worker (Brian, 2026-08-06)
+
+**Brian:** *"ingest can take that long. other variants of this project have separated things so the 'ingest'
+of chunks would happen asynchronously. so the file read and chunking would be fast, and then chunks would be
+flagged as 'dirty' until ingested and then marked 'clean'."*
+
+**Shape.** `ingest` does read → chunk → write SOURCE + CHUNK nodes → return. Milliseconds, no LLM. A separate
+pass (worker, CLI command, or serve background task) claims dirty chunks, extracts, maps, and marks them
+clean.
+
+### Why this is worth doing, beyond ergonomics
+
+- **It dissolves the accepted lock risk rather than mitigating it.** The advisory lock's live-holder steal
+  (see the lock entry above) exists *only* because one lock is held across the entire LLM loop — 199 chunks
+  at ~10 s is 33 minutes, and a real corpus exceeds the 6 h staleness threshold. If the lock covers only
+  read-chunk-write it is held for milliseconds, and the threshold stops being reachable. That closes a
+  DECISION NEEDED without adding a dependency.
+- **The drop target stops lying about duration.** A drop returns immediately with "42 chunks queued" instead
+  of holding an HTTP request and an SSE stream open for six minutes.
+- **Progress becomes a fact rather than a stream.** Dirty count is queryable at any time, by any process,
+  after a crash, from a different terminal. Today progress exists only in the SSE connection that is watching.
+- **It makes failure visible.** Which is the part that already matters — see below.
+
+### Most of the state already exists
+
+`extracted_chunks` **is** the clean flag. `markExtracted` is written only after a chunk's extraction fully
+completes (`src/ingest/ingest.ts`), and `isExtracted` gates re-extraction — so "dirty" is already
+`chunk NOT IN extracted_chunks`, and it is already a true completion predicate rather than an attempt marker.
+
+**And it already has non-trivial values:** `graphs/big` has 199 chunks and 197 extracted — **2 dirty**, almost
+certainly the parse failures recorded in `ingest_sources`. Nothing surfaces them. A user has no way to learn
+that two chunks of their corpus were never extracted. The async design would make that visible as a matter of
+course, which is an argument for it independent of latency.
+
+### What is actually missing
+
+1. **Decoupling the loop** — `ingestFile` currently interleaves chunk-write and extraction. Split into
+   `ingestChunks()` (fast, locked briefly) and `extractPending()` (slow, lock per chunk or per small batch).
+2. **A claim mechanism** so two extractors don't take the same chunk. Note this is a *narrower* problem than
+   the graph-wide lock: it can be a per-chunk row-level claim inside one transaction rather than a filesystem
+   protocol — which is the class of fix the lock rounds kept failing to hand-roll.
+3. **When layout and prominence run.** Both currently run after ingest. With async extraction, entities
+   arrive over time, so either they run after `extractPending` drains, or incrementally per batch. The layout
+   pass is already additive and idempotent, so per-batch is viable; prominence recomputes wholesale and is
+   cheap enough to defer to drain.
+4. **Surfacing dirty state** — `tessera report` should show it, and the viewer arguably should too.
+
+### Open questions
+
+- Does a partially-extracted graph render honestly, or does a chunk with no entities read as a bug?
+- Does `serve` run the worker in-process (simple, dies with the server) or is it a separate
+  `tessera extract <graph>` the user runs (explicit, resumable, composable)? The second is more in keeping
+  with the repo's bring-up-is-a-documented-sequence stance.
+- Retry policy for a chunk that fails to parse repeatedly — today it silently stays dirty forever, which is
+  exactly what those 2 chunks in `graphs/big` are doing.
+
+**Not this round** (Brian). Recorded now because it is the tractable answer to a risk we just accepted, and
+because the two dirty chunks are evidence the model is already real and already unobserved.
