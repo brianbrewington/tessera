@@ -98,7 +98,9 @@ describe("wiring — the viewer's all-or-nothing read path (design §3.4)", () =
     const settle = (): void => {
       settleCalls++;
     };
-    new Function("NODES", "LAYOUT", "settle", extractBranch())(NODES, LAYOUT, settle);
+    // `reposition` gates the branch — false when only the edge budget changed, so a draw filter can never
+    // move nodes. These tests exercise the repositioning path, so it is true here.
+    new Function("NODES", "LAYOUT", "settle", "reposition", extractBranch())(NODES, LAYOUT, settle, true);
     return settleCalls;
   };
   const mkNodes = () =>

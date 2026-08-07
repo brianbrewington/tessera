@@ -623,6 +623,18 @@ export class GraphStore {
     return tx.immediate();
   }
 
+  /** Remove a measure entirely. Used when a pass declines to compute it — stale prominence is worse than none. */
+  clearEdgeProminence(measure: string, meta: Meta): { removed: number } {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    const tx = this.db.transaction((): { removed: number } => {
+      const r = this.db.prepare("DELETE FROM edge_prominence WHERE measure = ?").run(measure);
+      if (r.changes > 0) this.log(m, at, "clearEdgeProminence", null, null, { measure, removed: r.changes });
+      return { removed: r.changes };
+    });
+    return tx.immediate();
+  }
+
   edgeProminence(measure: string): Map<string, number> {
     return new Map(
       (this.db.prepare("SELECT edge_id AS id, value FROM edge_prominence WHERE measure = ?").all(measure) as Array<{ id: string; value: number }>)

@@ -80,6 +80,61 @@ describe("edge betweenness", () => {
   });
 });
 
+describe("ABSOLUTE values — the regression test the normalisation bug needed", () => {
+  // The normalisation bug (node constant 2/((n-1)(n-2)) instead of the edge constant 2/(n(n-1))) shipped
+  // green: every other assertion here is ORDINAL — ratios, orderings, symmetry — and a uniform scale factor
+  // preserves all of them. Only cross-validating against networkx caught it. These pin the actual numbers so
+  // the same class of bug cannot regress silently.
+  it("a single edge scores exactly 1.0", () => {
+    const eb = edgeBetweenness({ nodes: ["a", "b"], edges: [["a", "b", "e"]] });
+    expect(eb.get("e")!).toBeCloseTo(1.0, 12);
+  });
+
+  it("a 3-node path scores exactly 2/3 on both edges", () => {
+    // 3 pairs; each edge lies on 2 of the 3 shortest paths -> 2/3 under 2/(n(n-1)) normalisation.
+    const eb = edgeBetweenness({ nodes: ["a", "b", "c"], edges: [["a", "b", "e1"], ["b", "c", "e2"]] });
+    expect(eb.get("e1")!).toBeCloseTo(2 / 3, 12);
+    expect(eb.get("e2")!).toBeCloseTo(2 / 3, 12);
+  });
+
+  it("a 4-node path: outer edges 1/2, middle edge 2/3", () => {
+    const eb = edgeBetweenness({
+      nodes: ["a", "b", "c", "d"],
+      edges: [["a", "b", "e1"], ["b", "c", "e2"], ["c", "d", "e3"]],
+    });
+    expect(eb.get("e1")!).toBeCloseTo(0.5, 12);
+    expect(eb.get("e3")!).toBeCloseTo(0.5, 12);
+    expect(eb.get("e2")!).toBeCloseTo(2 / 3, 12);
+  });
+});
+
+describe("PARALLEL EDGES — the shape the networkx cross-check could not exercise", () => {
+  // graphs/big has ZERO parallel pairs and zero self-loops, so "matches networkx to floating-point identity"
+  // was validated on the one graph shape that cannot show a divergence. graphs/synthpl has 15 parallel pairs.
+  // Edges are unique on (from,to,kind,polarity), so the same conceptual link asserted under two kinds
+  // produces two rows. Documenting the semantics rather than leaving them accidental:
+  it("splits credit between parallel rows rather than double-counting", () => {
+    const single = edgeBetweenness({ nodes: ["a", "b", "c"], edges: [["a", "b", "e1"], ["b", "c", "e2"]] });
+    const dup = edgeBetweenness({
+      nodes: ["a", "b", "c"],
+      edges: [["a", "b", "e1"], ["a", "b", "e1dup"], ["b", "c", "e2"]],
+    });
+    // the duplicated link's credit is halved across its two rows...
+    expect(dup.get("e1")! + dup.get("e1dup")!).toBeCloseTo(single.get("e1")!, 12);
+    expect(dup.get("e1")!).toBeCloseTo(dup.get("e1dup")!, 12);
+    // ...while the untouched downstream edge is unchanged: path counting stays internally coherent
+    expect(dup.get("e2")!).toBeCloseTo(single.get("e2")!, 12);
+    // CONSEQUENCE, stated: under a top-N% filter a double-asserted bridge can fall below the cut while
+    // weaker single rows survive. Collapsing parallel rows before ranking is the fix if that ever bites.
+  });
+
+  it("betweenness skips self-loops; pagerankProduct scores them — the two cover different edge sets", () => {
+    const inp = { nodes: ["a", "b"], edges: [["a", "b", "e"], ["a", "a", "loop"]] as Array<readonly [string, string, string]> };
+    expect(edgeBetweenness(inp).has("loop")).toBe(false);
+    expect(pagerankProduct(inp).has("loop")).toBe(true);
+  });
+});
+
 describe("pagerank product", () => {
   it("scores a hub-to-hub edge above a leaf-to-leaf edge", () => {
     const nodes = ["h1", "h2", "l1", "l2"];

@@ -53,7 +53,7 @@ function runExport(sceneList: any[], nodeList: any[], W: number, H: number, grap
   };
   const URL_ = { createObjectURL: () => "blob:x", revokeObjectURL(): void {} };
   const src = `${extractAnchorConsts()}\n${extractFn("anchorsForCamera")}\n${extractFn("exportScenes")}\nexportScenes();`;
-  new Function("scenes", "nodes", "W", "H", "GRAPH", "document", "Blob", "URL", "alert", "setTimeout", src)(
+  new Function("scenes", "NODES", "W", "H", "GRAPH", "document", "Blob", "URL", "alert", "setTimeout", src)(
     sceneList, nodeList, W, H, { name: graphName }, doc, Blob_, URL_, () => {}, () => {},
   );
   return JSON.parse(captured);
@@ -87,7 +87,7 @@ describe("the export side agrees with the import side", () => {
     ];
     const src = `${extractAnchorConsts()}\n${extractFn("anchorsForCamera")}\nreturn anchorsForCamera(cam);`;
     for (const cam of cams) {
-      const fromTemplate = new Function("cam", "nodes", "W", "H", src)(cam, nodeList, 1200, 800);
+      const fromTemplate = new Function("cam", "NODES", "W", "H", src)(cam, nodeList, 1200, 800);
       const fromSrc = selectAnchors(nodeList, cam, { w: 1200, h: 800 });
       expect(fromTemplate).toEqual(fromSrc);
     }
@@ -155,5 +155,38 @@ describe("crossing the door, end to end", () => {
     const after = s.allScenes().map((x) => ({ name: x.name, anchors: [...x.anchors].sort() }));
     expect(after).toEqual(before); // same scenes, same nodes — unchanged by the geometry moving
     s.close();
+  });
+});
+
+describe("the export must not anchor to hidden provenance (Fable, HIGH)", () => {
+  it("anchorsForCamera draws only from the VISIBLE set", async () => {
+    // The corruption this prevents, and it is permanent: provenance nodes get no stored layout until slice 4,
+    // so they sit at their seed-ring coordinates near the world origin — inside exactly the frames people
+    // save. They also keep a stale `deg` from any earlier `h` toggle, so they can OUTRANK real nodes in the
+    // degree sort. Anchoring a scene to them writes invisible chunk ids through the one-way door.
+    //
+    // The parity test above cannot catch this: it feeds both implementations the same curated list, so it
+    // proves they agree on their input while nothing constrains which input the page supplies.
+    const src = `${extractAnchorConsts()}\n${extractFn("anchorsForCamera")}\nreturn anchorsForCamera(cam);`;
+    const cam = { ox: 600, oy: 400, scale: 1 };
+
+    const real = Array.from({ length: 6 }, (_, i) => ({ id: `real${i}`, x: i * 30 - 90, y: 0, deg: 2 }));
+    // provenance at the seed ring near the origin, carrying an inflated stale degree
+    const hidden = Array.from({ length: 4 }, (_, i) => ({ id: `chunk${i}`, x: i * 5, y: i * 5, deg: 99 }));
+
+    // NODES is the visible set — the fixed code reads this, so hidden nodes cannot be selected
+    const got = new Function("cam", "NODES", "W", "H", src)(cam, real, 1200, 800) as string[];
+    expect(got.every((id) => id.startsWith("real"))).toBe(true);
+
+    // and if the hidden ones WERE in the pool, their inflated degree would take every slot — which is
+    // exactly what the pre-fix code did, since it read the global `nodes` array
+    const ifUnfiltered = new Function("cam", "NODES", "W", "H", src)(cam, [...real, ...hidden], 1200, 800) as string[];
+    expect(ifUnfiltered.filter((id) => id.startsWith("chunk")).length).toBe(4);
+  });
+
+  it("the template reads NODES, not the global all-nodes array", () => {
+    const fn = extractFn("anchorsForCamera");
+    expect(fn).toContain("const pool = NODES;");
+    expect(fn).not.toMatch(/=\s*nodes\.filter/); // the pre-fix form
   });
 });

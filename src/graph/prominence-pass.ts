@@ -3,7 +3,7 @@
 import type { GraphStore } from "../store/graphStore.js";
 import type { Meta } from "../schema.js";
 import { isProvenance } from "../layout/incremental.js";
-import { pagerank, pagerankProduct, edgeBetweenness, betweennessAffordable, type ProminenceInput } from "./prominence.js";
+import { pagerank, pagerankProduct, edgeBetweenness, betweennessAffordable, MEASURES, type ProminenceInput } from "./prominence.js";
 
 export interface ProminencePassResult {
   nodes: number;
@@ -22,7 +22,14 @@ export function prominencePass(store: GraphStore, meta: Meta): ProminencePassRes
   const input: ProminenceInput = { nodes: visible.map((n) => n.id), edges };
   const measures: string[] = [];
 
-  if (edges.length === 0) return { nodes: visible.length, edges: 0, measures, betweennessSkipped: false };
+  // A measure that is NOT computed this run must be DELETED, never left behind. Otherwise a graph that grows
+  // past the betweenness budget keeps exporting values computed over the pre-growth graph — and since the
+  // viewer defaults to betweenness whenever the key exists, every edge added since would score 0 and be the
+  // first to disappear at any slider position below 100%. Silently, under the default measure.
+  if (edges.length === 0) {
+    for (const m of MEASURES) store.clearEdgeProminence(m, meta);
+    return { nodes: visible.length, edges: 0, measures, betweennessSkipped: false };
+  }
 
   const pr = pagerank(input);
   store.putEdgeProminence("pagerank_product", pagerankProduct(input, pr), meta);
@@ -33,6 +40,8 @@ export function prominencePass(store: GraphStore, meta: Meta): ProminencePassRes
   if (affordable) {
     store.putEdgeProminence("betweenness", edgeBetweenness(input), meta);
     measures.push("betweenness");
+  } else {
+    store.clearEdgeProminence("betweenness", meta); // see above — stale is worse than absent
   }
   return { nodes: visible.length, edges: edges.length, measures, betweennessSkipped: !affordable };
 }

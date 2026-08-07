@@ -218,7 +218,8 @@ const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) }
 const isProv = n => n.type==='SOURCE' && (n.group==='chunk' || n.group==='document');
 let showProv = false;
 let NODES=[], EDGES=[], maxDeg=1;
-function rebuild(){
+function rebuild(reposition){
+  if(reposition===undefined) reposition=true;
   const vis = new Set(nodes.filter(n=>showProv||!isProv(n)));
   NODES = [...vis];
   EDGES = edges.filter(e=>vis.has(e.a)&&vis.has(e.b));
@@ -238,7 +239,16 @@ function rebuild(){
     const ptbl=PROM[edgeMeasure];
     const order=EDGES.map(e=>({e, v:ptbl[e.id]??0})).sort((p,q)=>p.v-q.v);
     const last=Math.max(1, order.length-1);
-    order.forEach((o,i)=>{ o.e.prom = i/last; });
+    // AVERAGE ranks across ties. Betweenness produces mass ties (every edge on no shortest path scores
+    // exactly 0), and strict ranking would spread them across a whole range of widths and opacities —
+    // rendering differences that do not exist, ordered by nothing but array position.
+    let i=0;
+    while(i<order.length){
+      let j=i; while(j+1<order.length && order[j+1].v===order[i].v) j++;
+      const shared=((i+j)/2)/last;
+      for(let k=i;k<=j;k++) order[k].e.prom = shared;
+      i=j+1;
+    }
   } else { for(const e of EDGES) e.prom = 0.5; }
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
@@ -248,9 +258,14 @@ function rebuild(){
   // incomplete -> ignore stored layout ENTIRELY, restart from the seeds, and run the full settle.
   // Mixing is forbidden: settle() does not re-seed (it zeroes velocities only), so a stored/seeded hybrid
   // would move anchored nodes along a trajectory that depends on which rows happened to exist.
+  // `reposition` is false when only the EDGE BUDGET changed. A draw filter must never move nodes: settle()
+  // pulls along EDGES, so re-settling per slider tick would make the geometry depend on the slider position
+  // — and in the fallback path that is a full settle, measured at 36.6s on the 10x graph, per tick.
   const complete = NODES.length>0 && NODES.every(n=>LAYOUT[n.id]);
-  if(complete){ for(const n of NODES){ const p=LAYOUT[n.id]; n.x=p[0]; n.y=p[1]; n.vx=0; n.vy=0; } }
-  else { for(const n of NODES){ n.x=n.sx; n.y=n.sy; n.vx=0; n.vy=0; } settle(); }
+  if(reposition){
+    if(complete){ for(const n of NODES){ const p=LAYOUT[n.id]; n.x=p[0]; n.y=p[1]; n.vx=0; n.vy=0; } }
+    else { for(const n of NODES){ n.x=n.sx; n.y=n.sy; n.vx=0; n.vy=0; } settle(); }
+  }
   computeBounds(); renderMMDots(); buildLegend(); updateCounts();
 }
 function updateCounts(){
@@ -659,7 +674,7 @@ function renderEdgeCtl(){
   const sel=document.createElement('select');
   sel.style.cssText='width:100%;margin:6px 0 4px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
   for(const m of PROM_MEASURES.concat(['none'])){ const o=document.createElement('option'); o.value=m; o.textContent=m.replace(/_/g,' '); if(m===edgeMeasure) o.selected=true; sel.appendChild(o); }
-  sel.onchange=()=>{ edgeMeasure=sel.value; rebuild(); renderEdgeCtl(); };
+  sel.onchange=()=>{ edgeMeasure=sel.value; rebuild(false); renderEdgeCtl(); };
   box.appendChild(sel);
   const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;margin-top:3px';
   lab.innerHTML='<span>top '+edgeKeepPct+'%</span><span style="color:var(--faint)">'+EDGES.length+' edges</span>';
@@ -671,7 +686,7 @@ function renderEdgeCtl(){
   box.appendChild(lab);
   const sl=document.createElement('input'); sl.type='range'; sl.min='1'; sl.max='100'; sl.value=String(edgeKeepPct);
   sl.style.cssText='width:100%;margin-top:3px'; sl.disabled=(edgeMeasure==='none');
-  sl.oninput=()=>{ edgeKeepPct=Number(sl.value); rebuild(); renderEdgeCtl(); };
+  sl.oninput=()=>{ edgeKeepPct=Number(sl.value); rebuild(false); renderEdgeCtl(); };
   box.appendChild(sl);
 }
 
@@ -689,11 +704,17 @@ loadScenes(); renderScenes(); renderEdgeCtl();
 // asserts the two agree on the same input, so they cannot drift apart.
 const ANCHOR_CAP=12, ANCHOR_FALLBACK=3;
 function anchorsForCamera(cam){
-  const inView = nodes.filter(n=>{ const sx=n.x*cam.scale+cam.ox, sy=n.y*cam.scale+cam.oy;
+  // NODES, not `nodes`: only the VISIBLE set. Hidden provenance nodes never receive stored layout (they have
+  // no rows until slice 4), so they sit at their seed-ring coordinates near the world origin — inside exactly
+  // the frames people save. They also keep a stale `deg` from any earlier `h` toggle, so they can outrank
+  // real nodes in the sort. Anchoring a scene to them writes invisible chunk ids through the one-way door,
+  // permanently, which is the corruption anchors exist to prevent.
+  const pool = NODES;
+  const inView = pool.filter(n=>{ const sx=n.x*cam.scale+cam.ox, sy=n.y*cam.scale+cam.oy;
     return sx>=0 && sx<=W && sy>=0 && sy<=H; });
   if(inView.length) return inView.slice().sort((a,b)=> b.deg-a.deg || (a.id<b.id?-1:1)).slice(0,ANCHOR_CAP).map(n=>n.id);
   const cx=(W/2-cam.ox)/cam.scale, cy=(H/2-cam.oy)/cam.scale;
-  return nodes.slice().sort((a,b)=> Math.hypot(a.x-cx,a.y-cy)-Math.hypot(b.x-cx,b.y-cy) || (a.id<b.id?-1:1))
+  return pool.slice().sort((a,b)=> Math.hypot(a.x-cx,a.y-cy)-Math.hypot(b.x-cx,b.y-cy) || (a.id<b.id?-1:1))
     .slice(0,ANCHOR_FALLBACK).map(n=>n.id);
 }
 function exportScenes(){

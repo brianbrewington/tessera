@@ -1,7 +1,7 @@
 // Prominence wiring (store -> CLI -> bundle -> viewer filter). The algorithm tests live in
 // prominence.test.ts; these check that the numbers actually reach the place they are used, which is the
 // failure both slice-1 reviewers flagged when layoutPass existed but nothing product-facing called it.
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -156,5 +156,90 @@ describe("prominence is VISIBLE, not just filterable", () => {
     // to ~206px. Brian hit this on synthpl: the slider was underneath it.
     expect(TEMPLATE).toMatch(/#minimap\{[^}]*bottom:14px/);
     expect(TEMPLATE).toMatch(/id='edgectl'[\s\S]{0,220}bottom:220px/);
+  });
+});
+
+describe("stale prominence must not survive a skipped pass (Fable, HIGH)", () => {
+  it("clearEdgeProminence removes a measure entirely", async () => {
+    const s = new GraphStore({ path: join(dir, "graph.db"), embedder: new StubEmbedder(768) });
+    prominencePass(s, meta);
+    expect(s.edgeProminence("betweenness").size).toBeGreaterThan(0);
+    const r = s.clearEdgeProminence("betweenness", meta);
+    expect(r.removed).toBeGreaterThan(0);
+    expect(s.edgeProminence("betweenness").size).toBe(0);
+    expect(s.prominenceMeasures()).not.toContain("betweenness");
+    s.close();
+  });
+
+  it("a pass that SKIPS betweenness deletes the previous run's values", async () => {
+    // The failure this prevents: a graph grows past BETWEENNESS_BUDGET, every later `view` prints
+    // "(betweenness skipped)" but exports values computed over the PRE-GROWTH graph — and the viewer
+    // defaults to betweenness whenever the key exists, so every edge added since scores 0 (`?? 0`) and is
+    // the first to disappear at any slider position below 100%. Silently, under the default measure.
+    const s = new GraphStore({ path: join(dir, "graph.db"), embedder: new StubEmbedder(768) });
+    prominencePass(s, meta);
+    expect(s.edgeProminence("betweenness").size).toBeGreaterThan(0);
+
+    // force the skip path without building a huge graph
+    const mod = await import("../src/graph/prominence.js");
+    const spy = vi.spyOn(mod, "betweennessAffordable").mockReturnValue(false);
+    const { prominencePass: freshPass } = await import("../src/graph/prominence-pass.js");
+    const r = freshPass(s, meta);
+    spy.mockRestore();
+
+    expect(r.betweennessSkipped).toBe(true);
+    expect(r.measures).toEqual(["pagerank_product"]);
+    expect(s.edgeProminence("betweenness").size).toBe(0); // stale rows GONE, not left behind
+    expect(s.prominenceMeasures()).toEqual(["pagerank_product"]);
+    s.close();
+  });
+});
+
+describe("ties share a rank rather than inventing differences (Fable, MEDIUM)", () => {
+  it("equal values get an equal, averaged rank", () => {
+    const start = TEMPLATE.indexOf("  // Visual weight: rank the surviving edges");
+    const end = TEMPLATE.indexOf("} else { for(const e of EDGES) e.prom = 0.5; }", start) + "} else { for(const e of EDGES) e.prom = 0.5; }".length;
+    const src = TEMPLATE.slice(start, end);
+    // betweenness produces mass ties at exactly 0 — every edge on no shortest path
+    const edges = ["a", "b", "c", "d", "e"].map((id) => ({ id, prom: undefined as number | undefined }));
+    const tbl = { a: 0, b: 0, c: 0, d: 5, e: 9 };
+    new Function("EDGES", "PROM", "edgeMeasure", src)(edges, { m: tbl }, "m");
+    const by = Object.fromEntries(edges.map((x) => [x.id, x.prom]));
+    expect(by.a).toBe(by.b);
+    expect(by.b).toBe(by.c); // the three zeros are indistinguishable, and now render identically
+    expect(by.a).toBeCloseTo(((0 + 2) / 2) / 4, 12); // averaged rank, not 0 / 0.25 / 0.5
+    expect(by.d!).toBeGreaterThan(by.a!);
+    expect(by.e!).toBeGreaterThan(by.d!);
+  });
+});
+
+describe("the edge budget must not move nodes (Fable, MEDIUM)", () => {
+  it("rebuild(false) skips repositioning entirely", () => {
+    const start = TEMPLATE.indexOf("  const complete = NODES.length>0");
+    const end = TEMPLATE.indexOf("computeBounds();", start);
+    const src = TEMPLATE.slice(start, end);
+    const mk = () => [{ id: "n0", sx: 1, sy: 2, x: 50, y: 60, vx: 7, vy: 8 }];
+    let settles = 0;
+    const settle = (): void => { settles++; };
+
+    // incomplete layout + reposition:false -> no settle, nothing moved. Without this the slider would run a
+    // full settle per tick (36.6s on the 10x graph) AND make geometry depend on slider position, since
+    // springs only act along the edges that survived the filter.
+    const nodes = mk();
+    new Function("NODES", "LAYOUT", "settle", "reposition", src)(nodes, {}, settle, false);
+    expect(settles).toBe(0);
+    expect(nodes[0]!.x).toBe(50); // untouched
+    expect(nodes[0]!.y).toBe(60);
+
+    // the same input WITH reposition:true does settle, so the guard is what makes the difference
+    const nodes2 = mk();
+    new Function("NODES", "LAYOUT", "settle", "reposition", src)(nodes2, {}, settle, true);
+    expect(settles).toBe(1);
+    expect(nodes2[0]!.x).toBe(1);
+  });
+
+  it("the slider and selector both call rebuild(false)", () => {
+    expect(TEMPLATE).toMatch(/sl\.oninput=\(\)=>\{ edgeKeepPct=Number\(sl\.value\); rebuild\(false\)/);
+    expect(TEMPLATE).toMatch(/sel\.onchange=\(\)=>\{ edgeMeasure=sel\.value; rebuild\(false\)/);
   });
 });
