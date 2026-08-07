@@ -262,3 +262,42 @@ is safe — `tessera scenes import` wrote it and `GET /scenes` returns it — bu
   injected mock in `test/serve-server.test.ts`.
 Both are cheap and neither changes behaviour — they are missing coverage, not missing function. Listed here so
 "tested" is not claimed for them.
+
+
+## The advisory lock needs an OS-level primitive — **DECISION NEEDED** (found round 4, 2026-08-06)
+
+Four review rounds, four defects, one class. Every round fixed the instance:
+
+1. the lock was one-sided — only `serve` took it
+2. acquisition was atomic but RECLAIM was check-then-delete → two holders
+3. reclaim-by-rename was still check-then-act, because `rename` is not bound to the snapshot that justified
+   it → two holders, **demonstrated by execution**
+4. the reclaim GUARD's own stale-clearing is check-then-delete → two holders, **demonstrated by execution
+   with a 3.86-second concurrent hold**
+
+The reviewer's structural point, which is correct: *exclusivity built from `unlink`/`rename` plus a staleness
+heuristic regenerates this race at every layer.* Each guard needs a guard. There is no fixed point.
+
+**What is shipped:** the normal contended path is solid — every reviewer probe against it returned exactly one
+winner. What remains broken is the **crash-recovery corner**: the precondition is a lock left behind by a
+process that died mid-reclaim, plus adverse sub-millisecond scheduling. Also unaddressed: a live holder past
+`LOCK_STALE_MS` (6 h) is legitimately reclaimed with no heartbeat, so a corpus ingest longer than six hours
+gets its lock stolen with no race required.
+
+**The terminating fix is a kernel lock bound to process lifetime** — `flock`/`fcntl`. The OS releases it when
+the process dies, which deletes the staleness heuristic, the guard, the 6-hour threshold, and the whole class
+of bug rather than repairing another instance of it. Node has no built-in binding, so this is a real decision
+with a real cost:
+
+- **`proper-lockfile`** (pure JS, widely used, mkdir + mtime heartbeat) — no native build, but it is the same
+  *family* of mechanism, better executed. Solves the heartbeat and most of the races; not kernel-backed.
+- **`fs-ext`** or similar — genuine `flock`, native compile step, a portability cost on a project whose stack
+  values portable-by-default.
+- **Linux abstract-namespace sockets** — genuinely kernel-released on death, zero dependencies, but
+  Linux-only.
+- **Accept the current guarantee** and document it: safe for single-user, no-crash, sub-6-hour operation,
+  which is every real use of this tool today.
+
+Brian's call — it trades a dependency or a portability constraint against a narrow, documented, crash-corner
+race. **Until it is decided, the disposition is ACCEPTED-RISK with the boundary stated:** do not rely on this
+lock across crashes, ingests longer than six hours, or mixed uids.

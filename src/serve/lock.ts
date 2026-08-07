@@ -6,7 +6,7 @@
 //
 // Acquisition is atomic: `wx` fails if the file exists, so two processes cannot both win a check-then-create
 // race the way existsSync + writeFileSync could.
-import { openSync, closeSync, writeSync, readFileSync, rmSync, renameSync, statSync } from "node:fs";
+import { openSync, closeSync, writeSync, readFileSync, rmSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -30,7 +30,15 @@ function readLock(p: string): LockInfo | null {
 /** True when the recorded pid is gone — a crashed holder should not block for six hours. */
 function holderDead(info: LockInfo): boolean {
   if (!Number.isInteger(info.pid) || info.pid <= 0) return true;
-  try { process.kill(info.pid, 0); return false; } catch { return true; }
+  try {
+    process.kill(info.pid, 0);
+    return false;
+  } catch (e) {
+    // EPERM means the pid EXISTS but belongs to another uid — very much alive. A bare catch read that as
+    // "dead" and stole the live lock, verified against pid 1. Reachable whenever serve and ingest run as
+    // different users on one graph dir (a one-time `sudo tessera serve`, a systemd unit, a shared box).
+    return (e as NodeJS.ErrnoException).code !== "EPERM";
+  }
 }
 
 export class LockHeld extends Error {
@@ -92,7 +100,8 @@ const RECLAIM_GUARD_STALE_MS = 30_000;
  * Try to remove a lock that is provably abandoned. Returns true if the caller should retry.
  *
  * WHY A GUARD FILE, AND NOT JUST rename(): rename is atomic, but it acts on whatever is at the path WHEN IT
- * RUNS — it is not bound to the snapshot that justified it. A reviewer demonstrated the hole by execution:
+ * RUNS — it is not bound to the snapshot that justified it. (The rename mechanism itself is GONE; only this
+ * rationale survives. Do not reintroduce it.) A reviewer demonstrated the hole by execution:
  * if a rival completes its ENTIRE reclaim-and-acquire inside your read→rename gap, your rename succeeds on
  * the rival's fresh, LIVE lock and you both proceed. Two processes held the lock for ~5 seconds. That is the
  * exact defect the rename was introduced to fix, reproduced one layer up — the third time in this file that a
@@ -117,6 +126,17 @@ function reclaimStale(p: string, graphDir: string): boolean {
       return true; // vanished — retry the acquire
     }
     if (guardAge <= RECLAIM_GUARD_STALE_MS) return false; // a live reclaim is in progress: treat as held
+    // MITIGATION, NOT A FIX. Re-stat and delete only if the guard is the same one we judged. This narrows
+    // the window in which we delete a guard that someone else created between our stat and our unlink; it
+    // does not close it, and a reviewer demonstrated a 3.8-SECOND concurrent hold through exactly this path.
+    // See docs/backlog.md — "the lock needs an OS-level primitive": every layer of this design that clears a
+    // stale X with unlink regenerates the same check-then-delete race one level up, and this is the fourth
+    // instance. The terminating fix is a kernel lock bound to process lifetime, not another guard.
+    try {
+      if (Date.now() - statSync(guard).mtimeMs <= RECLAIM_GUARD_STALE_MS) return false; // someone re-created it
+    } catch {
+      return true; // vanished — the path is free
+    }
     rmSync(guard, { force: true });
     return true; // retry; the next attempt takes the guard cleanly
   }
@@ -136,7 +156,8 @@ function reclaimStale(p: string, graphDir: string): boolean {
       stale = holderDead(info) || Date.now() - info.at > LOCK_STALE_MS;
     }
     if (!stale) return false;
-    // Safe now: no other process can be between judging and acting, because we hold the guard.
+    // Safe from the LOCK-level race, because we hold the guard. NOT safe from the guard-level race above —
+    // see the mitigation note and docs/backlog.md.
     rmSync(p, { force: true });
     return true;
   } finally {

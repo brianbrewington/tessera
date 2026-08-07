@@ -18,12 +18,13 @@ import { acquireIngestLock, LockHeld } from "../src/serve/lock.js";
 
 export interface ServeCliOptions { name: string; port: number; graphDir: string; db: string }
 
-export async function serveCli(opts: ServeCliOptions): Promise<void> {
+/**
+ * The dependency bundle, extracted so the SERVE call site of the advisory lock is reachable from a test.
+ * It was not, and unwiring it left the whole suite green — half of the one-sided-lock defect could revert.
+ */
+export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesseraServer>[0]["deps"] {
   const out = join(opts.graphDir, "view.html");
-
-  const { server, close } = createTesseraServer({
-    port: opts.port,
-    deps: {
+  return {
       renderPage: () => {
         exportViewer(opts.db, out, opts.name);
         return readFileSync(out, "utf8");
@@ -90,8 +91,11 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
           return { ok: true };
         } finally { s.close(); }
       },
-    },
-  });
+  };
+}
+
+export async function serveCli(opts: ServeCliOptions): Promise<void> {
+  const { server, close } = createTesseraServer({ port: opts.port, deps: serveDeps(opts) });
 
   await new Promise<void>((resolve) => server.listen(opts.port, "127.0.0.1", () => resolve()));
   console.log(`tessera serve — http://127.0.0.1:${opts.port}  (graph '${opts.name}')`);

@@ -261,3 +261,40 @@ describe("RECLAIM is exclusive, deterministically (Fable round 3, HIGH)", () => 
     expect(existsSync(reclaimGuardPath(d2))).toBe(false); // and the guard still got cleaned up
   });
 });
+
+describe("BOTH call sites take the lock (Fable round 4 — only one was tested)", () => {
+  it("`tessera serve`'s drop path refuses when the lock is held", async () => {
+    // Round 2 named BOTH call sites; the test I wrote covered only the CLI one, so unwiring
+    // scripts/serve.ts left all 244 tests green — half of round 1's original defect could silently revert,
+    // in the exact place the class was named. This is the other half.
+    const { createTesseraServer } = await import("../src/serve/server.js");
+    const { serveDeps } = await import("../scripts/serve.js");
+    const d = mk();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(d, { recursive: true });
+    const { GraphStore } = await import("../src/store/graphStore.js");
+    const { StubEmbedder } = await import("../src/embedder.js");
+    new GraphStore({ path: join(d, "graph.db"), embedder: new StubEmbedder(768) }).close();
+
+    const deps = serveDeps({ name: "x", port: 7911, graphDir: d, db: join(d, "graph.db") });
+    const release = acquireIngestLock(d, "someone else");
+    await expect(deps.ingest(join(d, "nope.md"), { title: "n.md", source: "drop:n.md" }, () => {}))
+      .rejects.toThrow(/another tessera process is writing this graph/);
+    release();
+  }, 60_000);
+});
+
+describe("a live process owned by ANOTHER user is not 'dead' (Fable round 4)", () => {
+  it("EPERM from kill(pid,0) means alive, not gone", () => {
+    // kill(pid, 0) throws EPERM when the pid EXISTS but belongs to another uid. A bare catch read that as
+    // dead and stole the live lock — verified against pid 1 (init), which is maximally alive. Reachable
+    // whenever serve and ingest run as different users on one graph dir.
+    const d = mk();
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 1, at: Date.now(), what: "init (another uid)", token: "t" }));
+    let threwEperm = false;
+    try { process.kill(1, 0); } catch (e) { threwEperm = (e as NodeJS.ErrnoException).code === "EPERM"; }
+    if (!threwEperm) return; // running as root: kill(1,0) succeeds and the case is unreachable here
+    expect(() => acquireIngestLock(d, "thief")).toThrow(LockHeld);
+    expect(existsSync(lockPath(d))).toBe(true); // the live process's lock survived
+  });
+});
