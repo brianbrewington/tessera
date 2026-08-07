@@ -25,7 +25,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -178,6 +178,19 @@ async function main(): Promise<void> {
       } finally {
         store.close();
       }
+      break;
+    }
+    case "serve": {
+      // Slice 3: the drop target. Loopback only, measured header guard, single-flight ingest.
+      const name = args[0] ?? usage();
+      const portArg = args.indexOf("--port");
+      const port = portArg >= 0 ? Number(args[portArg + 1]) : 7777;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error(`bad --port ${args[portArg + 1]}`); process.exit(1); }
+      const gdir = graphDir(name);
+      const db = join(gdir, "graph.db");
+      if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
+      const { serveCli } = await import("./serve.js");
+      await serveCli({ name, port, graphDir: gdir, db });
       break;
     }
     case "report": {

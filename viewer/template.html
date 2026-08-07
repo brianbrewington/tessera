@@ -396,10 +396,14 @@ function draw(){
     // Prominence drives BOTH width and opacity — the attention budget made visible, not merely filterable.
     const p = (e.prom===undefined ? 0.5 : e.prom);
     const pa = edgeAlpha * (0.35 + 1.30*p);
-    ctx.strokeStyle = on ? '#ffffff'
-      : (focusSet ? (reson?'#3a2a44':'#1a2130')
+    // Prominence survives BOTH selection states. Before, focusing a node flattened everything: the focused
+    // edges all went white at width 2, and the dimmed background all went one flat colour — so the moment
+    // you selected a node to look closely, the encoding you were reading vanished. A focused edge is where
+    // you most want to know which links carry weight.
+    ctx.strokeStyle = on ? 'rgba(255,255,255,'+(0.55+0.45*p).toFixed(3)+')'
+      : (focusSet ? (reson ? 'rgba(58,42,68,'+(0.45+0.55*p).toFixed(3)+')' : 'rgba(26,33,48,'+(0.45+0.55*p).toFixed(3)+')')
       : (reson ? 'rgba(247,118,142,'+Math.min(0.5,pa*1.6)+')' : 'rgba(120,140,180,'+Math.min(0.6,pa)+')'));
-    ctx.lineWidth = on ? 2 : (reson ? 1.1 : (0.35 + 1.45*p));
+    ctx.lineWidth = on ? (1.10 + 1.70*p) : (reson ? 1.1 : (0.35 + 1.45*p));
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
   for(const n of NODES){
@@ -691,6 +695,60 @@ function renderEdgeCtl(){
 }
 
 loadScenes(); renderScenes(); renderEdgeCtl();
+
+// --- DROP TARGET (slice 3). Only active when the page is SERVED — a file:// bundle has no server to post
+// to, so the handlers are not installed and the page behaves exactly as before.
+const SERVED = location.protocol === 'http:' || location.protocol === 'https:';
+function dropUI(){
+  let el=document.getElementById('dropzone');
+  if(!el){ el=document.createElement('div'); el.id='dropzone';
+    el.style.cssText='position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;'
+      +'background:rgba(8,11,18,.82);backdrop-filter:blur(2px);font-size:18px;color:var(--text);pointer-events:none';
+    document.body.appendChild(el); }
+  return el;
+}
+function dropStatus(msg, sticky){
+  let el=document.getElementById('dropstatus');
+  if(!el){ el=document.createElement('div'); el.id='dropstatus';
+    el.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:41;background:var(--surface-2);'
+      +'border:1px solid var(--line);border-radius:99px;padding:7px 16px;font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.4)';
+    document.body.appendChild(el); }
+  el.textContent=msg; el.style.display='block';
+  if(!sticky) setTimeout(()=>{ el.style.display='none'; }, 4000);
+}
+if(SERVED){
+  const zone=dropUI();
+  let depth=0;
+  addEventListener('dragenter', e=>{ e.preventDefault(); if(++depth===1){ zone.textContent='drop a .md or .txt to add it to this map'; zone.style.display='flex'; } });
+  addEventListener('dragleave', e=>{ e.preventDefault(); if(--depth<=0){ depth=0; zone.style.display='none'; } });
+  addEventListener('dragover', e=>e.preventDefault());
+  addEventListener('drop', async e=>{
+    e.preventDefault(); depth=0; zone.style.display='none';
+    const f=e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if(!f) return;
+    if(!/\.(md|txt)$/i.test(f.name)){ dropStatus('only .md and .txt are supported — '+f.name+' was not ingested'); return; }
+    dropStatus('reading '+f.name+'…', true);
+    // The SSE stream carries per-chunk progress; extraction is ~10s per chunk, so a 20-page drop is minutes.
+    const es=new EventSource('/events');
+    es.onmessage=ev=>{
+      try{ const p=JSON.parse(ev.data);
+        if(p.phase==='chunk') dropStatus('ingesting '+f.name+' — chunk '+(p.i+1)+' of '+p.of+'…', true);
+        else if(p.phase==='error') { dropStatus('ingest failed: '+p.message); es.close(); }
+      }catch(_){}
+    };
+    try{
+      const res=await fetch('/ingest',{ method:'POST', headers:{'X-Tessera-Filename': f.name}, body: await f.arrayBuffer() });
+      const txt=await res.text();
+      es.close();
+      if(!res.ok){ dropStatus('ingest failed ('+res.status+'): '+txt.slice(0,120)); return; }
+      const r=JSON.parse(txt);
+      dropStatus('added '+r.entities+' entities, '+r.edges+' edges — reloading…', true);
+      // v1 reloads rather than delta-patching the open map (design §5, deferred). Layout is durable and
+      // additive, so the reload keeps every position you were looking at.
+      setTimeout(()=>location.reload(), 900);
+    }catch(err){ es.close(); dropStatus('ingest failed: '+err); }
+  });
+}
 
 // --- scene EXPORT: the one-way door (design §5). localStorage is origin-scoped, so once tessera serves the
 // viewer over http://127.0.0.1:PORT these scenes are unreachable from the new page. A file:// page cannot

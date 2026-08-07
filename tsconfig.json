@@ -10,7 +10,19 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": false,
     "outDir": "dist",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test",
+    "scripts"
+  ],
+  "exclude": [
+    "scripts/bench",
+    "scripts/build-graph.ts",
+    "node_modules",
+    "dist"
+  ]
 }

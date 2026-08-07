@@ -32,10 +32,24 @@ export async function ingestFile(
   graph: Graph,
   extractor: Extractor,
   path: string,
-  opts: { reextract?: boolean; extractorModel?: string } = {},
+  // `display` lets a caller override the title/provenance path WITHOUT touching identity, which is the
+  // content hash and never the path. `tessera serve` needs this: an upload lands at a server-generated temp
+  // path, and readDoc would otherwise persist that temp filename as the document's title forever.
+  opts: {
+    reextract?: boolean;
+    extractorModel?: string;
+    display?: { title?: string; source?: string };
+    /** Per-chunk progress. `tessera serve` streams this to the browser; a 20-page drop is ~6 minutes. */
+    onChunk?: (done: number, total: number) => void;
+  } = {},
 ): Promise<IngestResult> {
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
-  const doc = readDoc(path);
+  const read = readDoc(path);
+  const doc = {
+    ...read,
+    title: opts.display?.title ?? read.title,
+    source: opts.display?.source ?? read.source,
+  };
   const meta: Meta = { actor: "ingest", cause: `ingest ${doc.source}` };
   // Content-addressed identity: the document IS its content. Two byte-identical files (rolled up, on another
   // machine, behind a networked mount) dedup to one SOURCE; path is provenance only, never identity.
@@ -67,6 +81,7 @@ export async function ingestFile(
   let entities = 0, edges = 0, parseFailures = 0, emptyChunks = 0, reused = 0;
 
   for (let i = 0; i < chunks.length; i++) {
+    opts.onChunk?.(i, chunks.length);
     const c = chunks[i]!;
     const label = `chunk ${i + 1} of ${doc.title}`;
     // CHUNK node — raw text is the retrievable body, embedded ON the raw text (the RAG unit).
@@ -108,6 +123,7 @@ export async function ingestFile(
     if (parsed) graph.store.markExtracted(chunkNode.id);
   }
 
+  opts.onChunk?.(chunks.length, chunks.length);
   // Record the file-level manifest: 'complete' unless a chunk failed to parse (then 'partial' → re-ingested
   // next run so the failed chunks retry). This is what a corpus re-run reads to skip unchanged docs.
   graph.store.recordIngestedSource({
