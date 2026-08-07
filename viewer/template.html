@@ -201,6 +201,15 @@ const nodes = GRAPH.nodes.map((n,i)=>({ ...n,
   sx: Math.cos(i)*220 + (i%7-3)*30, sy: Math.sin(i)*220 + (i%5-2)*30,
   x: Math.cos(i)*220 + (i%7-3)*30, y: Math.sin(i)*220 + (i%5-2)*30, vx:0, vy:0, deg:0 }));
 const LAYOUT = GRAPH.layout || {};
+// --- edge attention budget: rank edges by a chosen prominence measure and draw only the top slice.
+// hebbian_weight is deliberately NOT an option: it is 1 on ~94% of real edges, so filtering by it is
+// thresholding a constant. 'none' keeps every edge (what the viewer did before).
+const PROM = GRAPH.prominence || {};
+const PROM_MEASURES = Object.keys(PROM);
+let edgeMeasure = PROM_MEASURES.includes('betweenness') ? 'betweenness'
+                : (PROM_MEASURES[0] || 'none');
+let edgeKeepPct = 100;   // show the top N% of edges by the chosen measure
+let edgeCut = -Infinity; // recomputed whenever measure or percentage changes
 const byId = new Map(nodes.map(n=>[n.id,n]));
 const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) })).filter(e=>e.a&&e.b);
 
@@ -213,6 +222,14 @@ function rebuild(){
   const vis = new Set(nodes.filter(n=>showProv||!isProv(n)));
   NODES = [...vis];
   EDGES = edges.filter(e=>vis.has(e.a)&&vis.has(e.b));
+  // apply the attention budget: keep the top edgeKeepPct% by the selected measure
+  if(edgeMeasure!=='none' && PROM[edgeMeasure] && edgeKeepPct<100){
+    const tbl=PROM[edgeMeasure];
+    const scored=EDGES.map(e=>tbl[e.id]??0).sort((a,b)=>b-a);
+    const k=Math.max(1, Math.floor(scored.length*edgeKeepPct/100));
+    edgeCut = scored[k-1] ?? -Infinity;
+    EDGES = EDGES.filter(e=>(tbl[e.id]??0) >= edgeCut);
+  } else { edgeCut = -Infinity; }
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
@@ -618,7 +635,29 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
   box.appendChild(add);
   if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); box.appendChild(pl); }
 }
-loadScenes(); renderScenes();
+// --- edge budget control
+function renderEdgeCtl(){
+  let box=document.getElementById('edgectl');
+  if(!box){ box=document.createElement('div'); box.id='edgectl';
+    box.style.cssText='position:fixed;left:14px;bottom:150px;z-index:6;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--dim);min-width:190px';
+    document.body.appendChild(box); }
+  if(!PROM_MEASURES.length){ box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase">edge budget</div><div style="margin-top:5px">no prominence computed —<br>run <code>tessera view</code> again</div>'; return; }
+  box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)">edge budget</div>';
+  const sel=document.createElement('select');
+  sel.style.cssText='width:100%;margin:6px 0 4px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
+  for(const m of PROM_MEASURES.concat(['none'])){ const o=document.createElement('option'); o.value=m; o.textContent=m.replace(/_/g,' '); if(m===edgeMeasure) o.selected=true; sel.appendChild(o); }
+  sel.onchange=()=>{ edgeMeasure=sel.value; rebuild(); renderEdgeCtl(); };
+  box.appendChild(sel);
+  const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;margin-top:3px';
+  lab.innerHTML='<span>top '+edgeKeepPct+'%</span><span style="color:var(--faint)">'+EDGES.length+' edges</span>';
+  box.appendChild(lab);
+  const sl=document.createElement('input'); sl.type='range'; sl.min='1'; sl.max='100'; sl.value=String(edgeKeepPct);
+  sl.style.cssText='width:100%;margin-top:3px'; sl.disabled=(edgeMeasure==='none');
+  sl.oninput=()=>{ edgeKeepPct=Number(sl.value); rebuild(); renderEdgeCtl(); };
+  box.appendChild(sl);
+}
+
+loadScenes(); renderScenes(); renderEdgeCtl();
 
 // --- scene EXPORT: the one-way door (design §5). localStorage is origin-scoped, so once tessera serves the
 // viewer over http://127.0.0.1:PORT these scenes are unreachable from the new page. A file:// page cannot

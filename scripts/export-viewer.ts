@@ -23,7 +23,14 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
     meta: { ...(n.metadata ?? {}), name: n.name, description: n.description },
   }));
   const storedLayout = store.getLayout();
+  // Edge prominence, one map per measure — the viewer's edge filter switches between them (design: the
+  // attention budget). hebbian_weight is NOT usable for this: it is 1 on ~94% of real edges.
+  const prominence: Record<string, Record<string, number>> = {};
+  for (const measure of store.prominenceMeasures()) {
+    prominence[measure] = Object.fromEntries(store.edgeProminence(measure));
+  }
   const edges = store.allEdges().map((e) => ({
+    id: e.id,
     from: e.from,
     to: e.to,
     kind: e.kind,
@@ -39,7 +46,7 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   const layout: Record<string, [number, number]> = {};
   for (const [id, p] of storedLayout) layout[id] = [p.x, p.y];
 
-  const dataJson = JSON.stringify({ nodes, edges, name, layout }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);

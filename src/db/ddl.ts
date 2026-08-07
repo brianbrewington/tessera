@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS scene_anchors (
   PRIMARY KEY (scene_id, node_id)
 );
 
+-- Edge prominence: the attention budget's ranking signal, one row per (edge, measure) so measures can be
+-- added or swapped without a schema migration. Kept OUT of the edges table deliberately: semantic_weight is
+-- a single column and we need several, and edges.hebbian_weight is a different thing (reinforcement count,
+-- which is 1 for ~94% of real edges and therefore useless for ranking).
+CREATE TABLE IF NOT EXISTS edge_prominence (
+  edge_id TEXT NOT NULL REFERENCES edges(id),
+  measure TEXT NOT NULL,
+  value   REAL NOT NULL,
+  PRIMARY KEY (edge_id, measure)
+);
+
 -- Vectors: four tiers, split by kind × (quarantine|shared). Every embedding lands in a
 -- quarantine table; a promote txn copies it to the matching shared table (spec §3, §5.2).
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_node_quarantine   USING vec0(node_id TEXT PRIMARY KEY, embedding float[${dim}]);

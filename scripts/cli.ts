@@ -17,6 +17,7 @@ import { exportViewer } from "./export-viewer.js";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { layoutPass } from "../src/layout/pass.js";
+import { prominencePass } from "../src/graph/prominence-pass.js";
 import { contentKey } from "../src/scenes/scene.js";
 import { report, printScorecard } from "./ingest-report.js";
 
@@ -122,6 +123,11 @@ async function main(): Promise<void> {
       if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
       const store = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
       try {
+        const prom = prominencePass(store, { actor: "cli", cause: `view ${name}` });
+        if (prom.edges > 0) {
+          const skipped = prom.betweennessSkipped ? "  (betweenness skipped — graph too large, see BETWEENNESS_BUDGET)" : "";
+          console.log(`prominence: ${prom.measures.join(", ")} over ${prom.edges} visible edge(s)${skipped}`);
+        }
         const r = await layoutPass(store, { actor: "cli", cause: `view ${name}` });
         if (r.mode !== "noop") {
           const rules = r.mode === "incremental" ? `  (graph ${r.byRule.graph}, semantic ${r.byRule.semantic}, map ${r.byRule.map})` : "";

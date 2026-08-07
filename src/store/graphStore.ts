@@ -602,6 +602,38 @@ export class GraphStore {
    * calls. Callers intersect with the visible set themselves (design §3.3); this is deliberately unfiltered
    * so slice 4 can use it for provenance without a second method.
    */
+  // --- edge prominence -------------------------------------------------------------------------------
+
+  /** Replace all values for one measure in a single transaction; one summarising mutation_log op. */
+  putEdgeProminence(measure: string, values: ReadonlyMap<string, number>, meta: Meta): { written: number } {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    const tx = this.db.transaction((): { written: number } => {
+      this.db.prepare("DELETE FROM edge_prominence WHERE measure = ?").run(measure);
+      const ins = this.db.prepare("INSERT OR REPLACE INTO edge_prominence (edge_id, measure, value) VALUES (?, ?, ?)");
+      let written = 0;
+      for (const [edgeId, v] of values) {
+        if (!Number.isFinite(v)) throw new Error(`putEdgeProminence: non-finite value for ${edgeId}`);
+        ins.run(edgeId, measure, v);
+        written++;
+      }
+      if (written > 0) this.log(m, at, "putEdgeProminence", null, null, { measure, written });
+      return { written };
+    });
+    return tx.immediate();
+  }
+
+  edgeProminence(measure: string): Map<string, number> {
+    return new Map(
+      (this.db.prepare("SELECT edge_id AS id, value FROM edge_prominence WHERE measure = ?").all(measure) as Array<{ id: string; value: number }>)
+        .map((r) => [r.id, r.value]),
+    );
+  }
+
+  prominenceMeasures(): string[] {
+    return (this.db.prepare("SELECT DISTINCT measure FROM edge_prominence ORDER BY measure").all() as Array<{ measure: string }>).map((r) => r.measure);
+  }
+
   // --- scenes (design §4) ---------------------------------------------------------------------------
 
   /**
