@@ -230,6 +230,16 @@ function rebuild(){
     edgeCut = scored[k-1] ?? -Infinity;
     EDGES = EDGES.filter(e=>(tbl[e.id]??0) >= edgeCut);
   } else { edgeCut = -Infinity; }
+  // Visual weight: rank the surviving edges 0..1 so thickness/opacity can carry prominence. Percentile
+  // rather than raw value because betweenness spans four orders of magnitude — on a linear scale all but a
+  // handful of edges would render invisible. Computed AFTER filtering, so contrast is relative to what is
+  // actually on screen.
+  if(edgeMeasure!=='none' && PROM[edgeMeasure]){
+    const ptbl=PROM[edgeMeasure];
+    const order=EDGES.map(e=>({e, v:ptbl[e.id]??0})).sort((p,q)=>p.v-q.v);
+    const last=Math.max(1, order.length-1);
+    order.forEach((o,i)=>{ o.e.prom = i/last; });
+  } else { for(const e of EDGES) e.prom = 0.5; }
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
@@ -368,10 +378,13 @@ function draw(){
     const [ax,ay]=toScreen(e.a.x,e.a.y), [bx,by]=toScreen(e.b.x,e.b.y);
     const on = e===hoverEdge || (focusSet && (e.a===selected||e.b===selected));
     const reson = e.kind==='RESONATES_WITH';
+    // Prominence drives BOTH width and opacity — the attention budget made visible, not merely filterable.
+    const p = (e.prom===undefined ? 0.5 : e.prom);
+    const pa = edgeAlpha * (0.35 + 1.30*p);
     ctx.strokeStyle = on ? '#ffffff'
       : (focusSet ? (reson?'#3a2a44':'#1a2130')
-      : (reson ? 'rgba(247,118,142,'+Math.min(0.5,edgeAlpha*1.6)+')' : 'rgba(120,140,180,'+edgeAlpha+')'));
-    ctx.lineWidth = on ? 2 : (reson ? 1.1 : 0.7);
+      : (reson ? 'rgba(247,118,142,'+Math.min(0.5,pa*1.6)+')' : 'rgba(120,140,180,'+Math.min(0.6,pa)+')'));
+    ctx.lineWidth = on ? 2 : (reson ? 1.1 : (0.35 + 1.45*p));
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
   }
   for(const n of NODES){
@@ -639,7 +652,7 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChil
 function renderEdgeCtl(){
   let box=document.getElementById('edgectl');
   if(!box){ box=document.createElement('div'); box.id='edgectl';
-    box.style.cssText='position:fixed;left:14px;bottom:150px;z-index:6;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--dim);min-width:190px';
+    box.style.cssText='position:fixed;left:14px;bottom:220px;z-index:6;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--dim);min-width:190px';
     document.body.appendChild(box); }
   if(!PROM_MEASURES.length){ box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase">edge budget</div><div style="margin-top:5px">no prominence computed —<br>run <code>tessera view</code> again</div>'; return; }
   box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)">edge budget</div>';
@@ -650,6 +663,11 @@ function renderEdgeCtl(){
   box.appendChild(sel);
   const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;margin-top:3px';
   lab.innerHTML='<span>top '+edgeKeepPct+'%</span><span style="color:var(--faint)">'+EDGES.length+' edges</span>';
+  const note=document.createElement('div');
+  note.style.cssText='margin-top:5px;color:var(--faint);font-size:10px;line-height:1.35';
+  note.textContent = edgeMeasure==='none' ? 'all edges drawn uniformly'
+    : 'thicker + brighter = higher ' + edgeMeasure.replace(/_/g,' ');
+  box.appendChild(note);
   box.appendChild(lab);
   const sl=document.createElement('input'); sl.type='range'; sl.min='1'; sl.max='100'; sl.value=String(edgeKeepPct);
   sl.style.cssText='width:100%;margin-top:3px'; sl.disabled=(edgeMeasure==='none');

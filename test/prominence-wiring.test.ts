@@ -115,3 +115,46 @@ describe("prominence reaches the bundle and the viewer", () => {
     expect(run(10, "none").length).toBe(100); // 'none' disables the budget entirely
   });
 });
+
+describe("prominence is VISIBLE, not just filterable", () => {
+  // Extracted from the shipped template so the encoding cannot drift from what users see.
+  it("percentile-ranks surviving edges 0..1 by the active measure", () => {
+    const start = TEMPLATE.indexOf("  // Visual weight: rank the surviving edges");
+    const end = TEMPLATE.indexOf("} else { for(const e of EDGES) e.prom = 0.5; }", start) + "} else { for(const e of EDGES) e.prom = 0.5; }".length;
+    expect(start).toBeGreaterThan(0);
+    const src = TEMPLATE.slice(start, end);
+
+    const edges = Array.from({ length: 5 }, (_, i) => ({ id: `e${i}`, prom: undefined as number | undefined }));
+    // betweenness-like: four orders of magnitude, which a LINEAR scale would collapse to invisibility
+    const tbl = { e0: 0.00001, e1: 0.0001, e2: 0.001, e3: 0.01, e4: 0.1 };
+    new Function("EDGES", "PROM", "edgeMeasure", src)(edges, { m: tbl }, "m");
+    expect(edges.map((e) => e.prom)).toEqual([0, 0.25, 0.5, 0.75, 1]); // rank, not raw value
+  });
+
+  it("'none' flattens every edge to the middle, restoring uniform rendering", () => {
+    const start = TEMPLATE.indexOf("  // Visual weight: rank the surviving edges");
+    const end = TEMPLATE.indexOf("} else { for(const e of EDGES) e.prom = 0.5; }", start) + "} else { for(const e of EDGES) e.prom = 0.5; }".length;
+    const src = TEMPLATE.slice(start, end);
+    const edges = [{ id: "a", prom: undefined as number | undefined }, { id: "b", prom: undefined as number | undefined }];
+    new Function("EDGES", "PROM", "edgeMeasure", src)(edges, { m: { a: 1, b: 2 } }, "none");
+    expect(edges.every((e) => e.prom === 0.5)).toBe(true);
+  });
+
+  it("width and opacity both increase with rank (the encoding itself)", () => {
+    const widthOf = (p: number): number => 0.35 + 1.45 * p;
+    const alphaOf = (p: number, base = 0.2): number => Math.min(0.6, base * (0.35 + 1.3 * p));
+    expect(widthOf(1)).toBeGreaterThan(widthOf(0) * 4); // a top edge is >4x the width of the faintest
+    expect(alphaOf(1)).toBeGreaterThan(alphaOf(0) * 4);
+    expect(widthOf(0)).toBeGreaterThan(0.3); // the faintest edge is still drawn, not erased
+    // pinned against the template so tuning the constants there fails here rather than silently
+    expect(TEMPLATE).toContain("0.35 + 1.45*p");
+    expect(TEMPLATE).toContain("0.35 + 1.30*p");
+  });
+
+  it("the edge control clears the minimap (they collided at bottom:150px)", () => {
+    // The minimap is fixed at bottom:14px and is ~192px tall (24px head + 168px canvas), so it occupies up
+    // to ~206px. Brian hit this on synthpl: the slider was underneath it.
+    expect(TEMPLATE).toMatch(/#minimap\{[^}]*bottom:14px/);
+    expect(TEMPLATE).toMatch(/id='edgectl'[\s\S]{0,220}bottom:220px/);
+  });
+});
