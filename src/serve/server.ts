@@ -76,11 +76,17 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let over = false;
     req.on("data", (c: Buffer) => {
+      if (over) return;
       size += c.length;
       if (size > limit) {
+        over = true;
+        // PAUSE, do not destroy. Destroying kills the socket before the 413 can be written, so a client
+        // that streams past the cap gets a dropped connection instead of an error — found by a test that
+        // sends a chunked upload with no Content-Length, which is the only path that reaches this guard.
+        req.pause();
         reject(Object.assign(new Error(`upload exceeds ${limit} bytes`), { status: 413 }));
-        req.destroy();
         return;
       }
       chunks.push(c);
@@ -247,9 +253,18 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
     server,
     close: () =>
       new Promise<void>((resolve) => {
-        for (const res of listeners) res.end();
+        for (const res of listeners) {
+          try { res.end(); } catch { /* already gone */ }
+        }
         listeners.clear();
+        // server.close() only stops NEW connections and waits for existing ones to end. With SSE streams and
+        // keep-alive sockets that never happens, so ctrl-c on a live server would hang — the test suite hit
+        // it as a 10s afterAll timeout, but a user would just see a terminal that will not come back.
         server.close(() => resolve());
+        server.closeAllConnections?.();
+        // last-resort: never let shutdown block indefinitely on a socket the runtime will not surrender
+        const t = setTimeout(() => resolve(), 2000);
+        t.unref?.();
       }),
   };
 }

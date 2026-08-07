@@ -1,7 +1,7 @@
 // The advisory ingest lock (design §9). Two reviewers found it one-sided — only `serve` took it, so the
 // mutual exclusion was documented and not implemented — and check-then-create rather than atomic.
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireIngestLock, lockPath, LockHeld, LOCK_STALE_MS } from "../src/serve/lock.js";
@@ -33,7 +33,10 @@ describe("acquireIngestLock", () => {
     }
   });
 
-  it("release is idempotent — calling it twice cannot free someone else's lock", () => {
+  it("a stale handle cannot free a LATER lock taken by the same process in the same millisecond", () => {
+    // This test broke the moment ownership checking arrived, and it was right to: the first ownership check
+    // keyed on (pid, at), and two acquisitions in one process within one millisecond are identical — so a
+    // stale release handle could delete the live lock. LockInfo now carries a per-acquisition token.
     const d = mk();
     const release = acquireIngestLock(d, "a");
     release();
@@ -115,4 +118,102 @@ describe("atomicity under a REAL race (mutation-testing found this untested)", (
     expect(src).toMatch(/openSync\(p, "wx"\)/);
     expect(src).not.toMatch(/if \(existsSync\(p\)\)[\s\S]{0,80}openSync\(p, "w"\)/);
   });
+});
+
+describe("RECLAIM is atomic, and release checks ownership (Fable round 2, HIGH)", () => {
+  it("release does NOT delete a lock it no longer owns", () => {
+    // Confirmed broken by execution before the fix: unconditional rmSync deleted whoever's lock was there.
+    const d = mk();
+    const releaseA = acquireIngestLock(d, "A");
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 424242, at: Date.now(), what: "B" }));
+    releaseA();
+    expect(existsSync(lockPath(d))).toBe(true); // B's lock survived
+  });
+
+  it("an unreadable ANCIENT lock is reclaimed — a crash must not wedge ingest forever", () => {
+    // The previous code said "stale-if-old, never free" in a comment and implemented "held forever":
+    // readLock returns null, and the reclaim test was pure existence with no age check. An empty lock file
+    // is reachable by a crash between create and write, so this wedged every future ingest permanently.
+    const d = mk();
+    writeFileSync(lockPath(d), "");
+    const old = new Date(Date.now() - LOCK_STALE_MS - 60_000);
+    utimesSync(lockPath(d), old, old);
+    expect(() => acquireIngestLock(d, "next")).not.toThrow();
+  });
+
+  it("an unreadable FRESH lock is still held — a torn write is not an invitation", () => {
+    const d = mk();
+    writeFileSync(lockPath(d), "");
+    expect(() => acquireIngestLock(d, "next")).toThrow(LockHeld);
+  });
+
+  it("contended reclaim of a dead-holder lock yields exactly ONE winner", async () => {
+    // The race the rename fixes: two processes starting against the same dead-holder lock could each read
+    // the stale info, and the second could delete the FIRST's fresh lock and take one of its own — both
+    // holding it. The 8-process test never caught this because it always started from an empty directory,
+    // so the reclaim path was never contended.
+    const { spawn } = await import("node:child_process");
+    const d = mk();
+    writeFileSync(lockPath(d), JSON.stringify({ pid: 999_999, at: Date.now(), what: "crashed holder" }));
+    const probe = join(d, "probe.mjs");
+    writeFileSync(
+      probe,
+      `import { acquireIngestLock } from "${join(process.cwd(), "src/serve/lock.ts").replace(/\\/g, "/")}";
+       try { acquireIngestLock(${JSON.stringify(d)}, "racer"); console.log("WON"); } catch { console.log("lost"); }
+       await new Promise(r => setTimeout(r, 4000));`,
+    );
+    const out = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        new Promise<string>((resolve) => {
+          const c = spawn("npx", ["tsx", probe], { cwd: process.cwd() });
+          let o = "";
+          c.stdout.on("data", (b) => (o += b.toString()));
+          c.on("close", () => resolve(o));
+          c.on("error", () => resolve("lost"));
+        }),
+      ),
+    );
+    expect(out.filter((r) => r.includes("WON")).length).toBe(1);
+  }, 180_000);
+});
+
+describe("the CALL SITES take the lock — not just the lock module (Fable round 2, HIGH)", () => {
+  it("`tessera ingest` REFUSES while the lock is held, and proceeds once it is released", async () => {
+    // Nothing proved anyone invoked acquireIngestLock: deleting it from scripts/cli.ts or scripts/serve.ts
+    // left every test green, silently reverting round 1's mutual-exclusion fix. This is the call-site test.
+    const { execFileSync } = await import("node:child_process");
+    const graphName = "__lock_callsite__";
+    const dir = join(process.cwd(), "graphs", graphName);
+    rmSync(dir, { recursive: true, force: true });
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(dir, { recursive: true });
+    const { GraphStore } = await import("../src/store/graphStore.js");
+    const { StubEmbedder } = await import("../src/embedder.js");
+    const st = new GraphStore({ path: join(dir, "graph.db"), embedder: new StubEmbedder(768) });
+    st.close();
+
+    const doc = join(dir, "note.md");
+    writeFileSync(doc, "# hello\n\nsome text\n");
+    // NOT --dry-run: that path returns before the lock is taken, correctly, because it writes nothing.
+    // (First version of this test used it and proved nothing — the CLI "succeeded" while the lock was held.)
+    // A real ingest is gated by the lock BEFORE any LLM call, so the blocked case is fast and needs no Ollama.
+    const run = (): { code: number; out: string } => {
+      try {
+        return { code: 0, out: execFileSync("npx", ["tsx", "scripts/cli.ts", "ingest", graphName, doc], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe", timeout: 30_000 }) };
+      } catch (e) {
+        const err = e as { status?: number; stdout?: string; stderr?: string };
+        return { code: err.status ?? 1, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+      }
+    };
+
+    const release = acquireIngestLock(dir, "test holder");
+    const blocked = run();
+    release();
+    rmSync(dir, { recursive: true, force: true });
+
+    // This is the call-site proof: delete acquireIngestLock from scripts/cli.ts and this fails.
+    expect(blocked.code).not.toBe(0);
+    expect(blocked.out).toMatch(/another tessera process is writing this graph/);
+    expect(blocked.out).toMatch(/test holder/); // and it names WHO holds it
+  }, 180_000);
 });

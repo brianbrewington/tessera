@@ -39,8 +39,13 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
           if (e instanceof LockHeld) throw new Error(`${e.message} — try again once it finishes`);
           throw e;
         }
-        const graph = Graph.open(opts.name);
+        // Graph.open MUST be inside the try: it used to sit between acquire and the finally, so a throw
+        // there (db deleted mid-session, SQLITE_BUSY at open) leaked the lock for six hours — held by the
+        // LIVE serve pid, so dead-holder reclaim could never rescue it, and the error blamed a process that
+        // was not ingesting anything.
+        let graph: ReturnType<typeof Graph.open> | undefined;
         try {
+          graph = Graph.open(opts.name);
           const extractorModel = process.env.TESSERA_EXTRACT_MODEL || "qwen2.5:14b";
           const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
           const r = await ingestFile(graph, extractor, path, {
@@ -51,8 +56,9 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
           prominencePass(graph.store, { actor: "serve", cause: `drop ${display.title}` });
           return { phase: "done", chunks: r.chunks, entities: r.entities, edges: r.edges, laidOut: lay.laidOut, skipped: r.skipped };
         } finally {
-          graph.close();
+          // release FIRST: a throwing close must not skip it
           release();
+          try { graph?.close(); } catch { /* already closing */ }
         }
       },
       readScenes: () => {

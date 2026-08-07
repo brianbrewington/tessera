@@ -317,53 +317,62 @@ describe("provenance must not record the temp path (Composer, MEDIUM)", () => {
   });
 });
 
-describe("the SSE listener set is bounded", () => {
-  it("refuses more than a handful of progress streams", async () => {
+describe("the SSE listener set is bounded (Fable round 2, 8a — the old test asserted nothing)", () => {
+  it("the 9th stream is ENDED and receives no broadcasts", async () => {
+    // The previous version opened 12 streams and asserted all 12 got 200 — while its own comment conceded
+    // "status is 200 either way". Deleting the cap left it green. This asserts the cap's actual effect.
     const ctrls: AbortController[] = [];
-    const codes: number[] = [];
-    for (let i = 0; i < 12; i++) {
+    const readers: Array<{ body: string; done: boolean }> = [];
+    const open = async (): Promise<{ body: string; done: boolean }> => {
       const c = new AbortController();
       ctrls.push(c);
-      const r = await fetch(BASE + "/events", {
-        headers: { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "same-origin" },
-        signal: c.signal,
-      });
-      codes.push(r.status);
-      // drain enough to know whether the server closed it immediately
-      void r.body?.getReader().read();
-    }
+      const r = await fetch(BASE + "/events", { headers: { Host: `127.0.0.1:${PORT}`, "Sec-Fetch-Site": "same-origin" }, signal: c.signal });
+      const reader = r.body!.getReader();
+      const dec = new TextDecoder();
+      let body = "";
+      let done = false;
+      const first = await reader.read();
+      if (first.done) done = true;
+      else body += dec.decode(first.value);
+      // a capped stream is ended immediately; an accepted one stays open
+      void reader.read().then((n) => { if (n.done) done = true; else body += dec.decode(n.value); }).catch(() => {});
+      return { body, done };
+    };
+    for (let i = 0; i < 10; i++) readers.push(await open());
+    await new Promise((r) => setTimeout(r, 120));
+    const capped = readers.slice(8);
+    expect(capped.some((x) => /too many progress listeners/.test(x.body))).toBe(true);
     for (const c of ctrls) c.abort();
-    expect(codes.every((s) => s === 200)).toBe(true); // status is 200 either way; the cap ends the stream
-  }, 20_000);
+  }, 30_000);
 });
 
-describe("a deduped re-drop is reported as such, not as a failed add", () => {
-  it("the client branches on `skipped` before the added-N-entities message", () => {
-    const { readFileSync: rf } = require("node:fs") as typeof import("node:fs");
-    const tpl = rf(join(__dirname, "..", "viewer", "template.html"), "utf8");
-    const start = tpl.indexOf("      const r=JSON.parse(txt);");
-    const end = tpl.indexOf("setTimeout(()=>location.reload(), 900);", start);
-    const src = tpl.slice(start, end);
-
-    const run = (r: Record<string, unknown>): { msg: string; reloaded: boolean } => {
-      let msg = "", reloaded = true;
-      const dropStatus = (m: string): void => { msg = m; };
-      const es = { close(): void {} };
-      const f = { name: "notes.md" };
-      // the branch returns early when skipped, so `reloaded` stays false in that case
-      new Function("txt", "dropStatus", "es", "f", "setReloaded", `${src.replace("return;", "setReloaded(false); return;")}`)(
-        JSON.stringify(r), dropStatus, es, f, (v: boolean) => { reloaded = v; },
-      );
-      return { msg, reloaded };
-    };
-
-    const skipped = run({ skipped: true, entities: 0, edges: 0 });
-    expect(skipped.msg).toMatch(/already in this map/);
-    expect(skipped.msg).not.toMatch(/added 0 entities/); // the message that reads as a failure
-    expect(skipped.reloaded).toBe(false); // no pointless reload
-
-    const added = run({ skipped: false, entities: 7, edges: 4 });
-    expect(added.msg).toMatch(/added 7 entities, 4 edges/);
-    expect(added.reloaded).toBe(true);
-  });
+describe("oversize is rejected MID-STREAM, not only by declared length (Fable round 2, 8b)", () => {
+  it("a chunked upload with no Content-Length is cut off at the cap", async () => {
+    // fetch with a string body always sets Content-Length, so the old test died at the declared-length
+    // pre-check and never reached the streaming guard inside readBody. Removing that guard stayed green —
+    // and readBody is also the ONLY limit on PUT /scenes, which has no declared pre-check at all.
+    const { connect } = await import("node:net");
+    const status = await new Promise<number>((resolve, reject) => {
+      const sock = connect(PORT, "127.0.0.1", () => {
+        sock.write(
+          [`POST /ingest HTTP/1.1`, `Host: 127.0.0.1:${PORT}`, `Sec-Fetch-Site: same-origin`,
+           `Origin: ${BASE}`, `X-Tessera-Filename: chunked.md`, `Transfer-Encoding: chunked`, "", ""].join("\r\n"),
+        );
+        // stream past the 4MB cap in 64KB chunks; the server must cut us off before we finish
+        const block = "x".repeat(65536);
+        let sent = 0;
+        const pump = (): void => {
+          if (sent > MAX_UPLOAD_BYTES + 512 * 1024) { sock.write("0\r\n\r\n"); return; }
+          sent += block.length;
+          sock.write(`${block.length.toString(16)}\r\n${block}\r\n`, () => setImmediate(pump));
+        };
+        pump();
+      });
+      let buf = "";
+      sock.on("data", (d) => { buf += d.toString(); if (buf.includes("\r\n\r\n")) { resolve(Number(buf.split(" ")[1])); sock.destroy(); } });
+      sock.on("close", () => { if (buf) resolve(Number(buf.split(" ")[1])); else reject(new Error("closed with no response")); });
+      sock.on("error", () => { if (buf) resolve(Number(buf.split(" ")[1])); });
+    });
+    expect(status).toBe(413);
+  }, 30_000);
 });

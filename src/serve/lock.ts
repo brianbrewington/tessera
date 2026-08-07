@@ -6,13 +6,22 @@
 //
 // Acquisition is atomic: `wx` fails if the file exists, so two processes cannot both win a check-then-create
 // race the way existsSync + writeFileSync could.
-import { openSync, closeSync, writeSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { openSync, closeSync, writeSync, readFileSync, rmSync, renameSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 export const LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 export const lockPath = (graphDir: string): string => join(graphDir, ".ingest.lock");
 
-export interface LockInfo { pid: number; at: number; what: string }
+export interface LockInfo {
+  pid: number;
+  at: number;
+  what: string;
+  /** Unique per ACQUISITION. (pid, at) is not enough: two acquisitions in one process within the same
+   *  millisecond are identical, so a stale handle could free a live lock it did not own. Caught by the
+   *  idempotence test, which started failing the moment ownership checking was introduced. */
+  token: string;
+}
 
 function readLock(p: string): LockInfo | null {
   try { return JSON.parse(readFileSync(p, "utf8")) as LockInfo; } catch { return null; }
@@ -31,27 +40,77 @@ export class LockHeld extends Error {
   }
 }
 
-/** Acquire, or throw LockHeld. Returns a release function that is safe to call twice. */
+/**
+ * Acquire, or throw LockHeld. Returns a release function that is safe to call twice.
+ *
+ * Two properties that a previous version got wrong, both found by executing probes rather than reading:
+ *
+ * 1. RECLAIM IS ATOMIC. Deciding "this lock is stale" from a snapshot and then calling rmSync deletes
+ *    whatever is at the path WHEN IT RUNS — not the file that was judged stale. Two processes starting
+ *    against the same dead-holder lock could each read the stale info, and the second could delete the
+ *    first's fresh lock and take one of its own. Both would then hold it, which is the exact failure this
+ *    module exists to prevent. Reclaim now renames first: rename is atomic, so exactly one racer wins, and
+ *    the loser's rename fails.
+ * 2. RELEASE CHECKS OWNERSHIP. Unconditional rmSync deleted locks belonging to other processes — verified.
+ *    Release now re-reads and unlinks only its own.
+ */
 export function acquireIngestLock(graphDir: string, what: string): () => void {
   const p = lockPath(graphDir);
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const mine: LockInfo = { pid: process.pid, at: Date.now(), what, token: randomUUID() };
+
+  const release = (): void => {
+    // Only unlink if it is still OURS. A stale handle must never free someone else's lock.
+    const cur = readLock(p);
+    if (cur && cur.token === mine.token) rmSync(p, { force: true });
+  };
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let fd: number | undefined;
     try {
-      const fd = openSync(p, "wx"); // atomic create-if-absent
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now(), what } satisfies LockInfo));
-      closeSync(fd);
-      let released = false;
-      return () => { if (!released) { released = true; rmSync(p, { force: true }); } };
+      fd = openSync(p, "wx"); // atomic create-if-absent
+      writeSync(fd, JSON.stringify(mine));
+      return release;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      const info = readLock(p);
-      // Reclaim only when the holder is provably gone or the lock is ancient. An unreadable lock file is
-      // treated as stale-if-old, never as free, so a torn write cannot hand two writers the same graph.
-      const reclaimable = info === null
-        ? !existsSync(p)
-        : holderDead(info) || Date.now() - info.at > LOCK_STALE_MS;
-      if (!reclaimable) throw new LockHeld(info ?? { pid: -1, at: 0, what: "unknown" }, p);
-      rmSync(p, { force: true });
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+        // e.g. ENOSPC after the file was created: do not leave an empty lock behind to wedge the graph
+        if (fd !== undefined) rmSync(p, { force: true });
+        throw e;
+      }
+      if (!reclaimStale(p)) throw new LockHeld(readLock(p) ?? { pid: -1, at: 0, what: "unknown", token: "" }, p);
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
-  throw new LockHeld({ pid: -1, at: 0, what: "contended" }, p);
+  throw new LockHeld({ pid: -1, at: 0, what: "contended", token: "" }, p);
+}
+
+/**
+ * Try to remove a lock that is provably abandoned. Returns true if the caller should retry.
+ * The rename is what makes this safe under contention — only one racer can rename a given file.
+ */
+function reclaimStale(p: string): boolean {
+  const info = readLock(p);
+  let stale: boolean;
+  if (info === null) {
+    // Unreadable or empty — reachable by a crash between create and write, so it must NOT wedge forever.
+    // Fall back to the file's own mtime, which is what the comment always claimed and the code did not do:
+    // an unreadable lock is stale-if-old, never free-on-sight.
+    try {
+      stale = Date.now() - statSync(p).mtimeMs > LOCK_STALE_MS;
+    } catch {
+      return true; // vanished under us — the path is free, retry
+    }
+  } else {
+    stale = holderDead(info) || Date.now() - info.at > LOCK_STALE_MS;
+  }
+  if (!stale) return false;
+  const parked = `${p}.stale.${process.pid}.${Date.now()}`;
+  try {
+    renameSync(p, parked); // atomic: exactly one racer wins
+    rmSync(parked, { force: true });
+    return true;
+  } catch {
+    // someone else reclaimed it first; they now hold it, so we are not stale-reclaiming anything
+    return false;
+  }
 }
