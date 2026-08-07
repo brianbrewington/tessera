@@ -22,9 +22,17 @@ const name = process.argv[2] ?? "synth10x";
 const nVisible = Number(process.argv[3] ?? 3870);
 const edgesPerNode = Number(process.argv[4] ?? 5.4);
 
-// deterministic PRNG — reproducible graphs, and Math.random is banned in layout-adjacent code anyway
-let seed = 12345;
-const rnd = (): number => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+// Deterministic PRNG (mulberry32). The obvious textbook LCG is WRONG in JS: seed * 1103515245 exceeds
+// 2^53, the float multiply silently drops low bits, and the generator collapses to a ~16k cycle. That
+// produced a graph whose edge attempts kept redrawing the same pairs, so putEdge deduped them and the
+// result had degree ~1.6 — a uniform dot field that looked like a scale problem and was a generator bug.
+let seed = 0x9e3779b9;
+const rnd = (): number => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
 const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]!;
 
 const dir = join(ROOT, "graphs", name);
@@ -57,8 +65,11 @@ process.stdout.write(`\r  nodes ${nVisible}/${nVisible}\n`);
 
 // --- edges: dense inside a community, sparse bridges between, plus hubs ---
 const targetEdges = Math.round(nVisible * edgesPerNode);
-let made = 0;
-for (let e = 0; e < targetEdges; e++) {
+let made = 0, attempts = 0;
+const MAX_ATTEMPTS = targetEdges * 12; // dedup means attempts != edges; keep going until the target is met
+while (made < targetEdges && attempts < MAX_ATTEMPTS) {
+  attempts++;
+  {
   const c = Math.floor(rnd() * nComms);
   const members = comms[c]!;
   let a = pick(members);
@@ -66,12 +77,14 @@ for (let e = 0; e < targetEdges; e++) {
   if (rnd() < 0.08) a = members[0]!; // hub: first member of each community accumulates degree
   if (a === b) continue;
   try {
+    const before = store.countEdges();
     await store.putEdge({ from: a, to: b, kind: "RELATED", reason: `${a} relates to ${b} in community ${c}`, origin: "ingest" }, meta);
-    made++;
+    if (store.countEdges() > before) made++; // a repeat REINFORCES rather than throwing — do not count it
   } catch {
     /* UNIQUE collision on an already-present pair — fine, skip */
   }
-  if (e % 1000 === 0) process.stdout.write(`\r  edges ${made}/${targetEdges}`);
+  if (attempts % 2000 === 0) process.stdout.write(`\r  edges ${made}/${targetEdges} (${attempts} attempts)`);
+  }
 }
 process.stdout.write(`\r  edges ${made}/${targetEdges}\n`);
 
