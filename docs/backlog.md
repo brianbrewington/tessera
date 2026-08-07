@@ -298,6 +298,14 @@ with a real cost:
 - **Accept the current guarantee** and document it: safe for single-user, no-crash, sub-6-hour operation,
   which is every real use of this tool today.
 
-Brian's call — it trades a dependency or a portability constraint against a narrow, documented, crash-corner
-race. **Until it is decided, the disposition is ACCEPTED-RISK with the boundary stated:** do not rely on this
-lock across crashes, ingests longer than six hours, or mixed uids.
+**DECIDED 2026-08-06 — Brian: "that's an acceptable risk for now."**
+
+Disposition: **ACCEPTED-RISK**, with the boundary stated so it is a decision and not an oversight. The lock is
+safe for single-user, no-crash, sub-6-hour operation — which is every real use of this tool today. It is NOT
+safe across crashes, ingests longer than `LOCK_STALE_MS` (6 h), or mixed uids.
+
+**Revisit when any of these becomes true**, because each moves the risk from theoretical to routine:
+- a corpus ingest is expected to run longer than six hours (the live-holder steal needs no race at all — a
+  heartbeat would be the minimum fix, and is cheaper than the full flock migration)
+- `tessera serve` is run as a service, or under a different user from the CLI
+- more than one person, or more than one machine, writes one graph directory
