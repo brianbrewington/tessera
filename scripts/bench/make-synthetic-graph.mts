@@ -63,30 +63,75 @@ for (let i = 0; i < nVisible; i++) {
 }
 process.stdout.write(`\r  nodes ${nVisible}/${nVisible}\n`);
 
-// --- edges: dense inside a community, sparse bridges between, plus hubs ---
-const targetEdges = Math.round(nVisible * edgesPerNode);
-let made = 0, attempts = 0;
-const MAX_ATTEMPTS = targetEdges * 12; // dedup means attempts != edges; keep going until the target is met
-while (made < targetEdges && attempts < MAX_ATTEMPTS) {
-  attempts++;
-  {
-  const c = Math.floor(rnd() * nComms);
+// --- edges: PREFERENTIAL ATTACHMENT within communities, hub-mediated bridges between ---
+//
+// Rich-get-richer (Barabasi-Albert style), because a flat degree distribution makes prominence-ranked
+// tiling untestable: if every node has roughly the same degree there is no principled way to choose the
+// top N, which is exactly what the first synthetic graph failed to exercise. Real corpora are power-law —
+// a few hubs carry most of the structure — and that unevenness is the thing hierarchy exploits.
+//
+// networkx has the well-tested versions of this (barabasi_albert_graph, powerlaw_cluster_graph, and
+// LFR_benchmark_graph which also gives ground-truth communities). This machine has no pip/venv, so this is
+// a hand-rolled equivalent: BA within each community, plus bridges drawn preferentially so hubs mediate
+// between communities the way they do in real link graphs.
+const M_ATTACH = Math.max(2, Math.round(edgesPerNode / 2)); // each arriving node makes ~m edges -> mean degree ~2m
+const BRIDGE_FRAC = 0.1;
+let made = 0;
+
+/** Repeated-node list: sampling it uniformly IS sampling proportional to degree. */
+const repeated: string[][] = comms.map(() => []);
+const allHubs: string[] = [];
+
+for (let c = 0; c < nComms; c++) {
   const members = comms[c]!;
-  let a = pick(members);
-  let b = rnd() < 0.12 ? pick(comms[Math.floor(rnd() * nComms)]!) : pick(members); // 12% bridges
-  if (rnd() < 0.08) a = members[0]!; // hub: first member of each community accumulates degree
-  if (a === b) continue;
-  try {
-    const before = store.countEdges();
-    await store.putEdge({ from: a, to: b, kind: "RELATED", reason: `${a} relates to ${b} in community ${c}`, origin: "ingest" }, meta);
-    if (store.countEdges() > before) made++; // a repeat REINFORCES rather than throwing — do not count it
-  } catch {
-    /* UNIQUE collision on an already-present pair — fine, skip */
+  const rep = repeated[c]!;
+  // seed core: a small fully-connected clique so attachment has something to bite on
+  const m0 = Math.min(M_ATTACH + 1, members.length);
+  for (let i = 0; i < m0; i++) {
+    for (let j = i + 1; j < m0; j++) {
+      const before = store.countEdges();
+      await store.putEdge({ from: members[i]!, to: members[j]!, kind: "RELATED", reason: `seed clique of community ${c}`, origin: "ingest" }, meta);
+      if (store.countEdges() > before) made++;
+      rep.push(members[i]!, members[j]!);
+    }
   }
-  if (attempts % 2000 === 0) process.stdout.write(`\r  edges ${made}/${targetEdges} (${attempts} attempts)`);
+  // preferential attachment for the rest
+  for (let k = m0; k < members.length; k++) {
+    const node = members[k]!;
+    const targets = new Set<string>();
+    let guard = 0;
+    while (targets.size < Math.min(M_ATTACH, rep.length) && guard++ < M_ATTACH * 20) {
+      const t = rep[Math.floor(rnd() * rep.length)]!;
+      if (t !== node) targets.add(t);
+    }
+    for (const t of targets) {
+      const before = store.countEdges();
+      await store.putEdge({ from: node, to: t, kind: "RELATED", reason: `${node} attaches to hub ${t} in community ${c}`, origin: "ingest" }, meta);
+      if (store.countEdges() > before) made++;
+      rep.push(node, t); // both endpoints gain degree -> richer nodes keep getting richer
+    }
+    if (k % 200 === 0) process.stdout.write(`\r  edges ${made} (community ${c}/${nComms})`);
   }
+  // this community's hub = its highest-degree member, for bridging
+  const degOf = new Map<string, number>();
+  for (const id of rep) degOf.set(id, (degOf.get(id) ?? 0) + 1);
+  allHubs.push([...degOf.entries()].sort((a, b) => b[1] - a[1])[0]![0]);
 }
-process.stdout.write(`\r  edges ${made}/${targetEdges}\n`);
+
+// bridges: preferentially attached at BOTH ends, so inter-community links run hub-to-hub
+const nBridges = Math.round(made * BRIDGE_FRAC);
+for (let b = 0; b < nBridges; b++) {
+  const ca = Math.floor(rnd() * nComms);
+  let cb = Math.floor(rnd() * nComms);
+  if (cb === ca) cb = (cb + 1) % nComms;
+  const a = rnd() < 0.6 ? allHubs[ca]! : repeated[ca]![Math.floor(rnd() * repeated[ca]!.length)]!;
+  const bb = rnd() < 0.6 ? allHubs[cb]! : repeated[cb]![Math.floor(rnd() * repeated[cb]!.length)]!;
+  if (a === bb) continue;
+  const before = store.countEdges();
+  await store.putEdge({ from: a, to: bb, kind: "RELATED", reason: `bridge between community ${ca} and ${cb}`, origin: "ingest" }, meta);
+  if (store.countEdges() > before) made++;
+}
+process.stdout.write(`\r  edges ${made} (preferential attachment, ${nBridges} bridges)\n`);
 
 // --- provenance: documents + chunks, hidden by default but carried in the bundle ---
 const nDocs = nComms;
