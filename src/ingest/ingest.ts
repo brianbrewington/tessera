@@ -187,6 +187,8 @@ export async function ingestFile(
     source: chunked.source, title: chunked.title, chunks: chunked.chunks,
     entities: drained.entities, edges: drained.edges,
     parseFailures: drained.parseFailures, emptyChunks: drained.emptyChunks,
-    reused: chunked.chunks - drained.attempted, skipped: false,
+    // `reused` means "already extracted, no LLM owed". Chunks another worker holds a claim on were merely
+    // POSTPONED, so counting them as reused would report work as done that nobody has done.
+    reused: chunked.chunks - drained.attempted - drained.skippedClaimed, skipped: false,
   };
 }

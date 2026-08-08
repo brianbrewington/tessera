@@ -130,8 +130,20 @@ export async function extractPending(
           opts.onChunk?.(out.attempted, pending.length);
           continue;
         }
-        // force bypasses the claim: --reextract is an explicit, user-metered, single-operator action.
-        if (!opts.force && !graph.store.claimChunk(chunk.id, claimant, now(), ttl)) {
+        // The claim is taken even under `force`. --reextract bypasses the CLEANLINESS filter, which is a
+        // question about the memo; it is not a licence to run a chunk another worker is running right now.
+        // Bypassing it also let a forced run clear someone else's claim via markExtracted, handing the chunk
+        // to a third worker while the first was still mid-extraction.
+        if (!graph.store.claimChunk(chunk.id, claimant, now(), ttl)) {
+          out.skippedClaimed++;
+          continue;
+        }
+        // Re-check cleanliness UNDER the claim. `pending` was snapshotted before the loop, so a chunk another
+        // extractor finished in the meantime looks dirty here and its claim is already cleared — we would
+        // re-pay for it. The snapshot is the check and the claim is the act; without this line the gap
+        // between them is the same check-then-act race the advisory lock kept regenerating.
+        if (!opts.force && graph.store.isExtracted(chunk.id, promptVersion)) {
+          graph.store.releaseChunkClaim(chunk.id);
           out.skippedClaimed++;
           continue;
         }

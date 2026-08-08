@@ -223,6 +223,48 @@ describe("the claim keeps two extractors off one chunk", () => {
     store.close();
   });
 
+  // Found by a cross-agent review (Codex). The claim prevents two workers running the SAME chunk at the same
+  // MOMENT, but the dirty list is snapshotted up front — so a chunk another worker finished after the
+  // snapshot has its claim cleared by markExtracted, and this run would happily claim it and re-pay for it.
+  // Check-then-act again, one layer up: the snapshot is the check, the claim is the act.
+  it("does not re-extract a chunk another worker completed after the snapshot", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc(`# Doc\n\n${"alpha ".repeat(400)}\n\n${"omega ".repeat(400)}\n`));
+    const ids = store.dirtyChunks(PROMPT_VERSION).map((c) => c.id);
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+
+    let calls = 0;
+    const ex: Extractor = {
+      async extract(): Promise<ExtractResult> {
+        calls++;
+        // On the first call, simulate a concurrent worker finishing the LAST chunk of this same snapshot.
+        if (calls === 1) store.markExtracted(ids[ids.length - 1]!, PROMPT_VERSION, { actor: "other", cause: "other worker" });
+        return new LlmExtractor(new StubChat(ok("Alpha"))).extract("x");
+      },
+    };
+    const d = await extractPending(g, ex);
+    expect(calls).toBe(ids.length - 1); // the chunk the other worker finished was NOT paid for twice
+    expect(d.extracted).toBe(ids.length - 1);
+    store.close();
+  });
+
+  it("force re-extraction does not steal a chunk another worker is actively running", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc());
+    const id = store.dirtyChunks(PROMPT_VERSION)[0]!.id;
+    store.claimChunk(id, "worker-a", 1_000_000, 60_000);
+
+    const ex = recorder(() => ok("Alpha"));
+    const d = await extractPending(g, ex, { force: true, now: () => 1_000_100 });
+
+    expect(d.skippedClaimed).toBe(1);
+    expect(ex.calls).toBe(0); // --reextract bypasses the CLEAN filter, not another worker's live claim
+    const row = raw(store).prepare("SELECT claimed_by FROM chunk_extraction_state WHERE chunk_id = ?").get(id) as
+      { claimed_by: string | null };
+    expect(row.claimed_by).toBe("worker-a"); // and it did not clear someone else's claim on the way past
+    store.close();
+  });
+
   it("a successful extraction clears the claim and the attempt count", async () => {
     const { store, g } = fresh();
     await ingestChunks(g, mkDoc());
@@ -233,6 +275,21 @@ describe("the claim keeps two extractors off one chunk", () => {
     expect(row.claimed_by).toBeNull();
     expect(row.claimed_at).toBeNull();
     expect(row.attempts).toBe(0);
+    store.close();
+  });
+});
+
+describe("reported counts mean what they say", () => {
+  it("'reused' counts chunks already extracted, not chunks merely deferred by a claim", async () => {
+    const { store, g } = fresh();
+    const p = mkDoc(`# Doc\n\n${"alpha ".repeat(400)}\n\n${"omega ".repeat(400)}\n`);
+    await ingestChunks(g, p);
+    const ids = store.dirtyChunks(PROMPT_VERSION).map((c) => c.id);
+    store.claimChunk(ids[ids.length - 1]!, "worker-a", Date.now(), 60_000); // held, not finished
+
+    const r = await ingestFile(g, recorder(() => ok("Alpha")), p);
+    // Nothing had been extracted before this run, so nothing was reused. The held chunk was postponed.
+    expect(r.reused).toBe(0);
     store.close();
   });
 });
