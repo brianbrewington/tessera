@@ -132,6 +132,9 @@
   .slabel{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); }
   .desc{ font-size:13.5px; line-height:1.65; color:var(--text); text-wrap:pretty; white-space:pre-wrap; overflow-wrap:anywhere; }
   .desc.clamp{ max-height:88px; overflow:hidden; }
+  /* Source text, shown whole and set to read as a quotation rather than as prose we wrote. */
+  .desc.verbatim{ white-space:pre-wrap; font-size:12.5px; line-height:1.55; color:var(--dim);
+    border-left:2px solid var(--line-2); padding-left:11px; }
   .reveal{ color:var(--accent); cursor:pointer; font-size:12.5px; margin-top:-8px; display:inline-block; }
   .section{ display:flex; flex-direction:column; gap:8px; }
   .section .hd{ display:flex; align-items:baseline; justify-content:space-between; }
@@ -532,7 +535,60 @@ function chipEl(node){ const c=el('span','chip'); const d=el('span','cd'); d.sty
 function mkBtn(label,cls,onclick){ const b=el('button','btn'+(cls?' '+cls:''),label); if(onclick) b.onclick=onclick; else b.disabled=true; return b; }
 function walkTo(node){ if(!NODES.includes(node)) return; walk.push(node.id); openNode(node, panel.classList.contains('deep')); centerOn(node); } // don't walk to a hidden (provenance) node
 // backlink into provenance: reveal the chunk layer if needed, then open the source chunk (its raw text is the description)
-function revealAndGo(node){ if(!NODES.includes(node)){ showProv=true; rebuild(); } walk.push(node.id); openNode(node,false); centerOn(node); } // keep breadcrumb → back returns to the entity
+/**
+ * Open a node that may currently be hidden (an "appears in" link targets a document or chunk).
+ *
+ * This used to call rebuild() with repositioning on, and that was a trap. Revealing provenance widens the
+ * visible set to nodes that have NO stored layout row (slice 4 is unstarted, so provenance never gets one).
+ * The §3.4 all-or-nothing rule then correctly concluded the layout was incomplete, threw away every stored
+ * position, and ran a FULL settle from the seeds. Consequences, all of which Brian hit at once: seconds of
+ * frozen main thread on a 2055-node graph (the same path measured at 36.6s on the 10x graph), every node on
+ * the map moved, and the click did not arrive because centerOn raced the relaxation.
+ *
+ * That is worse than slow: the durable map is the whole point of slice 1, and a navigation affordance was
+ * silently destroying it.
+ *
+ * So: place the newcomers against the frozen field and move nobody else. Same rule the server-side
+ * incremental pass uses. Slice 4 (provenance in the layout) removes the need for this entirely by giving
+ * provenance real rows; until then this keeps the map still.
+ */
+function revealAndGo(node){
+  if(!NODES.includes(node)){
+    const placed = new Set(NODES.map(n=>n.id));
+    showProv = true;
+    rebuild(false);                       // reveal WITHOUT repositioning anything
+    placeNewcomers(placed);               // give the newly visible nodes somewhere sensible to be
+    rerender();
+  }
+  walk.push(node.id); openNode(node,false); centerOn(node);   // breadcrumb → back returns to the entity
+}
+
+/**
+ * Position nodes that just became visible, without touching anyone already on the map.
+ *
+ * A chunk belongs near the entities that appeared in it, so each newcomer lands at the centroid of its
+ * already-placed neighbours. Golden-angle jitter, because several chunks of one document share exactly one
+ * neighbour and would otherwise land on identical coordinates — the welding defect a layout review already
+ * caught once server-side. Newcomers with no placed neighbour keep their seed rather than being invented.
+ */
+function placeNewcomers(placedIds){
+  const GOLDEN = 2.39996323;
+  let k = 0;
+  for(const n of NODES){
+    if(placedIds.has(n.id)) continue;
+    let sx=0, sy=0, c=0;
+    for(const e of EDGES){
+      const other = e.a===n ? e.b : (e.b===n ? e.a : null);
+      if(other && placedIds.has(other.id)){ sx+=other.x; sy+=other.y; c++; }
+    }
+    if(!c) continue;                       // nothing to anchor to: leave the seed alone
+    const a = k*GOLDEN, r = 26 + 5*(k%7);
+    k++;
+    n.x = sx/c + Math.cos(a)*r;
+    n.y = sy/c + Math.sin(a)*r;
+    n.vx = 0; n.vy = 0;
+  }
+}
 
 function openNode(n, deep){
   selected=n; curEdge=null; panel.classList.add('open'); panel.classList.toggle('deep',!!deep); panel.classList.remove('edge');
@@ -551,7 +607,11 @@ function openNode(n, deep){
   pscroll.appendChild(ident);
 
   const md=n.meta||{}, descText=md.description||md.bio||n.text||'';
-  if(descText){ const d=el('div','desc'+(deep?'':' clamp'),descText); pscroll.appendChild(d);
+  // A CHUNK's description IS the source text. Clamping it to 88px hides the thing you opened the chunk to
+  // read, behind a link that looks like an optional extra. Entities keep the clamp (their descriptions are
+  // one summarising sentence and the panel has other work to do); provenance never gets it.
+  const isSourceText = n.group==='chunk' || n.group==='turn';
+  if(descText){ const d=el('div','desc'+(deep||isSourceText?'':' clamp')+(isSourceText?' verbatim':''),descText); pscroll.appendChild(d);
     // reveal only when the clamp actually clips (pixel-based, not char-count) — CJK/wide glyphs clip under 170 chars too.
     if(!deep) requestAnimationFrame(()=>{ if(d.scrollHeight>d.clientHeight+2){ const r=el('span','reveal','Show full description'); r.onclick=()=>{ d.classList.remove('clamp'); r.remove(); }; d.after(r); } }); }
 
