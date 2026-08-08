@@ -360,9 +360,12 @@ course, which is an argument for it independent of latency.
 ### Open questions
 
 - Does a partially-extracted graph render honestly, or does a chunk with no entities read as a bug?
-- Does `serve` run the worker in-process (simple, dies with the server) or is it a separate
-  `tessera extract <graph>` the user runs (explicit, resumable, composable)? The second is more in keeping
-  with the repo's bring-up-is-a-documented-sequence stance.
+- ~~In-process worker vs. explicit command?~~ **DECIDED (Brian, 2026-08-08): an explicit
+  `tessera extract <graph>`.** Resumable, composable, and in keeping with the repo's
+  bring-up-is-a-documented-sequence stance — a failed or expensive step stays visible rather than buried in a
+  server's lifetime. Consequences to design for: `serve` reports dirty count and tells the user to run it
+  rather than silently doing it; the drop response says "42 chunks queued" and means it; and `tessera report`
+  surfaces dirty chunks (which would already have shown the 2 unextracted chunks sitting in `graphs/big`).
 - Retry policy for a chunk that fails to parse repeatedly — today it silently stays dirty forever, which is
   exactly what those 2 chunks in `graphs/big` are doing.
 
