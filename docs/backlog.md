@@ -692,3 +692,71 @@ not at all.
 - **Promotion policy for SAME_AS** (how many independent grounded verdicts = durable): **DEFERRED**, per
   Brian.
 - **`known`-map consulting the view: OPEN** (see Open questions).
+
+---
+
+## Weak nodes should fade faster than strong ones on zoom-out (Brian, 2026-08-08)
+
+**The report, verbatim:** *"weak nodes should fade to transparent faster on zoom out than strong nodes
+(they hold unnecessary visual attention when zoomed out)."* Filed against a screenshot of `testgraph`
+served at 0.52x: 2055 nodes rendered as an almost uniform grey field, with the hubs indistinguishable
+from the singletons except by a size difference the fog has already eaten.
+
+### What the render path does today (verified, not assumed)
+
+- `radius(n)` (`viewer/template.html:303`) is `base + 10*sqrt(n.deg/maxDeg)`. **Size already carries
+  strength.** That is the encoding the zoomed-out view is failing to deliver, not one that is missing.
+- Node alpha is `ctx.globalAlpha = dim ? 0.18 : 1` (`:435`). **Alpha carries focus state and nothing
+  else** — not strength, not altitude. Every node not dimmed by a selection draws at full opacity at
+  every zoom level.
+- Every node also draws a radial-gradient halo at `rr*2.4` before its core (`:436-438`). At 0.52x with
+  2055 nodes those halos overlap into continuous fog. **The halo is probably the larger contributor to
+  the mush than the core alpha is**, because it is 2.4x the radius and it is additive across neighbours.
+  Whoever takes this should measure both before tuning either.
+- Edges already do exactly the thing being requested for nodes: `pa = edgeAlpha * (0.35 + 1.30*p)` where
+  `p` is the edge's percentile in the chosen prominence measure (`:420`). So the pattern to copy is in
+  the same function, twenty lines up.
+
+### The sub-decision this hides, and it is the real work
+
+**What is "strong"?** `GRAPH.prominence` is **edge-keyed, not node-keyed** — `scripts/export-viewer.ts:31`
+builds it from `store.edgeProminence(measure)`, and the viewer indexes it as `tbl[e.id]`. There is no
+node-level pagerank or betweenness in the bundle. So today the only per-node strength signal available at
+render time is `n.deg`, which is what `radius` and the label-tier budget already use.
+
+Two ways to go, and they are not equivalent:
+
+1. **Use `n.deg`.** Zero new plumbing, ships as a pure viewer change, consistent with radius so size and
+   opacity encode the same thing. Weakness: degree in this graph is partly an artifact of extraction
+   verbosity, which is exactly the noise KI-3 and the resolution view (B27) exist to fix. Fading by degree
+   would make the map look calmer without the map being any better.
+2. **Add node-level prominence to the bundle.** Honest, and it makes the edge budget's measure dropdown
+   meaningful for nodes too. Costs an export change plus whatever `prominencePass` does not already
+   compute per node. Check before scoping: the pass may already have node scores that are only ever
+   consumed to derive edge products.
+
+**Recommendation, weakly held:** ship (1) first because it is small and reversible and Brian can look at
+it tonight, but write it so the strength lookup is a single function, so (2) is a swap and not a rewrite.
+
+### Do not turn this into a cull
+
+Fading is not filtering. A node at 0.05 alpha is still there, still hit-testable, still findable by
+search, and comes back the moment you zoom in. If this lands as "drop nodes below a threshold at
+altitude" it becomes the edge budget's node twin, which is a different and larger feature (it changes
+what the map *contains* at a zoom level, not how loud it is) and it needs its own entry. The point here
+is attention, not truth.
+
+### Interaction with the deferred work
+
+- **Slice 4 (provenance in the layout)** changes geometry, and the 36.6 s `h`-toggle cliff is a
+  zoomed-out-with-everything-visible problem. Fading weak nodes does not fix the cliff — that is layout
+  cost, not draw cost — but the two will be judged by eye at the same altitudes. Sequence them so a
+  regression is attributable.
+- **B27 resolution view** collapses ~1714 entity nodes to ~1394 at read time. That removes a fifth of the
+  field on its own. If both land, tune the fade *after* the resolution view, or the constants get picked
+  against a node population that is about to change.
+
+**Disposition: QUEUED, viewer-only, no dependencies.** Small enough to do between the larger items, and
+it wants a real before/after screenshot at the same zoom rather than a test, because the acceptance
+criterion is "do the hubs read at 0.5x" and no assertion captures that. A test can still pin the pure
+function (strength → alpha at a given scale) once it exists.
