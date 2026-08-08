@@ -402,6 +402,23 @@ describe("a multi-file drop reports every outcome", () => {
     return new Function(`${src.slice(at, end + 2)}; return ${name};`)() as Function;
   };
 
+  it("only a FILE drag arms the ingest overlay — reordering a scene must not", () => {
+    // Dragging a scene row to reorder it lit the full-screen "drop a .md or .txt" overlay, because the
+    // ingest handlers are on WINDOW and every drag reaches them. The gesture was internal and the UI
+    // claimed an ingest was about to happen. Tested as a positive predicate rather than by suppressing
+    // each internal drag, or the next draggable thing added to this page reintroduces it.
+    const isFileDrag = fnFromTemplate("isFileDrag") as (e: unknown) => boolean;
+    expect(isFileDrag({ dataTransfer: { types: ["Files"] } })).toBe(true);
+    expect(isFileDrag({ dataTransfer: { types: ["Files", "application/x-moz-file"] } })).toBe(true);
+    // What a scene reorder actually carries.
+    expect(isFileDrag({ dataTransfer: { types: ["text/plain"] } })).toBe(false);
+    expect(isFileDrag({ dataTransfer: { types: [] } })).toBe(false);
+    // dragleave/dragend can arrive with nothing attached; must not throw.
+    expect(isFileDrag({ dataTransfer: null })).toBe(false);
+    expect(isFileDrag({})).toBe(false);
+    expect(isFileDrag(undefined)).toBe(false);
+  });
+
   it("partitions a dropped FileList into supported and rejected, keeping ALL of both", () => {
     const partitionDrop = fnFromTemplate("partitionDrop") as (f: Array<{ name: string }>) => { supported: Array<{ name: string }>; rejected: string[] };
     const r = partitionDrop([{ name: "a.md" }, { name: "photo.png" }, { name: "b.txt" }, { name: "c.pdf" }]);

@@ -861,10 +861,18 @@ function dropStatus(msg, sticky){
 if(SERVED){
   const zone=dropUI();
   let depth=0;
-  addEventListener('dragenter', e=>{ e.preventDefault(); if(++depth===1){ zone.textContent='drop a .md or .txt to add it to this map'; zone.style.display='flex'; } });
-  addEventListener('dragleave', e=>{ e.preventDefault(); if(--depth<=0){ depth=0; zone.style.display='none'; } });
-  addEventListener('dragover', e=>e.preventDefault());
+  // These listeners are on WINDOW, so every drag reaches them — including dragging a scene row to reorder
+  // it, which lit the full-screen "drop a .md or .txt" overlay over the map. The gesture was internal and
+  // the UI claimed it was about to ingest a file.
+  //
+  // Test for what a file drag POSITIVELY is rather than trying to suppress each internal drag: a file drag
+  // carries "Files" in dataTransfer.types, and a scene reorder never will. Suppressing case by case would
+  // mean every future draggable thing in this page reintroduces the same bug.
+  addEventListener('dragenter', e=>{ if(!isFileDrag(e)) return; e.preventDefault(); if(++depth===1){ zone.textContent='drop a .md or .txt to add it to this map'; zone.style.display='flex'; } });
+  addEventListener('dragleave', e=>{ if(!isFileDrag(e)) return; e.preventDefault(); if(--depth<=0){ depth=0; zone.style.display='none'; } });
+  addEventListener('dragover', e=>{ if(!isFileDrag(e)) return; e.preventDefault(); });
   addEventListener('drop', async e=>{
+    if(!isFileDrag(e)) return;   // a scene reorder is not an ingest
     e.preventDefault(); depth=0; zone.style.display='none';
     const all=(e.dataTransfer && e.dataTransfer.files) ? Array.from(e.dataTransfer.files) : [];
     if(!all.length) return;
@@ -914,6 +922,16 @@ if(SERVED){
 // Split a dropped FileList into what we can ingest and what we cannot. Extracted so a test can drive it
 // without a DOM: the bug this replaces was `files[0]` — dropping three files ingested one and said nothing
 // about the other two, which is silent data loss in a system whose whole point is completeness.
+// Does this drag carry FILES? Everything else on this page that can be dragged is internal (a scene row
+// being reordered), and the window-level ingest handlers must ignore those. `types` is array-LIKE, not an
+// Array, so index rather than .includes.
+function isFileDrag(e){
+  const t = e && e.dataTransfer && e.dataTransfer.types;
+  if(!t) return false;
+  for(let i=0;i<t.length;i++) if(t[i]==='Files') return true;
+  return false;
+}
+
 function partitionDrop(files){
   const ok=f=>/\.(md|txt)$/i.test(f.name);
   return { supported: files.filter(ok), rejected: files.filter(f=>!ok(f)).map(f=>f.name) };
