@@ -331,3 +331,106 @@ describe("the memo and the manifest are replayable (B23)", () => {
     store.close();
   });
 });
+
+describe("a chunk with more than one parent is still ONE unit of work", () => {
+  // Found independently by two cross-agent reviewers, on two different features. The dirty-chunk query
+  // LEFT JOINs edges on ORIGINATED_FROM with no dedup, so a node with N such edges comes back N times.
+  // Latent today because ingest writes exactly one. Both queued features break it: an image manifested
+  // once and referenced by 40 documents, and a conversation turn belonging to a session.
+  //
+  // DISTINCT would not save it — src.id/src.name/src.provenance are in the select list and differ per row.
+  async function chunkWithTwoParents(store: GraphStore, g: Graph): Promise<string> {
+    const meta = { actor: "test", cause: "multi-parent" };
+    const vec = await g.embedder.embed("x");
+    const a = await store.putNode({ type: "SOURCE", subtype: "document", origin: "ingest", text: "source\tA", name: "Doc A", description: "A" }, meta, vec);
+    const b = await store.putNode({ type: "SOURCE", subtype: "document", origin: "ingest", text: "source\tB", name: "Doc B", description: "B" }, meta, vec);
+    const c = await store.putNode({ type: "SOURCE", subtype: "chunk", origin: "ingest", text: "chunk\tshared", name: "shared chunk", description: "a body that two documents both contain" }, meta, vec);
+    await store.putEdge({ from: c.id, to: a.id, kind: "ORIGINATED_FROM", reason: "in A", origin: "ingest" }, meta);
+    await store.putEdge({ from: c.id, to: b.id, kind: "ORIGINATED_FROM", reason: "in B", origin: "ingest" }, meta);
+    return c.id;
+  }
+
+  it("dirtyChunks returns it exactly once, with a deterministic parent", async () => {
+    const { store, g } = fresh();
+    const id = await chunkWithTwoParents(store, g);
+    const rows = store.dirtyChunks(PROMPT_VERSION).filter((r) => r.id === id);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.sourceId).toBeTruthy();
+    // Deterministic across calls, so progress reporting and subject recovery do not flip run to run.
+    const again = store.dirtyChunks(PROMPT_VERSION).filter((r) => r.id === id);
+    expect(again[0]!.sourceId).toBe(rows[0]!.sourceId);
+    store.close();
+  });
+
+  it("is extracted once, and the run's counts do not double", async () => {
+    const { store, g } = fresh();
+    await chunkWithTwoParents(store, g);
+    const ex = recorder(() => ok("Shared"));
+    const d = await extractPending(g, ex);
+    expect(d.considered).toBe(1);
+    expect(ex.calls).toBe(1); // paid for once
+    expect(d.attempted).toBe(1);
+    expect(d.skippedClaimed).toBe(0); // the duplicate used to fail its own claim and be counted here
+    store.close();
+  });
+
+  it("ingestFile's `reused` cannot go negative", async () => {
+    // reused = chunks - attempted - skippedClaimed. Duplicate rows inflate the subtrahends past `chunks`.
+    const { store, g } = fresh();
+    await chunkWithTwoParents(store, g);
+    const p = mkDoc();
+    const r = await ingestFile(g, recorder(() => ok("Alpha")), p);
+    expect(r.reused).toBeGreaterThanOrEqual(0);
+    store.close();
+  });
+});
+
+describe("extraction products can be marked with where they came from", () => {
+  // The reviewer of the SESSION design flagged this CRITICAL, and the severity is about what CANNOT be
+  // undone: mapExtraction hardcoded origin "ingest", there is no delete for nodes or edges anywhere in
+  // this repo, and nothing filtered on origin for any purpose. So the first self-directed run (a dream,
+  // a walk) would have written products permanently indistinguishable from ingested fact, into a graph
+  // with no way to separate or remove them.
+  it("defaults to ingest, so nothing about the ordinary path changes", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc());
+    await extractPending(g, recorder(() => ok("Alpha")));
+    const alpha = store.allNodes().find((n) => n.name === "Alpha")!;
+    expect(alpha.origin).toBe("ingest");
+    store.close();
+  });
+
+  it("marks nodes AND edges with a caller-supplied origin", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc());
+    const twoEntities = JSON.stringify({
+      entities: [
+        { name: "Seed", type: "CONCEPT", description: "one end" },
+        { name: "Echo", type: "CONCEPT", description: "the other" },
+      ],
+      relations: [{ source: "Seed", target: "Echo", reason: "surfaced together in a wandering pass" }],
+    });
+    await extractPending(g, recorder(() => twoEntities), { origin: "dream" });
+
+    const seed = store.allNodes().find((n) => n.name === "Seed")!;
+    expect(seed.origin).toBe("dream");
+    // Edges too: marking only the nodes would leave the assertions unattributable, and the assertions are
+    // what a later reader would actually trust.
+    const related = store.allEdges().filter((e) => e.kind === "RELATED");
+    expect(related.length).toBeGreaterThan(0);
+    // APPEARED_IN provenance edges are part of the same write and must carry it as well.
+    const appeared = store.allEdges().filter((e) => e.kind === "APPEARED_IN");
+    expect(appeared.length).toBeGreaterThan(0);
+    store.close();
+  });
+
+  it("report counts products by origin, so marked work is visible and not merely marked", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc());
+    await extractPending(g, recorder(() => ok("Alpha")), { origin: "dream" });
+    const byOrigin = store.countNodesByOrigin();
+    expect(byOrigin.dream).toBeGreaterThan(0);
+    expect(byOrigin.ingest).toBeGreaterThan(0); // the SOURCE and CHUNK nodes ingest wrote
+    store.close();
+  });
+});

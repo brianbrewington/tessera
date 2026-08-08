@@ -6,7 +6,7 @@
 // go through GraphStore.
 import type { GraphStore } from "../store/graphStore.js";
 import type { Embedder } from "../embedder.js";
-import type { Meta } from "../schema.js";
+import type { Meta, Origin } from "../schema.js";
 import type { Extraction } from "../extract/extractor.js";
 import { toStoreType } from "../extract/typemap.js";
 import { entityIdentity, canonical } from "../extract/identity.js";
@@ -20,6 +20,11 @@ export async function mapExtraction(
   ex: Extraction,
   known: Map<string, string>, // entity name (normalized) -> node id, across a doc's chunks
   chunk: { id: string; label: string },
+  // WHERE these products came from. Defaults to "ingest" so the ordinary path is unchanged, but it must be
+  // settable: a self-directed run (a dream, a walk) writing products marked "ingest" would be permanently
+  // indistinguishable from extracted fact, and this store has no delete for nodes or edges. Marking is the
+  // only isolation available, so it cannot be hardcoded.
+  origin: Origin = "ingest",
 ): Promise<{ entityCount: number; edgeCount: number }> {
   let entityCount = 0;
   let edgeCount = 0;
@@ -35,7 +40,7 @@ export async function mapExtraction(
     // content never collapses distinct ids (place\tjava vs concept\tjava; source-qualified people). A name that
     // yields two TYPED nodes in one chunk is a homograph — tracked as multiple ids so relations don't miswire.
     const put = await store.putNode(
-      { type, subtype, origin: "ingest", text: entityIdentity(e.type, e.name), name: e.name.trim(), description: e.description },
+      { type, subtype, origin, text: entityIdentity(e.type, e.name), name: e.name.trim(), description: e.description },
       meta, vec,
     );
     if (!put.reinforced) entityCount++;
@@ -43,7 +48,7 @@ export async function mapExtraction(
     if (!ids.includes(put.id)) ids.push(put.id); // a re-mention of the SAME node isn't a new candidate
     here.set(key, ids);
     await store.putEdge(
-      { from: put.id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin: "ingest" },
+      { from: put.id, to: chunk.id, kind: "APPEARED_IN", reason: `${e.name.trim()} appears in ${chunk.label}`, origin },
       meta, undefined, chunk.id,
     );
   }
@@ -67,7 +72,7 @@ export async function mapExtraction(
     const b = resolve(r.target);
     if (!a || !b || a === b) continue; // dangling or ambiguous endpoint -> drop the edge, don't guess
     const [from, to] = canonical(a, b); // undirected RELATED — canonical endpoint order
-    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin: "ingest" }, meta, undefined, chunk.id);
+    const pe = await store.putEdge({ from, to, kind: "RELATED", reason: r.reason.trim(), origin }, meta, undefined, chunk.id);
     if (pe.created) edgeCount++; // count real new edges, not reinforcements (honest re-ingest reporting)
   }
 

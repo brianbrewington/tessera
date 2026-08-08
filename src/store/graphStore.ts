@@ -788,6 +788,31 @@ export class GraphStore {
   countEdges(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM edges").get() as { n: number }).n;
   }
+
+  /**
+   * Node counts per origin (`ingest`, `connector`, `dream`, `user`).
+   *
+   * Marking a product's origin is worth nothing if nothing ever reads it. Before this, `origin` was written
+   * on every row and consulted by no query for any purpose, so "these came from a dream" was a value in a
+   * column rather than something anyone could see. That matters more than usual here: this store has no
+   * delete for nodes or edges, so if a self-directed run puts something in a graph, marking is the ONLY
+   * separation available and being able to count it is the difference between isolation and a claim of it.
+   */
+  countNodesByOrigin(): Record<string, number> {
+    const rows = this.db.prepare("SELECT origin, count(*) AS n FROM nodes GROUP BY origin").all() as Array<{ origin: string; n: number }>;
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.origin] = r.n;
+    return out;
+  }
+
+  countEdgesByOrigin(): Record<string, number> {
+    const rows = this.db
+      .prepare("SELECT origin, count(*) AS n FROM edge_assertions GROUP BY origin")
+      .all() as Array<{ origin: string; n: number }>;
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.origin] = r.n;
+    return out;
+  }
   // ---- Chunk extraction memo + dirty-chunk queue (see ddl `extracted_chunks`, `chunk_extraction_state`).
   //
   // `markExtracted` is called only AFTER a chunk's extraction fully completed, so the memo is a true
@@ -912,8 +937,17 @@ export class GraphStore {
          FROM nodes n
          LEFT JOIN extracted_chunks e ON e.chunk_id = n.id
          LEFT JOIN chunk_extraction_state s ON s.chunk_id = n.id
-         LEFT JOIN edges eo ON eo.from_id = n.id AND eo.kind = 'ORIGINATED_FROM'
-         LEFT JOIN nodes src ON src.id = eo.to_id
+         -- ONE row per chunk, always. Joining the edge directly returned a row PER PARENT, and a chunk can
+         -- have several: an image manifested once and referenced by many documents, a conversation turn
+         -- belonging to a session. Duplicates are not cosmetic here — the extra rows inflate "considered",
+         -- consume the LIMIT, fail their own claim and land in "skippedClaimed", and can drive ingestFile's
+         -- "reused" negative. DISTINCT cannot fix it: src.id/name/provenance are selected and differ per row.
+         -- Lowest rowid = first parent written, so subject recovery and progress reporting stay stable.
+         LEFT JOIN nodes src ON src.id = (
+           SELECT eo.to_id FROM edges eo
+           WHERE eo.from_id = n.id AND eo.kind = 'ORIGINATED_FROM'
+           ORDER BY eo.rowid LIMIT 1
+         )
          WHERE n.subtype = 'chunk'
            AND (? = 1 OR e.chunk_id IS NULL OR e.prompt_version IS NOT ?)
            AND (? = 1 OR ? = 1 OR e.chunk_id IS NULL)

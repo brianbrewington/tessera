@@ -52,6 +52,11 @@ export interface Scorecard {
   // nothing anywhere said so — the map claimed to represent twelve documents while quietly missing two
   // slices of two lives. A scorecard that cannot report what it is missing is not a scorecard.
   dirty: { chunks: number; dirty: number; never: number; stale: number; failing: number };
+  // Where the graph's contents came from. This store has no delete, so for anything written by a
+  // self-directed run (a dream, a walk) the origin mark is the ONLY separation there is, and a mark
+  // nothing reports is not separation.
+  nodesByOrigin: Record<string, number>;
+  assertionsByOrigin: Record<string, number>;
   failingChunks: { name: string; attempts: number; lastError: string | null }[];
 }
 
@@ -147,6 +152,8 @@ export function report(dbPath: string): Scorecard {
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
       mergedPersons,
       dirty: store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS),
+      nodesByOrigin: store.countNodesByOrigin(),
+      assertionsByOrigin: store.countEdgesByOrigin(),
       failingChunks: store
         .dirtyChunks(PROMPT_VERSION)
         .filter((c) => c.attempts >= FAILING_ATTEMPTS)
@@ -168,6 +175,17 @@ export function printScorecard(sc: Scorecard): void {
       p(`    ! ${f.name} — ${f.attempts} attempt(s): ${(f.lastError ?? "unknown").slice(0, 80)}`);
     }
     if (sc.failingChunks.length) p(`    (${sc.failingChunks.length} failing — retry with: tessera extract <graph> --retry-failed)`);
+  }
+  {
+    // Only worth printing when something other than ingest is present: on an ordinary graph this is one
+    // line saying "ingest", which is noise.
+    const origins = Object.keys(sc.nodesByOrigin).filter((o) => o !== "ingest");
+    if (origins.length) {
+      const fmt = (m: Record<string, number>): string =>
+        Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(", ");
+      p(`origins: nodes [${fmt(sc.nodesByOrigin)}]  assertions [${fmt(sc.assertionsByOrigin)}]` +
+        `  — non-ingest content cannot be deleted, only distinguished`);
+    }
   }
   p(`entities/doc: ${sc.entitiesPerDoc}  (rubric target ~5-15 for a persona)   appearances/chunk: ${sc.appearancesPerChunk}`);
   p("");

@@ -12,7 +12,7 @@
 import type { Graph } from "../graph.js";
 import type { Extractor } from "../extract/extractor.js";
 import { PROMPT_VERSION } from "../extract/extractor.js";
-import type { Meta } from "../schema.js";
+import type { Meta, Origin } from "../schema.js";
 import type { DirtyChunk } from "../store/graphStore.js";
 import { mapExtraction } from "./mapper.js";
 import { subjectFromText } from "./adapters.js";
@@ -51,6 +51,14 @@ export interface ExtractPendingOptions {
   onChunk?: (done: number, total: number) => void;
   /** Injectable clock so claim expiry is testable without waiting fifteen minutes. */
   now?: () => number;
+  /**
+   * Where these products came from. Defaults to "ingest".
+   *
+   * A self-directed run must set it. There is no delete for nodes or edges in this store and no
+   * provenance-scoped undo, so an unmarked dream product is indistinguishable from extracted fact
+   * forever. Marking is the whole isolation story until a delete exists.
+   */
+  origin?: Origin;
 }
 
 export interface ExtractPendingResult {
@@ -147,7 +155,7 @@ export async function extractPending(
           out.skippedClaimed++;
           continue;
         }
-        const meta: Meta = { actor: "extract", cause: `extract ${label}` };
+        const meta: Meta = { actor: opts.origin && opts.origin !== "ingest" ? opts.origin : "extract", cause: `extract ${label}` };
         const sourceKey = chunk.sourceId ?? chunk.id;
         const known = knownBySource.get(sourceKey) ?? new Map<string, string>();
         knownBySource.set(sourceKey, known);
@@ -163,7 +171,7 @@ export async function extractPending(
             if (extraction.entities.length === 0 && extraction.relations.length === 0) out.emptyChunks++;
             const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, known, {
               id: chunk.id, label,
-            });
+            }, opts.origin ?? "ingest");
             out.entities += r.entityCount;
             out.edges += r.edgeCount;
             // Marked only after the mapper finished, so a crash mid-map leaves the chunk dirty and it
