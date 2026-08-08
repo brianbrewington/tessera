@@ -31,6 +31,8 @@
   #pill .gdirty{ display:none; font-family:var(--mono); font-size:10px; letter-spacing:.04em; padding:2px 8px;
     border-radius:99px; color:#f0c674; background:rgba(240,198,116,.13); border:1px solid rgba(240,198,116,.42); cursor:help; }
   #pill .gdirty.on{ display:inline-block; }
+  /* active drain reads as motion, settled debt reads as a note */
+  #pill .gdirty.busy{ color:#8fd6a8; background:rgba(143,214,168,.13); border-color:rgba(143,214,168,.45); }
 
   #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
     border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
@@ -826,8 +828,12 @@ const SERVED = location.protocol === 'http:' || location.protocol === 'https:';
 function setDirtyBadge(b){
   const el=$('gdirty'); if(!el) return;
   const d = (b && typeof b === 'object') ? b : { dirty: b||0, never: b||0, stale: 0, failing: 0 };
-  if(!d.dirty){ el.classList.remove('on'); return; }
-  el.textContent='+'+d.dirty+' awaiting extraction';
+  if(!d.dirty && !d.draining){ el.classList.remove('on'); el.classList.remove('busy'); return; }
+  // "extracting" and "awaiting" are different facts. A drop kicks a background drain, and a badge that
+  // says only "awaiting" while the GPU is busy reads as nothing happening — which is exactly what it read
+  // as the first time somebody dropped a file and had to ask whether anything was going on.
+  el.classList.toggle('busy', !!d.draining);
+  el.textContent = d.draining ? 'extracting… '+d.dirty+' left' : '+'+d.dirty+' awaiting extraction';
   const cmd='tessera extract '+(GRAPH.name||'<graph>');
   const lines=[d.dirty+' chunk(s) are written but not yet extracted, so their entities are not on this map yet.'];
   const auto = SERVED ? Math.max(0, d.never - d.failing) : 0;
@@ -839,6 +845,23 @@ function setDirtyBadge(b){
   el.classList.add('on');
 }
 setDirtyBadge(GRAPH.dirty||GRAPH.dirtyChunks||0);
+
+// The bundle's count is only true at page-load. A drop reloads the page, which destroys the SSE stream, so
+// without this the badge freezes at whatever was owed when the page rendered and a running drain is
+// invisible. `GET /status` is the queryable fact; this is the thing that reads it.
+let statusTimer=0;
+function pollStatus(){
+  if(!SERVED) return;
+  clearTimeout(statusTimer);
+  fetch('/status').then(r=>r.ok?r.json():null).then(st=>{
+    if(!st) return;
+    setDirtyBadge(st);
+    // Poll only while work is ACTUALLY moving. Settled debt (a poison chunk nothing will retry) is a stable
+    // fact already on the badge, and polling it forever would be a heartbeat that means nothing.
+    if(st.draining) statusTimer=setTimeout(pollStatus, 4000);
+  }).catch(()=>{});
+}
+if(SERVED) pollStatus();
 
 loadScenes(); renderScenes(); renderEdgeCtl();
 function dropUI(){
@@ -914,6 +937,7 @@ if(SERVED){
       // v1 reloads rather than delta-patching the open map (design §5, deferred). Layout is durable and
       // additive, so the reload keeps every position you were looking at. Reload once for the whole drop.
       if(added>0) setTimeout(()=>location.reload(), 1400);
+      else pollStatus();   // nothing new to render, but a drain may still be running
       else es.close();
     }catch(err){ es.close(); dropStatus('ingest failed: '+err); }
   });

@@ -402,6 +402,40 @@ describe("a multi-file drop reports every outcome", () => {
     return new Function(`${src.slice(at, end + 2)}; return ${name};`)() as Function;
   };
 
+  it("the badge distinguishes an ACTIVE drain from settled debt", () => {
+    // Brian dropped a file and had to ask whether anything was happening. It was: the drain was running and
+    // 47 chunks deep. The badge could not say so, because it is fed from the page bundle at load and the
+    // drop reloads the page, destroying the SSE stream. So a live drain looked identical to nothing.
+    const src = tplSrc();
+    const at = src.indexOf("function setDirtyBadge(");
+    const body = src.slice(at, src.indexOf("\n}", at) + 2);
+    const cls = new Set<string>();
+    let text = "";
+    const el = {
+      classList: { add: (c: string) => cls.add(c), remove: (c: string) => cls.delete(c), toggle: (c: string, v: boolean) => (v ? cls.add(c) : cls.delete(c)) },
+      set textContent(v: string) { text = v; },
+      set title(_v: string) { /* unused here */ },
+    };
+    const setDirtyBadge = new Function("$", "SERVED", "GRAPH", `${body}; return setDirtyBadge;`)(
+      () => el, true, { name: "g" },
+    ) as (b: unknown) => void;
+
+    setDirtyBadge({ chunks: 318, dirty: 39, never: 39, stale: 0, failing: 0, draining: true });
+    expect(text).toMatch(/extracting/);
+    expect(text).toContain("39");
+    expect(cls.has("busy")).toBe(true);
+
+    cls.clear();
+    setDirtyBadge({ chunks: 318, dirty: 39, never: 39, stale: 0, failing: 0, draining: false });
+    expect(text).toMatch(/awaiting/); // owed, but nothing is working on it
+    expect(cls.has("busy")).toBe(false);
+    expect(cls.has("on")).toBe(true);
+
+    cls.clear();
+    setDirtyBadge({ chunks: 318, dirty: 0, never: 0, stale: 0, failing: 0, draining: false });
+    expect(cls.has("on")).toBe(false); // nothing owed, nothing running: the badge goes away
+  });
+
   it("only a FILE drag arms the ingest overlay — reordering a scene must not", () => {
     // Dragging a scene row to reorder it lit the full-screen "drop a .md or .txt" overlay, because the
     // ingest handlers are on WINDOW and every drag reaches them. The gesture was internal and the UI
