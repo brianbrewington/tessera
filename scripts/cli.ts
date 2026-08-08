@@ -14,7 +14,7 @@ import { ingestChunks } from "../src/ingest/ingest.js";
 import { extractPending, FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
 import { PROMPT_VERSION } from "../src/extract/extractor.js";
 import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
-import { docContentHash } from "../src/extract/identity.js";
+import { docContentHash, sourceIdentity } from "../src/extract/identity.js";
 import { exportViewer } from "./export-viewer.js";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
@@ -76,13 +76,21 @@ async function main(): Promise<void> {
           for (const f of docs) {
             let cls: string;
             try {
-              const prior = g?.store.getIngestedSource(docContentHash(readDoc(f).text)) ?? null;
-              cls = reextract || !prior ? "new" : prior.status === "complete" ? "skip" : "retry";
+              const hash = docContentHash(readDoc(f).text);
+              const prior = g?.store.getIngestedSource(hash) ?? null;
+              if (reextract || !prior) cls = "new";
+              else {
+                // Chunks exist, but do they OWE extraction? Since the split, `status` only means "chunks
+                // written", so keying the plan on it alone would report a document as unchanged while every
+                // one of its chunks is still waiting for the extractor — a dry run that hides the work.
+                const owed = g ? g.store.dirtyChunks(PROMPT_VERSION, { ids: g.store.chunkIdsForSource(sourceIdentity(hash)) }).length : 0;
+                cls = owed > 0 ? "owed" : "skip";
+              }
             } catch { cls = "ERR"; err++; }
-            if (cls === "new") nw++; else if (cls === "skip") sk++; else if (cls === "retry") rt++;
+            if (cls === "new") nw++; else if (cls === "skip") sk++; else if (cls === "owed") rt++;
             console.log(`  ${cls.padEnd(5)} ${f}`);
           }
-          console.log(`\nplan: ${nw} new, ${rt} retry (prior partial), ${sk} unchanged, ${err} unreadable, ${badInputs} bad input(s) — ${docs.length} file(s). (dry-run — no writes)`);
+          console.log(`\nplan: ${nw} new, ${rt} already chunked but awaiting extraction, ${sk} unchanged, ${err} unreadable, ${badInputs} bad input(s) — ${docs.length} file(s). (dry-run — no writes)`);
         } finally { g?.close(); }
         if (badInputs > 0) process.exitCode = 1;
         break;
