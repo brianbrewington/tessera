@@ -118,6 +118,30 @@ very different chunk-size distribution from prose documents.
 
 ---
 
+## Raised 2026-08-08, needs a plan before writing (Brian)
+
+Both come from the same session: he ingested into one graph, served another, and had no surface that would
+have told him. `graph list` now reports sizes and the empty case is loud everywhere, which is the floor, not
+the answer.
+
+**12. An admin page — "see all the tesserae".** DEFERRED, needs a plan. Brian: *"In prior iterations of
+mindmaps I've benefitted from an 'admin page' where I could see all the various tesserae."* Open questions a
+plan has to answer: does it live in `serve` (which today serves exactly one graph, so this changes what
+serve IS), or is it a separate surface? Is it read-only, or does it switch, rename, merge and delete — which
+is backlog item "Named-graph management", already recorded and unbuilt? What does it show per graph beyond
+size: last ingest, extraction debt, origins, media? Note the design constraint: `serve` binds one graph at
+startup and the store is opened per graph, so multi-graph is not a view change.
+
+**13. A REPL.** DEFERRED, needs a plan. Brian: *"as well as from a REPL."* Open questions: what is the unit
+of interaction — queries against one graph, or a session that can switch? What does it return, given the
+store's reads are typed value objects and the interesting questions (paths, common, affinity, provenance)
+already exist as commands? Does it write, and if so what happens to the single-writer discipline and the
+advisory lock while a human sits at a prompt with the graph open?
+
+Both are worth doing and neither is worth improvising. Plan first, per the standing rule.
+
+---
+
 ## Conditions that reorder this list
 
 - **We want to claim something about what the graph shows** → item 7 moves to the top.
