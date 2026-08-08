@@ -937,8 +937,8 @@ if(SERVED){
       // v1 reloads rather than delta-patching the open map (design §5, deferred). Layout is durable and
       // additive, so the reload keeps every position you were looking at. Reload once for the whole drop.
       if(added>0) setTimeout(()=>location.reload(), 1400);
-      else pollStatus();   // nothing new to render, but a drain may still be running
-      else es.close();
+      // Nothing new to render, so no reload — but a drain may still be running, so start watching it.
+      else { es.close(); pollStatus(); }
     }catch(err){ es.close(); dropStatus('ingest failed: '+err); }
   });
 }
