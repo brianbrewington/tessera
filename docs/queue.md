@@ -10,6 +10,40 @@ Last reordered: 2026-08-08.
 
 ---
 
+## Picking this up cold
+
+Short, because git carries the rest: the commit messages on this branch are written to be read.
+
+**Branch.** `viewer/durable-state`, pushed, **46 commits ahead of `main` and unmerged.** Tests green
+(299 passing, 1 skipped). `npm test`, `npm run typecheck`, and `./tessera` is a real command now.
+
+**Shipped in the last stretch**, newest first: media manifest · the parts seam · a work queue · the SESSION
+round folded into the backlog · the `origin` thread and the multi-parent join fix · `./tessera` · the
+serve/viewer half · the ingest split. `git log --oneline main..HEAD` is the honest index.
+
+**Unactioned, and easy to lose:**
+- `graphs/big` still has **2 chunks never extracted**. The fix exists and was proven on a *copy*: one healed,
+  one failed to parse again. The real graph has not been run through `./tessera extract big`.
+- `docs/reviews/session-object-model-round1-dream.md` is read and dispositioned in `backlog.md`, but two of
+  its findings are unbuilt on purpose: the provenance-scoped delete (item 5) and `HEBBIAN_ASSOC`'s first
+  writer (item 6).
+- No `CLAUDE.md` in this repo. A cold session gets the global teammate stack and the project memories, and
+  then has to find `docs/queue.md` and `docs/backlog.md` on its own. Worth deciding whether that is a gap.
+
+**Three things not to re-litigate**, each decided with reasons recorded:
+1. **Do not write a new SESSION plan.** `plan-v3.md` §4 already specifies it; the delta lives in
+   `backlog.md` under "Object model depth". A second design document would be copy-fork-edit.
+2. **Do not point a generator (dream, walk) at a graph anyone cares about.** Origin marking exists; a
+   provenance-scoped delete does not, and there is no delete for nodes or edges anywhere in the repo.
+3. **Do not caption images.** Manifesting is deliberate, not a stub. Read the media entry in `backlog.md`
+   before adding a vision model.
+
+**The habit this codebase rewards**, learned the expensive way and worth inheriting: write the failing test
+first and watch it fail; verify a reviewer's claims about the code before acting on them, and your own before
+publishing them; and treat a declared-but-unwritten schema seam as a debt, not as progress.
+
+---
+
 ## The order, and the tension in it
 
 Two defensible orderings, and they disagree. Recorded rather than resolved silently.
@@ -33,9 +67,9 @@ than what it can hold, KI-3 moves to the top.
 
 | # | Item | Status | Why here |
 |---|---|---|---|
-| 1 | **Parts seam** — `readDoc` yields a primary document plus enumerable parts | **NEXT** | Critical path. Unblocks 2 and 3. Small. |
-| 2 | **Media manifest** — byte-hash images, link to parents, no VLM, no extraction | NEXT | Rides the seam. Answers "images get lost" at zero LLM cost, and measures the corpus before anyone decides about captioning. |
-| 3 | **Session-log ingest** — Claude Code JSONL, prose only | NEXT | Highest yield per unit of work. **Binding constraint: turns must be preserved with speaker and timestamp**, or attribution and the SESSION unification are foreclosed. |
+| 1 | **Parts seam** — `readDoc` yields a primary document plus enumerable parts | **DONE** 2026-08-08 | `{doc, parts, skipped}`. Markdown-referenced local images are the first producer. Only the part kinds with a producer are declared. |
+| 2 | **Media manifest** — byte-hash images, link to parents, no VLM, no extraction | **DONE** 2026-08-08 | Bytes in `media_blobs`, identity = sha256 of bytes, one node per distinct image with an edge to every parent. Never a dirty chunk, never captioned. |
+| 3 | **Session-log ingest** — Claude Code JSONL, prose only | **NEXT (start here)** | Highest yield per unit of work. **Binding constraint: turns must be preserved with speaker and timestamp**, or attribution and the SESSION unification are foreclosed. |
 | 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | NEXT, after 1-3 | *"not particularly snappy, in my opinion."* Detail below. |
 | 5 | **Provenance-scoped delete** | BLOCKED-BY-DESIGN | Gates pointing any generator at a real graph. Origin marking exists; removal does not. Until it does, first dream ingest goes at a throwaway graph. |
 | 6 | **`HEBBIAN_ASSOC` first writer** | DEFERRED | The one edge a dream exists to produce. Its acceptance test, when the dream path is built. |
