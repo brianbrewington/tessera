@@ -14,10 +14,16 @@ Last reordered: 2026-08-08.
 
 Short, because git carries the rest: the commit messages on this branch are written to be read.
 
-**Branch.** `viewer/durable-state`, pushed, **50 commits ahead of `main` and unmerged.** Tests green
-(309 passing, 1 skipped). `npm test`, `npm run typecheck`, and `./tessera` is a real command now.
+**Branch.** `viewer/durable-state`, pushed, **57 commits ahead of `main` and unmerged.** Tests green
+(316 passing, 1 skipped). `npm test`, `npm run typecheck`, and `./tessera` is a real command now.
 
-**Shipped in the last stretch**, newest first: session-log ingest · media manifest · the parts seam · a work queue · the SESSION
+**FIRST THING NEXT SESSION (Brian, 2026-08-08): a cross-agent review is overdue.** Run `/cursor-review` with
+**Grok**, then **Composer** (Codex hit its monthly limit on 2026-08-08), over `git diff main...HEAD`. That
+diff is now large and carries a full day of work that has had only two review rounds, both early in it.
+Apply the fixes, then stage, commit and push. Only after that pick up the queue below.
+
+**Shipped in the last stretch**, newest first: the dedup plan + experiment protocol · the appears-in layout
+fix · session-log ingest · media manifest · the parts seam · a work queue · the SESSION
 round folded into the backlog · the `origin` thread and the multi-parent join fix · `./tessera` · the
 serve/viewer half · the ingest split. `git log --oneline main..HEAD` is the honest index.
 
