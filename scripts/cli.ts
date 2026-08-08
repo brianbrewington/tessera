@@ -12,7 +12,7 @@ import { OllamaChat } from "../src/llm.js";
 import { LlmExtractor } from "../src/extract/extractor.js";
 import { ingestChunks } from "../src/ingest/ingest.js";
 import { ingestSession } from "../src/ingest/ingest-session.js";
-import { extractPending, FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
+import { extractPending, FAILING_ATTEMPTS, CLAIM_TTL_MS } from "../src/ingest/extract-pending.js";
 import { PROMPT_VERSION } from "../src/extract/extractor.js";
 import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
 import { docContentHash, sourceIdentity } from "../src/extract/identity.js";
@@ -38,7 +38,16 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "graph": {
       if (args[0] === "create") { Graph.open(args[1] ?? usage()).close(); console.log(`created graph '${args[1]}'`); }
-      else if (args[0] === "list") { const gs = Graph.list(); console.log(gs.length ? gs.map((g) => g.name).join("\n") : "(no graphs yet)"); }
+      else if (args[0] === "list") {
+        const gs = Graph.list();
+        if (!gs.length) { console.log("(no graphs yet)"); break; }
+        const w = Math.max(...gs.map((g) => g.name.length), 5);
+        console.log(`${"graph".padEnd(w)}  ${"nodes".padStart(7)}  ${"edges".padStart(7)}   awaiting extraction`);
+        for (const g of gs) {
+          const owed = g.owed ? `${g.owed}` : g.nodes ? "-" : "(empty)";
+          console.log(`${g.name.padEnd(w)}  ${String(g.nodes).padStart(7)}  ${String(g.edges).padStart(7)}   ${owed}`);
+        }
+      }
       else usage();
       break;
     }
@@ -201,6 +210,18 @@ async function main(): Promise<void> {
           console.log(`cleared attempt counts on ${cleared} chunk(s)`);
         }
         const before = graph.store.dirtyCounts(PROMPT_VERSION);
+        if (before.chunks === 0) {
+          // "all 0 chunks are current" is technically true and actively misleading: nothing was ever
+          // ingested here. Saying so, and naming where the work actually is, is the difference between a
+          // five-second correction and concluding the ingest silently failed.
+          console.log(`'${name}' has nothing in it — no chunks have been ingested.`);
+          const others = Graph.list().filter((x) => x.name !== name && x.nodes > 0);
+          if (others.length) {
+            console.log(`  graphs with content:  ${others.map((x) => `${x.name} (${x.nodes} nodes)`).join(", ")}`);
+            console.log(`  did you mean one of those?  tessera graph list`);
+          }
+          break;
+        }
         if (before.dirty === 0) { console.log(`nothing to extract — all ${before.chunks} chunk(s) are current`); break; }
         console.log(`${before.dirty} chunk(s) owed (${before.never} never extracted, ${before.stale} under an older prompt)`);
 
@@ -216,7 +237,13 @@ async function main(): Promise<void> {
         process.stdout.write("\r\x1b[K");
         console.log(`extracted ${r.extracted}/${r.considered} chunk(s)  ·  +${r.entities} entities, +${r.edges} edges`);
         if (r.parseFailures || r.errors) console.log(`  (! ${r.parseFailures} unparseable, ${r.errors} error(s) — see tessera report ${name})`);
-        if (r.skippedClaimed) console.log(`  (${r.skippedClaimed} chunk(s) claimed by another extractor — rerun to pick them up)`);
+        if (r.skippedDone) console.log(`  (${r.skippedDone} chunk(s) were already finished by another run)`);
+        if (r.skippedClaimed) {
+          // Almost always an interrupted run of your own, not a second person. Say that, and say when the
+          // claim lapses, or the message reads as concurrency you do not have.
+          console.log(`  (${r.skippedClaimed} chunk(s) held by another extractor — usually an interrupted run;`);
+          console.log(`   the claim lapses after ${Math.round(CLAIM_TTL_MS / 60000)} min, then rerun picks them up)`);
+        }
 
         if (r.extracted > 0) {
           const release = acquireIngestLock(graphDir(name), `cli extract passes ${name}`);

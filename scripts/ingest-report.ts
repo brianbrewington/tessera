@@ -183,6 +183,15 @@ export function printScorecard(sc: Scorecard): void {
     sc.sessions ? `${sc.sessions} session(s), ${sc.turns} turn(s)` : "",
   ].filter(Boolean).join(" + ") || "nothing ingested yet";
   p(`corpus: ${src} -> ${sc.entities} entities, ${sc.edges} edges (all kinds)`);
+  if (sc.docs + sc.sessions + sc.chunks + sc.turns + sc.entities === 0) {
+    // A full scorecard of zeros reads as a measurement. It is not one: nothing has been ingested here.
+    // Say so and stop, rather than printing "rubric target ~5-15" against an empty graph.
+    p("");
+    p("this graph is EMPTY — nothing has been ingested into it.");
+    p("  tessera graph list           which graph has your work");
+    p("  tessera ingest <name> <path> put something in this one");
+    return;
+  }
   if (sc.dirty.dirty > 0) {
     p(`EXTRACTION OWED: ${sc.dirty.dirty} chunk(s) not represented in the graph above` +
       ` (${sc.dirty.never} never extracted, ${sc.dirty.stale} under an older prompt) — run: tessera extract <graph>`);

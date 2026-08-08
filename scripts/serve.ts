@@ -252,6 +252,18 @@ export async function serveCli(opts: ServeCliOptions): Promise<void> {
   {
     const s = new GraphStore({ path: opts.db, embedder: new StubEmbedder(768) });
     try {
+      // An EMPTY graph served in silence is the worst version of this: the page renders, the pill says
+      // "0 nodes", and nothing distinguishes "your ingest failed" from "you are looking at the wrong graph".
+      // Brian hit exactly that, having ingested into one graph and served another.
+      const nodeCount = s.countNodes();
+      if (nodeCount === 0) {
+        console.log(`  NOTE: '${opts.name}' is EMPTY — 0 nodes. This page will render a blank map.`);
+        const others = Graph.list().filter((x) => x.name !== opts.name && x.nodes > 0);
+        if (others.length) {
+          console.log(`        graphs with content: ${others.map((x) => `${x.name} (${x.nodes} nodes)`).join(", ")}`);
+          console.log(`        ctrl-c and:  tessera serve <one of those>`);
+        }
+      }
       const d = s.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS);
       if (d.dirty > 0) {
         console.log(`  note: ${d.dirty} of ${d.chunks} chunk(s) are not yet extracted — this map is incomplete.`);

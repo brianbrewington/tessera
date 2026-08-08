@@ -502,3 +502,36 @@ describe("media is MANIFESTED, not ingested", () => {
     expect(r.skippedParts.map((s) => s.reason).sort()).toEqual(["not a local file", "under 2048 bytes"]);
   });
 });
+
+describe("the two skip reasons are not the same thing", () => {
+  // Brian read "1 chunk(s) claimed by another extractor" on a single-user run and reasonably took it as
+  // concurrency. Two different states were being counted together: somebody HOLDS it (usually an
+  // interrupted run of your own), versus somebody FINISHED it between the snapshot and the claim.
+  it("a chunk finished by another run counts as done, not as contended", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc(`# Doc\n\n${"alpha ".repeat(400)}\n\n${"omega ".repeat(400)}\n`));
+    const ids = store.dirtyChunks(PROMPT_VERSION).map((c) => c.id);
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    let calls = 0;
+    const ex: Extractor = {
+      async extract(): Promise<ExtractResult> {
+        calls++;
+        if (calls === 1) store.markExtracted(ids[ids.length - 1]!, PROMPT_VERSION, { actor: "other", cause: "other run" });
+        return new LlmExtractor(new StubChat(ok("Alpha"))).extract("x");
+      },
+    };
+    const d = await extractPending(g, ex);
+    expect(d.skippedDone).toBe(1);
+    expect(d.skippedClaimed).toBe(0); // nobody was holding it; it was simply already done
+  });
+
+  it("a chunk somebody is holding counts as contended, not as done", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, mkDoc());
+    const id = store.dirtyChunks(PROMPT_VERSION)[0]!.id;
+    store.claimChunk(id, "worker-a", 1_000_000, 60_000);
+    const d = await extractPending(g, recorder(() => ok("Alpha")), { now: () => 1_000_100 });
+    expect(d.skippedClaimed).toBe(1);
+    expect(d.skippedDone).toBe(0);
+  });
+});

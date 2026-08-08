@@ -71,8 +71,15 @@ export interface ExtractPendingResult {
   emptyChunks: number;
   /** Transport or mapper throws — distinct from a parse failure, which is the model's answer being unusable. */
   errors: number;
-  /** Chunks another extractor held a live claim on. */
+  /** Chunks another extractor held a LIVE claim on. Usually an interrupted run of your own. */
   skippedClaimed: number;
+  /**
+   * Chunks that were already finished by the time we claimed them.
+   *
+   * Distinct from skippedClaimed, and it used to be counted as it — so a chunk somebody had just completed
+   * was reported as "claimed by another extractor", which sounds like contention and is not.
+   */
+  skippedDone: number;
   entities: number;
   edges: number;
 }
@@ -119,7 +126,7 @@ export async function extractPending(
 
   const out: ExtractPendingResult = {
     considered: pending.length, attempted: 0, extracted: 0, parseFailures: 0,
-    emptyChunks: 0, errors: 0, skippedClaimed: 0, entities: 0, edges: 0,
+    emptyChunks: 0, errors: 0, skippedClaimed: 0, skippedDone: 0, entities: 0, edges: 0,
   };
   if (!pending.length) return out;
 
@@ -157,7 +164,7 @@ export async function extractPending(
         // between them is the same check-then-act race the advisory lock kept regenerating.
         if (!opts.force && graph.store.isExtracted(chunk.id, promptVersion)) {
           graph.store.releaseChunkClaim(chunk.id);
-          out.skippedClaimed++;
+          out.skippedDone++;
           continue;
         }
         const meta: Meta = { actor: opts.origin && opts.origin !== "ingest" ? opts.origin : "extract", cause: `extract ${label}` };

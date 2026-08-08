@@ -2,6 +2,7 @@
 // A name resolves to a persistent SQLite db at graphs/<name>/graph.db, with a self-describing meta.json
 // sidecar. Wraps GraphStore and exposes reads as object-model value objects. Minimal: create/open/list only
 // (rename/merge/delete → backlog).
+import Database from "better-sqlite3";
 import { GraphStore } from "./store/graphStore.js";
 import { OllamaEmbedder, type Embedder } from "./embedder.js";
 import { hydrateNode, Node, Edge, Assertion } from "./model.js";
@@ -39,11 +40,35 @@ export class Graph {
     return new Graph(name, store, embedder);
   }
 
-  static list(): { name: string; nodes?: number }[] {
+  /**
+   * Every graph with its size. The `nodes` field was declared here and never populated, so `graph list`
+   * printed bare names — which is how you ingest into one graph, serve another, and conclude the ingest
+   * failed. A listing that cannot answer "which one has my work in it" is not a listing.
+   *
+   * Read-only and deliberately NOT through GraphStore: opening a store runs migrations, and listing must
+   * never write. Counts are version-agnostic for the same reason (an old db may predate a column).
+   */
+  static list(): { name: string; nodes: number; edges: number; owed: number }[] {
     if (!existsSync(GRAPHS_DIR)) return [];
     return readdirSync(GRAPHS_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory() && existsSync(dbPath(d.name)))
-      .map((d) => ({ name: d.name }));
+      .map((d) => {
+        const out = { name: d.name, nodes: 0, edges: 0, owed: 0 };
+        try {
+          const db = new Database(dbPath(d.name), { readonly: true, fileMustExist: true });
+          try {
+            const one = (sql: string): number => ((db.prepare(sql).get() as { n: number } | undefined)?.n ?? 0);
+            out.nodes = one("SELECT count(*) AS n FROM nodes");
+            out.edges = one("SELECT count(*) AS n FROM edges");
+            out.owed = one(
+              `SELECT count(*) AS n FROM nodes n
+               LEFT JOIN extracted_chunks e ON e.chunk_id = n.id
+               WHERE n.subtype IN ('chunk','turn') AND e.chunk_id IS NULL`,
+            );
+          } finally { db.close(); }
+        } catch { /* unreadable or mid-write: report zeros rather than failing the whole listing */ }
+        return out;
+      });
   }
 
   meta(): { name: string; created?: string } {
