@@ -932,7 +932,7 @@ export class GraphStore {
            FROM nodes n
            JOIN edges e ON e.from_id = n.id AND e.kind = 'ORIGINATED_FROM'
            JOIN nodes s ON s.id = e.to_id AND s.text = ?
-           WHERE n.subtype = 'chunk'
+           WHERE n.subtype IN ('chunk','turn')
            ORDER BY COALESCE(json_extract(n.provenance, '$.index'), 2147483647), n.rowid`,
         )
         .all(sourceIdentityText) as Array<{ id: string }>
@@ -971,7 +971,7 @@ export class GraphStore {
            WHERE eo.from_id = n.id AND eo.kind = 'ORIGINATED_FROM'
            ORDER BY eo.rowid LIMIT 1
          )
-         WHERE n.subtype = 'chunk'
+         WHERE n.subtype IN ('chunk','turn')
            AND (? = 1 OR e.chunk_id IS NULL OR e.prompt_version IS NOT ?)
            AND (? = 1 OR ? = 1 OR e.chunk_id IS NULL)
            AND COALESCE(s.attempts, 0) < ?${idFilter}
@@ -1015,7 +1015,7 @@ export class GraphStore {
         `SELECT n.description AS text
          FROM nodes n
          JOIN edges e ON e.from_id = n.id AND e.kind = 'ORIGINATED_FROM' AND e.to_id = ?
-         WHERE n.subtype = 'chunk'
+         WHERE n.subtype IN ('chunk','turn')
          ORDER BY COALESCE(json_extract(n.provenance, '$.index'), 2147483647), n.rowid
          LIMIT 1`,
       )
@@ -1039,7 +1039,7 @@ export class GraphStore {
          FROM nodes n
          LEFT JOIN extracted_chunks e ON e.chunk_id = n.id
          LEFT JOIN chunk_extraction_state s ON s.chunk_id = n.id
-         WHERE n.subtype = 'chunk'`,
+         WHERE n.subtype IN ('chunk','turn')`,
       )
       .get({ v: promptVersion, failingAt }) as Record<string, number | null>;
     return {

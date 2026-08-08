@@ -14,10 +14,10 @@ Last reordered: 2026-08-08.
 
 Short, because git carries the rest: the commit messages on this branch are written to be read.
 
-**Branch.** `viewer/durable-state`, pushed, **46 commits ahead of `main` and unmerged.** Tests green
-(299 passing, 1 skipped). `npm test`, `npm run typecheck`, and `./tessera` is a real command now.
+**Branch.** `viewer/durable-state`, pushed, **50 commits ahead of `main` and unmerged.** Tests green
+(309 passing, 1 skipped). `npm test`, `npm run typecheck`, and `./tessera` is a real command now.
 
-**Shipped in the last stretch**, newest first: media manifest · the parts seam · a work queue · the SESSION
+**Shipped in the last stretch**, newest first: session-log ingest · media manifest · the parts seam · a work queue · the SESSION
 round folded into the backlog · the `origin` thread and the multi-parent join fix · `./tessera` · the
 serve/viewer half · the ingest split. `git log --oneline main..HEAD` is the honest index.
 
@@ -69,8 +69,8 @@ than what it can hold, KI-3 moves to the top.
 |---|---|---|---|
 | 1 | **Parts seam** — `readDoc` yields a primary document plus enumerable parts | **DONE** 2026-08-08 | `{doc, parts, skipped}`. Markdown-referenced local images are the first producer. Only the part kinds with a producer are declared. |
 | 2 | **Media manifest** — byte-hash images, link to parents, no VLM, no extraction | **DONE** 2026-08-08 | Bytes in `media_blobs`, identity = sha256 of bytes, one node per distinct image with an edge to every parent. Never a dirty chunk, never captioned. |
-| 3 | **Session-log ingest** — Claude Code JSONL, prose only | **NEXT (start here)** | Highest yield per unit of work. **Binding constraint: turns must be preserved with speaker and timestamp**, or attribution and the SESSION unification are foreclosed. |
-| 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | NEXT, after 1-3 | *"not particularly snappy, in my opinion."* Detail below. |
+| 3 | **Session-log ingest** — Claude Code JSONL, prose only | **DONE** 2026-08-08 | `./tessera ingest-session`. Stream-addressed session, turn keyed by record uuid, speaker + timestamp in provenance, no SESSION/AGENT node minted. Kill test passed: a plain SOURCE sufficed. |
+| 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | **NEXT (start here)** | *"not particularly snappy, in my opinion."* Detail below. |
 | 5 | **Provenance-scoped delete** | BLOCKED-BY-DESIGN | Gates pointing any generator at a real graph. Origin marking exists; removal does not. Until it does, first dream ingest goes at a throwaway graph. |
 | 6 | **`HEBBIAN_ASSOC` first writer** | DEFERRED | The one edge a dream exists to produce. Its acceptance test, when the dream path is built. |
 | 7 | **I1 extraction quality** — KI-3, then B5 layer 1, then B7 | DEFERRED, condition below | Promote to #1 the moment we want to claim anything about corpus-scale results. |

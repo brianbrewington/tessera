@@ -11,6 +11,7 @@ import { Graph } from "../src/graph.js";
 import { OllamaChat } from "../src/llm.js";
 import { LlmExtractor } from "../src/extract/extractor.js";
 import { ingestChunks } from "../src/ingest/ingest.js";
+import { ingestSession } from "../src/ingest/ingest-session.js";
 import { extractPending, FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
 import { PROMPT_VERSION } from "../src/extract/extractor.js";
 import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
@@ -28,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera extract <name> [--retry-failed]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera ingest-session <name> <log.jsonl...>  [--user <name>]\n  tessera extract <name> [--retry-failed]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -139,6 +140,47 @@ async function main(): Promise<void> {
         graph.close();
         releaseLock();
       }
+      break;
+    }
+    case "ingest-session": {
+      // Claude Code session logs. A separate command rather than an extension of `ingest`: a .jsonl is not
+      // generally a session log, and sniffing the format would be a guess where a name is free.
+      const flags = args.filter((a) => a.startsWith("--"));
+      const userIdx = args.indexOf("--user");
+      const userName = userIdx >= 0 ? args[userIdx + 1] : undefined;
+      const positional = args.filter((a, i) => !a.startsWith("--") && !(userIdx >= 0 && i === userIdx + 1));
+      const [name, ...logs] = positional;
+      if (!name || logs.length === 0) usage();
+      void flags;
+
+      let release: () => void;
+      try { release = acquireIngestLock(graphDir(name), `cli ingest-session ${name}`); }
+      catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); }
+      const graph = Graph.open(name);
+      try {
+        let sessions = 0, turns = 0, queued = 0, failed = 0;
+        for (const f of logs) {
+          try {
+            const r = await ingestSession(graph, f, userName ? { userName } : {});
+            sessions++; turns += r.turns; queued += r.queued;
+            const again = r.reused ? `  (${r.reused} already extracted)` : "";
+            console.log(`session  ${r.key.slice(0, 8)}: ${r.turns} turn(s), ${r.queued} queued${again}`);
+            // A session log is ~98% tool traffic. Saying what was left out is the difference between a
+            // selection and a silent loss.
+            const refused = Object.entries(r.skipped).sort((a, b) => b[1] - a[1]).slice(0, 6)
+              .map(([k, v]) => `${k} ${v}`).join(", ");
+            if (refused) console.log(`         not taken: ${refused}`);
+          } catch (e) {
+            failed++;
+            console.error(`FAILED   ${f}: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        const lay = await layoutPass(graph.store, { actor: "cli", cause: `ingest-session ${name}` });
+        console.log(`\n--- ${sessions} session(s), ${turns} turn(s), ${queued} queued, ${failed} failed ---`);
+        if (lay.mode !== "noop") console.log(`layout: ${lay.mode} — ${lay.laidOut} new node(s)`);
+        if (queued > 0) console.log(`\n${queued} turn(s) await extraction — run:  tessera extract ${name}`);
+        if (failed > 0) process.exitCode = 1;
+      } finally { graph.close(); release(); }
       break;
     }
     case "extract": {

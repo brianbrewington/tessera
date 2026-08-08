@@ -79,6 +79,11 @@ export interface ExtractPendingResult {
 
 /** The subject of a chunk's document, for subject-aware extraction, without touching the filesystem. */
 function recoverSubject(graph: Graph, chunk: DirtyChunk, cache: Map<string, string | undefined>): string | undefined {
+  // A TURN knows who said it, and that beats anything derived from the document: it is the difference between
+  // "Brian said this" and "this appeared somewhere in a transcript". Attribution is most of the value of the
+  // conversation corpus, so the speaker is the subject.
+  const speaker = chunk.provenance?.speaker;
+  if (typeof speaker === "string" && speaker.trim()) return speaker.trim();
   const persisted = chunk.sourceProvenance?.subject;
   if (typeof persisted === "string" && persisted.trim()) return persisted.trim();
   if (!chunk.sourceId) return undefined;

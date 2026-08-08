@@ -15,7 +15,10 @@ export const tokenize = (s: string): string[] => s.toLowerCase().split(/[^\p{L}\
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // Provenance nodes are the ingest spine, not extracted content — excluded from "entity" metrics.
-const isProvenance = (subtype: string | null): boolean => subtype === "document" || subtype === "chunk";
+// `turn` and `session` joined this list when session-log ingest landed: without them a conversation graph
+// reported its own transcript as extracted entities, and its top hubs were the turns.
+const PROVENANCE = new Set(["document", "chunk", "turn", "session", "media"]);
+const isProvenance = (subtype: string | null): boolean => PROVENANCE.has(subtype ?? "");
 
 // The extractor's NEGATIVE_CONSTRAINTS list — anything here that became an entity is a leak the human should see.
 const BUZZWORDS = new Set(
@@ -40,6 +43,7 @@ export function namesEndpoint(reasonWords: Set<string>, reasonLower: string, nam
 
 export interface Scorecard {
   docs: number; chunks: number; edges: number; entities: number;
+  sessions: number; turns: number;
   entitiesPerDoc: number; appearancesPerChunk: number;
   typeHistogram: [string, number][]; // "TYPE/subtype" -> count, desc
   topHubs: { name: string; type: string; degree: number; strength: number }[];
@@ -71,6 +75,8 @@ export function report(dbPath: string): Scorecard {
 
     const docs = nodes.filter((n) => n.subtype === "document").length;
     const chunks = nodes.filter((n) => n.subtype === "chunk").length;
+    const sessions = nodes.filter((n) => n.subtype === "session").length;
+    const turns = nodes.filter((n) => n.subtype === "turn").length;
     const entities = nodes.filter((n) => !isProvenance(n.subtype ?? null));
     const appearedIn = edges.filter((e) => e.kind === "APPEARED_IN").length;
 
@@ -142,8 +148,10 @@ export function report(dbPath: string): Scorecard {
 
     return {
       docs, chunks, edges: edges.length, entities: entities.length,
-      entitiesPerDoc: docs === 0 ? 0 : Math.round((entities.length / docs) * 10) / 10,
-      appearancesPerChunk: chunks === 0 ? 0 : Math.round((appearedIn / chunks) * 10) / 10,
+      // Per SOURCE, not per document: a session-only graph has zero documents and would divide by zero,
+      // reporting 0 entities/doc for a graph full of them.
+      entitiesPerDoc: docs + sessions === 0 ? 0 : Math.round((entities.length / (docs + sessions)) * 10) / 10,
+      appearancesPerChunk: chunks + turns === 0 ? 0 : Math.round((appearedIn / (chunks + turns)) * 10) / 10,
       typeHistogram: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]),
       topHubs,
       relatedReasons, deAnchoredReasons, deAnchoredPct: pct(deAnchoredReasons, relatedReasons),
@@ -152,6 +160,7 @@ export function report(dbPath: string): Scorecard {
       buzzwordHubs,
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
       mergedPersons,
+      sessions, turns,
       dirty: store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS),
       media: store.mediaCounts(),
       nodesByOrigin: store.countNodesByOrigin(),
@@ -169,7 +178,11 @@ export function report(dbPath: string): Scorecard {
 export function printScorecard(sc: Scorecard): void {
   const p = (s: string): void => console.log(s);
   p("=== tessera ingest scorecard ===");
-  p(`corpus: ${sc.docs} doc(s), ${sc.chunks} chunk(s) -> ${sc.entities} entities, ${sc.edges} edges (all kinds)`);
+  const src = [
+    sc.docs ? `${sc.docs} doc(s), ${sc.chunks} chunk(s)` : "",
+    sc.sessions ? `${sc.sessions} session(s), ${sc.turns} turn(s)` : "",
+  ].filter(Boolean).join(" + ") || "nothing ingested yet";
+  p(`corpus: ${src} -> ${sc.entities} entities, ${sc.edges} edges (all kinds)`);
   if (sc.dirty.dirty > 0) {
     p(`EXTRACTION OWED: ${sc.dirty.dirty} chunk(s) not represented in the graph above` +
       ` (${sc.dirty.never} never extracted, ${sc.dirty.stale} under an older prompt) — run: tessera extract <graph>`);
@@ -193,7 +206,7 @@ export function printScorecard(sc: Scorecard): void {
         `  — non-ingest content cannot be deleted, only distinguished`);
     }
   }
-  p(`entities/doc: ${sc.entitiesPerDoc}  (rubric target ~5-15 for a persona)   appearances/chunk: ${sc.appearancesPerChunk}`);
+  p(`entities/source: ${sc.entitiesPerDoc}  (rubric target ~5-15 for a persona)   appearances/chunk: ${sc.appearancesPerChunk}`);
   p("");
   p("entity types:");
   for (const [k, n] of sc.typeHistogram) p(`  ${n.toString().padStart(4)}  ${k}`);

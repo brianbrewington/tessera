@@ -32,6 +32,37 @@ export function chunkIdentity(sourceContentHash: string, rawText: string): strin
 }
 
 /**
+ * THE SECOND IDENTITY REGIME. Read this before "unifying" it with the one above.
+ *
+ * A document IS its content, so its identity is a hash of its text. A SESSION is a STREAM, and a stream is
+ * not its content: a live log grows while you work, so re-hashing it after every turn makes it "new content"
+ * forever. Under the document rule, re-ingesting a continuing conversation would mint a fresh source, fresh
+ * chunks and duplicate entities on every single read.
+ *
+ * So a session is addressed by its external stable id, and its TURNS are the content-addressed units within
+ * it, keyed by the record uuid the runtime already assigns. Correctness comes from per-turn identity alone:
+ * re-reading a grown log makes every existing turn an identity hit that reinforces, and only new turns
+ * append. Any high-water mark is an optimisation, so losing it degrades to a full re-read rather than to
+ * duplication.
+ *
+ * The cost, stated so nobody has to rediscover it: there are now two regimes in one ingest. That is correct
+ * for the two objects and must stay visible, because collapsing sessions into the document rule reintroduces
+ * exactly the duplication bug this exists to prevent.
+ *
+ * Note the generalisation, not yet built: `chunkIdentity` qualifies by the SOURCE's content hash, so growing
+ * ANY document changes every chunk key. Sessions are only where this surfaced first. A running notes file and
+ * a journal have the same shape, and the fix is this one applied to sections instead of turns.
+ */
+export function sessionIdentity(ns: string, sessionKey: string): string {
+  return `session\t${norm(ns)}\t${sessionKey.trim()}`;
+}
+
+/** TURN identity — stable across re-reads of a growing log, because the runtime assigned the uuid. */
+export function turnIdentity(ns: string, sessionKey: string, turnId: string): string {
+  return `turn\t${norm(ns)}\t${sessionKey.trim()}\t${turnId.trim()}`;
+}
+
+/**
  * MEDIA identity — the hash of the BYTES, and never of anything a model said about them.
  *
  * Two consequences, both deliberate. The same logo embedded in forty documents is ONE node with forty
