@@ -375,7 +375,7 @@ describe("subject-aware extraction (KI-1/KI-2: persona linked + named, not float
     const p = join(dir, "anele.txt");
     writeFileSync(p, "PROFILE: Anele Sotashe\n\nHis father died young.\n");
 
-    expect(readDoc(p).subject).toBe("Anele Sotashe"); // the adapter derives it from the PROFILE header
+    expect(readDoc(p).doc.subject).toBe("Anele Sotashe"); // the adapter derives it from the PROFILE header
     await ingestFile(g, recExtractor, p);
     expect(seenSubject).toBe("Anele Sotashe"); // ingest THREADED it to extract() — the previously-untested link
 
@@ -394,7 +394,69 @@ describe("adapter path canonicalization", () => {
     const dir = mkdtempSync(join(tmpdir(), "tessera-adapt-"));
     const docPath = join(dir, "d.md");
     writeFileSync(docPath, "# D\n\nbody\n");
-    const doc = readDoc(`${dir}/./d.md`);
+    const doc = readDoc(`${dir}/./d.md`).doc;
     expect(doc.source).toBe(resolve(docPath)); // canonicalized identity, not the raw spelling
+  });
+});
+
+describe("the parts seam — a document enumerates what it contains", () => {
+  // "Enumerable parts", not "recursive ingestion". A container's contents are a tree known at parse time,
+  // so the adapter lists what it found and the caller decides what each part is worth. Bounded by
+  // construction: an image has no parts to return. Markdown-referenced local images are the first real
+  // producer because they need no new parsing dependency.
+  const png = (kb: number): Buffer =>
+    Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(kb * 1024, 7)]);
+
+  function docWith(body: string, files: Record<string, Buffer> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), "tessera-parts-"));
+    for (const [n, b] of Object.entries(files)) writeFileSync(join(dir, n), b);
+    const p = join(dir, "doc.md");
+    writeFileSync(p, body);
+    return p;
+  }
+
+  it("finds a referenced local image and carries its bytes", () => {
+    const p = docWith("# Doc\n\nSee ![the field](field.png) for the layout.\n", { "field.png": png(8) });
+    const r = readDoc(p);
+    expect(r.parts.length).toBe(1);
+    const part = r.parts[0]!;
+    expect(part.kind).toBe("media");
+    if (part.kind !== "media") throw new Error("unreachable");
+    expect(part.mime).toBe("image/png");
+    expect(part.bytes.byteLength).toBe(8 * 1024 + 4);
+    expect(r.doc.text).toContain("See ![the field]"); // the prose is untouched
+  });
+
+  it("refuses remote and data references, and SAYS SO rather than dropping them", () => {
+    const p = docWith("![a](https://example.com/x.png)\n\n![b](data:image/png;base64,AAAA)\n");
+    const r = readDoc(p);
+    expect(r.parts.length).toBe(0);
+    expect(r.skipped.map((s) => s.reason)).toEqual(["not a local file", "not a local file"]);
+  });
+
+  it("skips images below the noise floor, with the reason recorded", () => {
+    // Spacers, bullets and tracking pixels are the bulk of images in real documents and carry nothing.
+    const p = docWith("![spacer](s.png)\n", { "s.png": png(0) });
+    const r = readDoc(p);
+    expect(r.parts.length).toBe(0);
+    expect(r.skipped[0]!.reason).toMatch(/under \d+ bytes/);
+  });
+
+  it("counts one part when the same image is referenced twice", () => {
+    const p = docWith("![x](a.png)\n\nlater, again: ![x](a.png)\n", { "a.png": png(8) });
+    expect(readDoc(p).parts.length).toBe(1);
+  });
+
+  it("names a missing or unreadable reference instead of failing the read", () => {
+    const p = docWith("![gone](nope.png)\n");
+    const r = readDoc(p);
+    expect(r.parts.length).toBe(0);
+    expect(r.skipped[0]!.reason).toBe("could not be read");
+  });
+
+  it("a document with no images yields no parts and no noise", () => {
+    const r = readDoc(docWith("# Doc\n\nJust prose.\n"));
+    expect(r.parts).toEqual([]);
+    expect(r.skipped).toEqual([]);
   });
 });

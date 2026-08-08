@@ -76,9 +76,9 @@ export async function ingestChunks(
   const promptVersion = opts.promptVersion ?? PROMPT_VERSION;
   const read = readDoc(path);
   const doc = {
-    ...read,
-    title: opts.display?.title ?? read.title,
-    source: opts.display?.source ?? read.source,
+    ...read.doc,
+    title: opts.display?.title ?? read.doc.title,
+    source: opts.display?.source ?? read.doc.source,
   };
   const meta: Meta = { actor: "ingest", cause: `ingest ${doc.source}` };
   // Content-addressed identity: the document IS its content. Two byte-identical files (rolled up, on another

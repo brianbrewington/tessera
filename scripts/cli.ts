@@ -76,7 +76,7 @@ async function main(): Promise<void> {
           for (const f of docs) {
             let cls: string;
             try {
-              const hash = docContentHash(readDoc(f).text);
+              const hash = docContentHash(readDoc(f).doc.text);
               const prior = g?.store.getIngestedSource(hash) ?? null;
               if (reextract || !prior) cls = "new";
               else {
