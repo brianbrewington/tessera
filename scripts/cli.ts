@@ -10,7 +10,9 @@ import { existsSync, statSync, readFileSync } from "node:fs";
 import { Graph } from "../src/graph.js";
 import { OllamaChat } from "../src/llm.js";
 import { LlmExtractor } from "../src/extract/extractor.js";
-import { ingestFile } from "../src/ingest/ingest.js";
+import { ingestChunks } from "../src/ingest/ingest.js";
+import { extractPending, FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
+import { PROMPT_VERSION } from "../src/extract/extractor.js";
 import { collectDocs, readDoc, isSupported } from "../src/ingest/adapters.js";
 import { docContentHash } from "../src/extract/identity.js";
 import { exportViewer } from "./export-viewer.js";
@@ -26,7 +28,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera extract <name> [--retry-failed]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -98,17 +100,17 @@ async function main(): Promise<void> {
       }
       const graph = Graph.open(name);
       try {
-        const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
-        let ingested = 0, skipped = 0, partial = 0, failed = 0, entities = 0, edges = 0;
+        let chunkedDocs = 0, skipped = 0, failed = 0, chunks = 0, queued = 0;
         for (const f of docs) {
           try {
-            const r = await ingestFile(graph, extractor, f, { reextract, extractorModel });
-            if (r.skipped) { skipped++; console.log(`skip     "${r.title}" (unchanged, ${r.chunks} chunk(s))`); continue; }
-            ingested++; entities += r.entities; edges += r.edges;
-            if (r.parseFailures > 0) partial++;
-            const warn = r.parseFailures || r.emptyChunks ? `  (! ${r.parseFailures} parse-fail, ${r.emptyChunks} empty)` : "";
-            const memo = r.reused ? `  (${r.reused} chunk(s) reused)` : "";
-            console.log(`ingested "${r.title}": ${r.chunks} chunk(s) -> ${r.entities} entities, ${r.edges} edges${warn}${memo}`);
+            // CHUNK ONLY. Extraction is `tessera extract`, so this loop never calls the LLM and the advisory
+            // lock is held for a bounded, predictable time rather than across a multi-hour extraction.
+            const r = await ingestChunks(graph, f, { rechunk: reextract, extractorModel });
+            chunks += r.chunks; queued += r.queued;
+            if (r.skipped) { skipped++; console.log(`skip     "${r.title}" (already chunked, ${r.chunks} chunk(s), ${r.queued} still owed)`); continue; }
+            chunkedDocs++;
+            const owed = r.queued === r.chunks ? "" : `  (${r.reused} already extracted)`;
+            console.log(`chunked  "${r.title}": ${r.chunks} chunk(s), ${r.queued} queued for extraction${owed}`);
           } catch (e) {
             failed++;
             console.error(`FAILED   ${f}: ${e instanceof Error ? e.message : e}`);
@@ -117,13 +119,67 @@ async function main(): Promise<void> {
         // One layout pass for the whole run: newcomers relax against the frozen existing map, and every
         // pre-existing node keeps its exact position (design §3.3, F-2). Cheap — O(|new|·|existing|).
         const lay = await layoutPass(graph.store, { actor: "cli", cause: `ingest ${name}` });
-        console.log(`\n--- ${docs.length} file(s): ${ingested} ingested (${partial} partial), ${skipped} unchanged, ${failed} failed, ${badInputs} bad input(s)  ·  +${entities} entities, +${edges} edges ---`);
+        console.log(`\n--- ${docs.length} file(s): ${chunkedDocs} chunked, ${skipped} unchanged, ${failed} failed, ${badInputs} bad input(s)  ·  ${chunks} chunk(s) ---`);
         if (lay.mode !== "noop") console.log(`layout: ${lay.mode} — ${lay.laidOut} new node(s) in ${lay.components} component(s) (graph ${lay.byRule.graph}, semantic ${lay.byRule.semantic}, map ${lay.byRule.map})`);
+        const owed = graph.store.dirtyCounts(PROMPT_VERSION).dirty;
+        if (owed > 0) console.log(`\n${owed} chunk(s) await extraction — run:  tessera extract ${name}`);
         if (failed > 0 || badInputs > 0) process.exitCode = 1; // surface partial failure / bad inputs to the shell, but finish the run
       } finally {
         graph.close();
         releaseLock();
       }
+      break;
+    }
+    case "extract": {
+      // The slow half of ingest, as its own resumable step. Reads chunk text from the STORE, so a chunk whose
+      // source file has been deleted is still reachable — which is the only way graphs/big's two orphaned
+      // chunks can ever be finished.
+      const flags = new Set(args.filter((a) => a.startsWith("--")));
+      const retryFailed = flags.has("--retry-failed");
+      const [name] = args.filter((a) => !a.startsWith("--"));
+      if (!name) usage();
+      if (!existsSync(join(graphDir(name), "graph.db"))) { console.error(`no graph db for '${name}' — ingest something first`); process.exit(1); }
+
+      const extractorModel = process.env.TESSERA_EXTRACT_MODEL || "qwen2.5:14b";
+      const graph = Graph.open(name);
+      try {
+        if (retryFailed) {
+          const cleared = graph.store.clearExtractionFailures();
+          console.log(`cleared attempt counts on ${cleared} chunk(s)`);
+        }
+        const before = graph.store.dirtyCounts(PROMPT_VERSION);
+        if (before.dirty === 0) { console.log(`nothing to extract — all ${before.chunks} chunk(s) are current`); break; }
+        console.log(`${before.dirty} chunk(s) owed (${before.never} never extracted, ${before.stale} under an older prompt)`);
+
+        const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
+        const r = await extractPending(graph, extractor, {
+          // The lock is taken per SMALL BATCH, never across the whole run. That is the whole point: holding
+          // one lock across a multi-hour extraction is what made LOCK_STALE_MS reachable in the first place.
+          withBatch: async (fn) => {
+            const release = acquireIngestLock(graphDir(name), `cli extract ${name}`);
+            try { return await fn(); } finally { release(); }
+          },
+          onChunk: (done, total) => process.stdout.write(`\r  extracting ${done}/${total}...`),
+        });
+        process.stdout.write("\r\x1b[K");
+        console.log(`extracted ${r.extracted}/${r.considered} chunk(s)  ·  +${r.entities} entities, +${r.edges} edges`);
+        if (r.parseFailures || r.errors) console.log(`  (! ${r.parseFailures} unparseable, ${r.errors} error(s) — see tessera report ${name})`);
+        if (r.skippedClaimed) console.log(`  (${r.skippedClaimed} chunk(s) claimed by another extractor — rerun to pick them up)`);
+
+        if (r.extracted > 0) {
+          const release = acquireIngestLock(graphDir(name), `cli extract passes ${name}`);
+          try {
+            const lay = await layoutPass(graph.store, { actor: "cli", cause: `extract ${name}` });
+            prominencePass(graph.store, { actor: "cli", cause: `extract ${name}` });
+            if (lay.mode !== "noop") console.log(`layout: ${lay.mode} — ${lay.laidOut} new node(s)`);
+          } finally { release(); }
+        }
+        const after = graph.store.dirtyCounts(PROMPT_VERSION);
+        if (after.dirty > 0) {
+          console.log(`\n${after.dirty} chunk(s) still owed${after.failing ? `, ${after.failing} failing after ${FAILING_ATTEMPTS}+ attempts (tessera extract ${name} --retry-failed)` : ""}`);
+          process.exitCode = 1;
+        }
+      } finally { graph.close(); }
       break;
     }
     case "view": {
@@ -151,6 +207,16 @@ async function main(): Promise<void> {
       const out = join(graphDir(name), "view.html");
       const n = exportViewer(db, out, name);
       console.log(`wrote ${out}  (${n} nodes) — open it in a browser`);
+      // A map exported while chunks are still owed is honest only if it says so. Otherwise "the graph looks
+      // thin" is indistinguishable from "extraction has not run yet", which is the failure mode the whole
+      // dirty-chunk model exists to remove.
+      {
+        const s = new GraphStore({ path: db, embedder: new StubEmbedder(768) });
+        try {
+          const d = s.dirtyCounts(PROMPT_VERSION);
+          if (d.dirty > 0) console.log(`\nnote: ${d.dirty} of ${d.chunks} chunk(s) are not yet extracted — this map is incomplete.\n      run:  tessera extract ${name}`);
+        } finally { s.close(); }
+      }
       break;
     }
     case "scenes": {

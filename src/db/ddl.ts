@@ -3,6 +3,41 @@
 // `dim` is injected into the four vec0 tables (spec §3: vectors split by kind × tier,
 // never co-mingled).
 
+/** The subset of better-sqlite3 `migrate` needs — kept structural so ddl.ts stays dependency-free. */
+interface MigratableDb {
+  prepare(sql: string): { all(...p: unknown[]): unknown[]; run(...p: unknown[]): unknown };
+  exec(sql: string): unknown;
+  transaction(fn: () => void): { immediate(): void };
+}
+
+/**
+ * Idempotent migrations for databases created before a column existed. `ddl()` is all
+ * CREATE TABLE IF NOT EXISTS, so it cannot widen a table that is already there.
+ *
+ * Run AFTER ddl(). Safe to run on every open: each step checks first and does nothing when current.
+ */
+export function migrate(db: MigratableDb, promptVersion: string): void {
+  const cols = db.prepare("PRAGMA table_info(extracted_chunks)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "prompt_version")) {
+    // ALTER and backfill in ONE transaction. If they could interleave, a crash between them would leave
+    // every memo row at NULL version — i.e. the whole corpus permanently stale — and the next extract run
+    // would silently re-pay the LLM for every chunk. Atomic means "column exists" implies "backfilled".
+    //
+    // Backfilling to the CURRENT version grandfathers old extractions rather than invalidating them. Which
+    // prompt actually produced them is unrecoverable, and the alternative fabricates a full re-extraction
+    // on migration day for no evidence of benefit.
+    db.transaction(() => {
+      db.exec("ALTER TABLE extracted_chunks ADD COLUMN prompt_version TEXT");
+      db.prepare("UPDATE extracted_chunks SET prompt_version = ?").run(promptVersion);
+      // Same schema generation: ingest_sources.status changed meaning from "extraction finished" to "chunks
+      // durably written". A 'partial' row wrote all its chunks and failed to extract one of them, which is
+      // now per-chunk state — so 'complete' is the accurate value and the failed chunk is simply dirty.
+      // Leaving the old value behind would keep a file-level flag saying something the column no longer means.
+      db.prepare("UPDATE ingest_sources SET status = 'complete' WHERE status = 'partial'").run();
+    }).immediate();
+  }
+}
+
 export function ddl(dim: number): string {
   if (!Number.isInteger(dim) || dim <= 0) throw new Error(`bad embedding dim: ${dim}`);
   return `
@@ -64,8 +99,36 @@ CREATE TABLE IF NOT EXISTS layout (
 -- Chunk extraction memo: a CHUNK node id is inserted here only AFTER its extraction fully completed (parse
 -- succeeded and the mapper finished). Re-ingest skips a chunk iff it's here — a chunk that started but crashed
 -- mid-map is absent, so it retries (never silently frozen half-written). Parse-failures are absent too → retry.
+--
+-- prompt_version salts the memo (backlog B13). "Extracted" means extracted UNDER THIS PROMPT: bumping
+-- PROMPT_VERSION makes every chunk dirty again, so a prompt fix reaches existing graphs instead of leaving
+-- them frozen on old output until someone remembers "--reextract". This table is therefore the CLEAN FLAG,
+-- and "dirty" is a durable, queryable predicate — a chunk with no row here at the current version. That is
+-- what makes background extraction safe: there is no queue object to lose, only a question to re-ask.
 CREATE TABLE IF NOT EXISTS extracted_chunks (
-  chunk_id TEXT PRIMARY KEY REFERENCES nodes(id)
+  chunk_id       TEXT PRIMARY KEY REFERENCES nodes(id),
+  prompt_version TEXT
+);
+
+-- Per-chunk extraction bookkeeping: how many times we have tried, why it last failed, and who is working on
+-- it right now. Two jobs:
+--   1. The CLAIM. Two extractors (a "tessera extract" run and a serve background drain) must not take the
+--      same chunk. This is a row-level claim inside one transaction, which SQLite serializes for free —
+--      deliberately NOT another filesystem protocol like the advisory lock, whose four review rounds
+--      demonstrated that hand-rolled exclusivity regenerates its own race at every layer.
+--   2. The POISON GUARD. A chunk that cannot be parsed would otherwise be retried on every drop forever,
+--      burning the GPU silently. attempts lets a background drain skip it while an explicit
+--      "tessera extract --retry-failed" still can.
+-- DERIVED CACHE: like extracted_chunks, excluded from mutation_log replay by design (backlog B23). A replay
+-- rebuilds the graph; it does not rebuild "who was mid-extraction when the process died", which is correct —
+-- that state should start empty.
+CREATE TABLE IF NOT EXISTS chunk_extraction_state (
+  chunk_id        TEXT PRIMARY KEY REFERENCES nodes(id),
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  last_attempt_at INTEGER,
+  claimed_by      TEXT,
+  claimed_at      INTEGER
 );
 
 -- Ingest manifest: one row per SOURCE content hash (identity is path-free, so content_hash is the key). Records

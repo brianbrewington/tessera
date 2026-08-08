@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
+import { PROMPT_VERSION } from "../src/extract/extractor.js";
+import { FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
 
 export const tokenize = (s: string): string[] => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
@@ -46,6 +48,11 @@ export interface Scorecard {
   buzzwordHubs: { name: string; type: string }[];
   orphanEntities: number; orphanPct: number; // entities with no RELATED edge
   mergedPersons: { name: string; sources: number; strength: number }[]; // PERSON nodes spanning >1 source doc (merge audit)
+  // Extraction debt. Before this existed, graphs/big carried two chunks that had never been extracted and
+  // nothing anywhere said so — the map claimed to represent twelve documents while quietly missing two
+  // slices of two lives. A scorecard that cannot report what it is missing is not a scorecard.
+  dirty: { chunks: number; dirty: number; never: number; stale: number; failing: number };
+  failingChunks: { name: string; attempts: number; lastError: string | null }[];
 }
 
 export function report(dbPath: string): Scorecard {
@@ -139,6 +146,11 @@ export function report(dbPath: string): Scorecard {
       buzzwordHubs,
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
       mergedPersons,
+      dirty: store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS),
+      failingChunks: store
+        .dirtyChunks(PROMPT_VERSION)
+        .filter((c) => c.attempts >= FAILING_ATTEMPTS)
+        .map((c) => ({ name: c.name ?? c.id, attempts: c.attempts, lastError: c.lastError })),
     };
   } finally {
     store.close();
@@ -149,6 +161,14 @@ export function printScorecard(sc: Scorecard): void {
   const p = (s: string): void => console.log(s);
   p("=== tessera ingest scorecard ===");
   p(`corpus: ${sc.docs} doc(s), ${sc.chunks} chunk(s) -> ${sc.entities} entities, ${sc.edges} edges (all kinds)`);
+  if (sc.dirty.dirty > 0) {
+    p(`EXTRACTION OWED: ${sc.dirty.dirty} chunk(s) not represented in the graph above` +
+      ` (${sc.dirty.never} never extracted, ${sc.dirty.stale} under an older prompt) — run: tessera extract <graph>`);
+    for (const f of sc.failingChunks.slice(0, 10)) {
+      p(`    ! ${f.name} — ${f.attempts} attempt(s): ${(f.lastError ?? "unknown").slice(0, 80)}`);
+    }
+    if (sc.failingChunks.length) p(`    (${sc.failingChunks.length} failing — retry with: tessera extract <graph> --retry-failed)`);
+  }
   p(`entities/doc: ${sc.entitiesPerDoc}  (rubric target ~5-15 for a persona)   appearances/chunk: ${sc.appearancesPerChunk}`);
   p("");
   p("entity types:");

@@ -1,18 +1,40 @@
-// Ingest orchestrator (per docs/ingest-model.md): open graph -> read adapter -> chunk -> per chunk
-// {CHUNK node (raw text, embedded = the RAG unit) -> ORIGINATED_FROM the SOURCE; extract -> map entities,
-// each APPEARED_IN this chunk}. SOURCE is keyed by PATH; identity is content_hash only (no cosine collapse).
-// A chunk already extracted is skipped (deterministic chunk identity) so re-ingest is idempotent and cheap.
-// Reports parse failures vs empty chunks vs reused chunks (fail-loud).
+// Ingest orchestrator (per docs/ingest-model.md), SPLIT IN TWO:
+//
+//   ingestChunks()  read adapter -> chunk -> per chunk {CHUNK node (raw text, embedded = the RAG unit)
+//                   -> ORIGINATED_FROM the SOURCE}. No LLM extraction. Milliseconds plus embedding.
+//   extractPending() (./extract-pending.ts) claims dirty chunks and does the expensive part.
+//
+// Why split: extraction is ~97% of ingest wall-clock (199 chunks x ~10s = over half an hour on graphs/big),
+// and holding one advisory lock across that whole loop is what created the accepted lock risk (backlog B25).
+// Chunking briefly, then extracting under per-chunk claims, makes the six-hour staleness threshold
+// unreachable rather than merely unlikely. It also means a chunk's raw text is durable BEFORE any model runs,
+// which is the only reason a chunk whose source file has since been deleted can still be extracted.
+//
+// SOURCE is content-addressed (path is provenance, never identity). A chunk already extracted under the
+// current PROMPT_VERSION is skipped, so re-ingest is idempotent and cheap.
 import type { Graph } from "../graph.js";
 import type { Extractor } from "../extract/extractor.js";
+import { PROMPT_VERSION } from "../extract/extractor.js";
 import type { Meta } from "../schema.js";
 import { readDoc, isSupported } from "./adapters.js";
 import { chunk as splitChunks } from "./chunker.js";
-import { mapExtraction } from "./mapper.js";
 import { sourceIdentity, chunkIdentity, docContentHash } from "../extract/identity.js";
+import { extractPending } from "./extract-pending.js";
 
 // Ingest owns identity via content_hash of the mapper's identity string; the store's default (no cosine
 // near-dup merge) means similar CONTENT never collapses distinct identities — so putNode needs no opts here.
+
+export interface ChunkIngestResult {
+  source: string;
+  title: string;
+  chunks: number;
+  /** Chunks now owing extraction. This is the honest number for a drop response: "N chunks queued". */
+  queued: number;
+  /** Chunks already extracted under the current prompt — no LLM cost owed. */
+  reused: number;
+  chunkIds: string[];
+  skipped: boolean; // the whole file was skipped (already chunked — zero writes)
+}
 
 export interface IngestResult {
   source: string;
@@ -26,24 +48,32 @@ export interface IngestResult {
   skipped: boolean; // the whole file was skipped (already ingested complete — zero writes)
 }
 
-// reextract: bypass the chunk memo (re-run extraction even for unchanged chunks) — use when the extraction
-// model or prompt changed, since the memo keys only on chunk content, not on how it was extracted.
-export async function ingestFile(
-  graph: Graph,
-  extractor: Extractor,
-  path: string,
+export interface IngestChunksOptions {
+  /** Re-chunk even if this document's content hash is already recorded as chunked. */
+  rechunk?: boolean;
+  extractorModel?: string;
   // `display` lets a caller override the title/provenance path WITHOUT touching identity, which is the
   // content hash and never the path. `tessera serve` needs this: an upload lands at a server-generated temp
   // path, and readDoc would otherwise persist that temp filename as the document's title forever.
-  opts: {
-    reextract?: boolean;
-    extractorModel?: string;
-    display?: { title?: string; source?: string };
-    /** Per-chunk progress. `tessera serve` streams this to the browser; a 20-page drop is ~6 minutes. */
-    onChunk?: (done: number, total: number) => void;
-  } = {},
-): Promise<IngestResult> {
+  display?: { title?: string; source?: string };
+  /** Per-chunk progress. Chunking is fast, but each chunk is still embedded, so this is not instant. */
+  onChunk?: (done: number, total: number) => void;
+  promptVersion?: string;
+}
+
+/**
+ * The FAST half of ingest: read, chunk, write the SOURCE and CHUNK nodes, record the manifest. No LLM
+ * extraction, so no unbounded loop and no long lock hold. After this returns, every chunk's raw text is
+ * durable and `extractPending` can finish the job later, from another process, after a crash, or after the
+ * source file has been deleted.
+ */
+export async function ingestChunks(
+  graph: Graph,
+  path: string,
+  opts: IngestChunksOptions = {},
+): Promise<ChunkIngestResult> {
   if (!isSupported(path)) throw new Error(`unsupported format: ${path} — tracer ingests .txt/.md only`);
+  const promptVersion = opts.promptVersion ?? PROMPT_VERSION;
   const read = readDoc(path);
   const doc = {
     ...read,
@@ -55,30 +85,38 @@ export async function ingestFile(
   // machine, behind a networked mount) dedup to one SOURCE; path is provenance only, never identity.
   const srcHash = docContentHash(doc.text);
 
-  // File-level skip: an unchanged doc already ingested to completion is a true no-op — no re-embed / re-putNode
-  // churn (a chunk-memo hit alone would still re-embed every chunk). Gated on status 'complete', so a prior
-  // 'partial' (a chunk failed to parse) falls through and re-ingests, with the chunk memo retrying only the
-  // failed chunks. A read-failure wrote no row → also re-enters here as new.
+  // File-level skip: a document whose chunks are already written is a true no-op — no re-embed / re-putNode
+  // churn. `status` now means "chunks durably written", not "extraction finished": extraction state is
+  // per-chunk, so a document with a failed chunk is no longer re-read from disk to retry it. That change is
+  // exactly what makes a chunk whose source file is gone reachable at all.
   const prior = graph.store.getIngestedSource(srcHash);
-  if (!opts.reextract && prior?.status === "complete") {
-    return { source: doc.source, title: doc.title, chunks: prior.chunkCount, entities: 0, edges: 0, parseFailures: 0, emptyChunks: 0, reused: prior.chunkCount, skipped: true };
+  if (!opts.rechunk && prior?.status === "complete") {
+    // sourceIdentity(), not the bare hash: `nodes.text` holds the identity STRING. Passing the hash returns
+    // no chunks, which silently turns "re-enter and retry the failed chunks" into a no-op.
+    const ids = graph.store.chunkIdsForSource(sourceIdentity(srcHash));
+    const queued = graph.store.dirtyChunks(promptVersion, { ids }).length;
+    return {
+      source: doc.source, title: doc.title, chunks: prior.chunkCount,
+      queued, reused: prior.chunkCount - queued, chunkIds: ids, skipped: true,
+    };
   }
 
   // SOURCE node — identity is the doc CONTENT hash (title/path are display/provenance); re-ingesting the same
-  // content reinforces the same source.
+  // content reinforces the same source. `subject` is persisted so extraction can stay subject-aware later
+  // without the file: without it, healing an old chunk would silently lose the KI-1 fix.
   const srcVec = await graph.embedder.embed(doc.title);
   const src = await graph.store.putNode(
     {
       type: "SOURCE", subtype: "document", origin: "ingest",
       text: sourceIdentity(srcHash), name: doc.title, description: `Document: ${doc.title}`,
-      provenance: { path: doc.source },
+      provenance: doc.subject ? { path: doc.source, subject: doc.subject } : { path: doc.source },
     },
     meta, srcVec,
   );
 
   const chunks = splitChunks(doc.text);
-  const known = new Map<string, string>();
-  let entities = 0, edges = 0, parseFailures = 0, emptyChunks = 0, reused = 0;
+  const chunkIds: string[] = [];
+  let reused = 0;
 
   for (let i = 0; i < chunks.length; i++) {
     opts.onChunk?.(i, chunks.length);
@@ -98,38 +136,57 @@ export async function ingestFile(
       { from: chunkNode.id, to: src.id, kind: "ORIGINATED_FROM", reason: `${label} is from ${doc.title}`, origin: "ingest" },
       meta,
     );
-
-    // Chunk memo: a chunk whose extraction previously COMPLETED (marked in extracted_chunks) is skipped — chunk
-    // identity is deterministic, so re-running the temp-0.4 extractor would only churn the graph AND repay the
-    // dominant LLM cost. Completion is marked AFTER the map below, so a crash mid-map leaves it unmarked and it
-    // retries (not silently frozen half-written). `reextract` forces a re-run (model/prompt bump).
-    if (!opts.reextract && graph.store.isExtracted(chunkNode.id)) {
-      reused++;
-      // NOTE: a skipped chunk does not repopulate the mapper's cross-chunk `known` map this run. Safe today —
-      // the LlmExtractor drops any relation whose endpoints aren't in the SAME chunk (extractor.ts), so `known`
-      // is effectively same-chunk. An extractor that emits cross-chunk relations would need `known` seeded from
-      // the store on skip (see docs/backlog.md "known-map on memo-skip").
-      continue;
-    }
-
-    const { extraction, parsed } = await extractor.extract(c.text, { subject: doc.subject });
-    if (!parsed) parseFailures++;
-    else if (extraction.entities.length === 0 && extraction.relations.length === 0) emptyChunks++;
-    const r = await mapExtraction(graph.store, graph.embedder, meta, extraction, known, { id: chunkNode.id, label });
-    entities += r.entityCount;
-    edges += r.edgeCount;
-    // Mark complete only on a successful PARSE (empty-but-parsed counts as done → don't re-pay the LLM for a
-    // genuinely empty chunk; a parse FAILURE stays unmarked → retried next time).
-    if (parsed) graph.store.markExtracted(chunkNode.id);
+    chunkIds.push(chunkNode.id);
+    if (graph.store.isExtracted(chunkNode.id, promptVersion)) reused++;
   }
 
   opts.onChunk?.(chunks.length, chunks.length);
-  // Record the file-level manifest: 'complete' unless a chunk failed to parse (then 'partial' → re-ingested
-  // next run so the failed chunks retry). This is what a corpus re-run reads to skip unchanged docs.
+  // The manifest now records only that chunking finished. parse_failures stays at 0 here and lives per-chunk
+  // in chunk_extraction_state, where it can be surfaced and retried instead of freezing a whole file.
   graph.store.recordIngestedSource({
     contentHash: srcHash, path: doc.source, title: doc.title,
-    status: parseFailures > 0 ? "partial" : "complete",
-    chunkCount: chunks.length, parseFailures, extractorModel: opts.extractorModel ?? null, at: Date.now(),
+    status: "complete",
+    chunkCount: chunks.length, parseFailures: 0, extractorModel: opts.extractorModel ?? null, at: Date.now(),
+  }, meta);
+
+  return {
+    source: doc.source, title: doc.title, chunks: chunks.length,
+    queued: chunks.length - reused, reused, chunkIds, skipped: false,
+  };
+}
+
+/**
+ * Chunk a file and extract it in one call — the synchronous convenience path.
+ *
+ * `tessera ingest` no longer uses this: the CLI chunks, and `tessera extract` extracts. It remains the
+ * honest composition of the two halves for callers that want the whole thing done before they return.
+ *
+ * `reextract` forces re-extraction of chunks already marked at the current prompt version.
+ */
+export async function ingestFile(
+  graph: Graph,
+  extractor: Extractor,
+  path: string,
+  opts: IngestChunksOptions & { reextract?: boolean } = {},
+): Promise<IngestResult> {
+  const promptVersion = opts.promptVersion ?? PROMPT_VERSION;
+  const chunked = await ingestChunks(graph, path, { ...opts, rechunk: opts.rechunk ?? opts.reextract });
+  if (chunked.skipped && chunked.queued === 0 && !opts.reextract) {
+    return {
+      source: chunked.source, title: chunked.title, chunks: chunked.chunks,
+      entities: 0, edges: 0, parseFailures: 0, emptyChunks: 0, reused: chunked.reused, skipped: true,
+    };
+  }
+  const drained = await extractPending(graph, extractor, {
+    promptVersion,
+    ids: chunked.chunkIds,
+    force: opts.reextract,
+    onChunk: opts.onChunk,
   });
-  return { source: doc.source, title: doc.title, chunks: chunks.length, entities, edges, parseFailures, emptyChunks, reused, skipped: false };
+  return {
+    source: chunked.source, title: chunked.title, chunks: chunked.chunks,
+    entities: drained.entities, edges: drained.edges,
+    parseFailures: drained.parseFailures, emptyChunks: drained.emptyChunks,
+    reused: chunked.chunks - drained.attempted, skipped: false,
+  };
 }

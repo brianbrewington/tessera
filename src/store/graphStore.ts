@@ -6,7 +6,10 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { createHash, randomUUID } from "node:crypto";
-import { ddl } from "../db/ddl.js";
+import { ddl, migrate } from "../db/ddl.js";
+// The memo table is an EXTRACTION memo, so its default salt comes from the prompt it describes. Imported
+// only to backfill pre-salt rows at migration time; every read/write path takes the version explicitly.
+import { PROMPT_VERSION } from "../extract/extractor.js";
 import { type Embedder, cosine } from "../embedder.js";
 import {
   Meta,
@@ -106,6 +109,22 @@ export interface GraphStoreOptions {
   embedder: Embedder;
 }
 
+/** A chunk owing extraction, carrying everything an extractor needs without touching the filesystem. */
+export interface DirtyChunk {
+  id: string;
+  name: string | null;
+  /** The chunk's raw text. This is why a deleted source file no longer means an unhealable chunk. */
+  text: string | null;
+  /** null = never extracted; a different value = extracted under an older prompt. */
+  storedVersion: string | null;
+  attempts: number;
+  lastError: string | null;
+  provenance: Record<string, unknown> | null;
+  sourceId: string | null;
+  sourceName: string | null;
+  sourceProvenance: Record<string, unknown> | null;
+}
+
 export class GraphStore {
   private db: Database.Database;
   private embedder: Embedder;
@@ -118,6 +137,7 @@ export class GraphStore {
     this.db.pragma("busy_timeout = 5000"); // writers serialize behind BEGIN IMMEDIATE, don't error
     sqliteVec.load(this.db);
     this.db.exec(ddl(this.embedder.dim));
+    migrate(this.db, PROMPT_VERSION);
   }
 
   close(): void {
@@ -726,14 +746,213 @@ export class GraphStore {
   countEdges(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM edges").get() as { n: number }).n;
   }
-  // Chunk extraction memo (see ddl `extracted_chunks`). `markExtracted` is called only AFTER a chunk's
-  // extraction fully completed, so `isExtracted` is a true completion predicate — a chunk that crashed
-  // mid-map or failed to parse is NOT marked and will be retried on re-ingest. Idempotent.
-  markExtracted(chunkId: string): void {
-    this.db.prepare("INSERT OR IGNORE INTO extracted_chunks (chunk_id) VALUES (?)").run(chunkId);
+  // ---- Chunk extraction memo + dirty-chunk queue (see ddl `extracted_chunks`, `chunk_extraction_state`).
+  //
+  // `markExtracted` is called only AFTER a chunk's extraction fully completed, so the memo is a true
+  // COMPLETION predicate — a chunk that crashed mid-map or failed to parse is not marked and stays dirty.
+  // Salted by promptVersion: extracted under an older prompt counts as dirty, not clean.
+
+  /** Mark a chunk extracted under `promptVersion`. Idempotent; also clears any claim and attempt history. */
+  markExtracted(chunkId: string, promptVersion: string, meta: Meta): void {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    this.db.transaction(() => {
+      // ON CONFLICT UPDATE, not OR IGNORE: re-extraction after a PROMPT_VERSION bump must overwrite the old
+      // version, or the chunk would stay dirty forever and be re-extracted on every run.
+      this.db
+        .prepare(
+          `INSERT INTO extracted_chunks (chunk_id, prompt_version) VALUES (?, ?)
+           ON CONFLICT(chunk_id) DO UPDATE SET prompt_version = excluded.prompt_version`,
+        )
+        .run(chunkId, promptVersion);
+      // Success resets the attempt count, so a chunk that failed twice before succeeding is not still
+      // reported as "failing" the next time a version bump makes it dirty again.
+      this.db
+        .prepare(
+          `INSERT INTO chunk_extraction_state (chunk_id, attempts, last_error, last_attempt_at, claimed_by, claimed_at)
+           VALUES (?, 0, NULL, ?, NULL, NULL)
+           ON CONFLICT(chunk_id) DO UPDATE SET
+             attempts = 0, last_error = NULL, last_attempt_at = ?, claimed_by = NULL, claimed_at = NULL`,
+        )
+        .run(chunkId, at, at);
+      // B23: the memo used to mutate without a log row, so a replay rebuilt the graph but not the memo and
+      // would re-pay the LLM for every chunk. Logged now that extraction is a first-class, resumable step.
+      this.log(m, at, "markExtracted", chunkId, null, { promptVersion });
+    }).immediate();
   }
-  isExtracted(chunkId: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM extracted_chunks WHERE chunk_id = ?").get(chunkId);
+
+  isExtracted(chunkId: string, promptVersion: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM extracted_chunks WHERE chunk_id = ? AND prompt_version = ?")
+      .get(chunkId, promptVersion);
+  }
+
+  /**
+   * Claim a chunk for extraction. Returns false if someone else holds a live claim.
+   *
+   * The whole exclusivity mechanism is the WHERE clause: SQLite serializes the UPDATE, so either this
+   * transaction changed the row or it did not. No staleness heuristic guarding another staleness heuristic.
+   * `ttlMs` bounds a claim held by a process that died mid-extraction; expiry costs at worst a double
+   * extraction, which is reinforcement churn rather than corruption.
+   */
+  claimChunk(chunkId: string, claimant: string, now: number, ttlMs: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare("INSERT OR IGNORE INTO chunk_extraction_state (chunk_id) VALUES (?)").run(chunkId);
+      const r = this.db
+        .prepare(
+          `UPDATE chunk_extraction_state SET claimed_by = ?, claimed_at = ?
+           WHERE chunk_id = ? AND (claimed_at IS NULL OR claimed_at <= ?)`,
+        )
+        .run(claimant, now, chunkId, now - ttlMs);
+      return r.changes === 1;
+    }).immediate() as boolean;
+  }
+
+  releaseChunkClaim(chunkId: string): void {
+    this.db
+      .prepare("UPDATE chunk_extraction_state SET claimed_by = NULL, claimed_at = NULL WHERE chunk_id = ?")
+      .run(chunkId);
+  }
+
+  /** A chunk was attempted and did not complete. Bumps attempts, records why, releases the claim. */
+  recordExtractionFailure(chunkId: string, error: string, now: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO chunk_extraction_state (chunk_id, attempts, last_error, last_attempt_at)
+         VALUES (@id, 1, @err, @at)
+         ON CONFLICT(chunk_id) DO UPDATE SET
+           attempts = attempts + 1, last_error = @err, last_attempt_at = @at,
+           claimed_by = NULL, claimed_at = NULL`,
+      )
+      .run({ id: chunkId, err: error.slice(0, 2000), at: now });
+  }
+
+  /**
+   * Chunks owing extraction at `promptVersion`: no memo row at all (never extracted) or a row at a
+   * different version (stale prompt). `storedVersion` distinguishes the two — a background drain heals
+   * only never-extracted chunks, because re-extracting a whole corpus after a prompt bump is a decision
+   * a user should make, not something a file drop triggers.
+   */
+  /** Chunk ids belonging to a SOURCE, by its identity string, in chunk order. */
+  chunkIdsForSource(sourceIdentityText: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT n.id
+           FROM nodes n
+           JOIN edges e ON e.from_id = n.id AND e.kind = 'ORIGINATED_FROM'
+           JOIN nodes s ON s.id = e.to_id AND s.text = ?
+           WHERE n.subtype = 'chunk'
+           ORDER BY COALESCE(json_extract(n.provenance, '$.index'), 2147483647), n.rowid`,
+        )
+        .all(sourceIdentityText) as Array<{ id: string }>
+    ).map((r) => r.id);
+  }
+
+  dirtyChunks(
+    promptVersion: string,
+    opts: {
+      includeStale?: boolean; maxAttempts?: number; limit?: number; ids?: string[];
+      /** Drop the dirty predicate entirely — the `--reextract` path, which re-runs already-clean chunks. */
+      includeClean?: boolean;
+    } = {},
+  ): DirtyChunk[] {
+    // `ids` is an optional restriction (ingestFile extracts only the file it just chunked). Interpolated as
+    // a placeholder list, never as values — the ids are still bound.
+    const idFilter = opts.ids ? ` AND n.id IN (${opts.ids.map(() => "?").join(",")})` : "";
+    if (opts.ids && opts.ids.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT n.id, n.name, n.description AS text, n.provenance,
+                e.prompt_version AS storedVersion,
+                COALESCE(s.attempts, 0) AS attempts, s.last_error AS lastError,
+                src.id AS sourceId, src.name AS sourceName, src.provenance AS sourceProvenance
+         FROM nodes n
+         LEFT JOIN extracted_chunks e ON e.chunk_id = n.id
+         LEFT JOIN chunk_extraction_state s ON s.chunk_id = n.id
+         LEFT JOIN edges eo ON eo.from_id = n.id AND eo.kind = 'ORIGINATED_FROM'
+         LEFT JOIN nodes src ON src.id = eo.to_id
+         WHERE n.subtype = 'chunk'
+           AND (? = 1 OR e.chunk_id IS NULL OR e.prompt_version IS NOT ?)
+           AND (? = 1 OR ? = 1 OR e.chunk_id IS NULL)
+           AND COALESCE(s.attempts, 0) < ?${idFilter}
+         ORDER BY n.rowid
+         LIMIT ?`,
+      )
+      .all(
+        opts.includeClean ? 1 : 0,
+        promptVersion,
+        opts.includeClean ? 1 : 0,
+        opts.includeStale === false ? 0 : 1,
+        opts.maxAttempts ?? Number.MAX_SAFE_INTEGER,
+        ...(opts.ids ?? []),
+        opts.limit ?? -1, // SQLite: LIMIT -1 means no limit
+      ) as Array<Record<string, unknown>>;
+    const parse = (v: unknown): Record<string, unknown> | null =>
+      v ? (JSON.parse(v as string) as Record<string, unknown>) : null;
+    return rows.map((r) => ({
+      id: r.id as string,
+      name: (r.name as string | null) ?? null,
+      text: (r.text as string | null) ?? null,
+      storedVersion: (r.storedVersion as string | null) ?? null,
+      attempts: r.attempts as number,
+      lastError: (r.lastError as string | null) ?? null,
+      provenance: parse(r.provenance),
+      sourceId: (r.sourceId as string | null) ?? null,
+      sourceName: (r.sourceName as string | null) ?? null,
+      sourceProvenance: parse(r.sourceProvenance),
+    }));
+  }
+
+  /**
+   * The first chunk of a source, by recorded chunk index. Used to recover a persona document's subject for
+   * graphs ingested before the subject was persisted on the SOURCE node: the PROFILE: header lives in chunk
+   * zero, exactly where readDoc found it. Without this, re-extracting an old chunk would lose subject-aware
+   * extraction and silently reintroduce KI-1 for precisely the chunks that most need healing.
+   */
+  firstChunkText(sourceId: string): string | null {
+    const r = this.db
+      .prepare(
+        `SELECT n.description AS text
+         FROM nodes n
+         JOIN edges e ON e.from_id = n.id AND e.kind = 'ORIGINATED_FROM' AND e.to_id = ?
+         WHERE n.subtype = 'chunk'
+         ORDER BY COALESCE(json_extract(n.provenance, '$.index'), 2147483647), n.rowid
+         LIMIT 1`,
+      )
+      .get(sourceId) as { text: string | null } | undefined;
+    return r?.text ?? null;
+  }
+
+  /** Counts for `tessera report`, `GET /status` and the viewer badge. Cheap: three aggregate scans. */
+  dirtyCounts(promptVersion: string, failingAt = 3): {
+    chunks: number; dirty: number; never: number; stale: number; failing: number;
+  } {
+    const r = this.db
+      .prepare(
+        `SELECT
+           count(*) AS chunks,
+           sum(CASE WHEN e.chunk_id IS NULL OR e.prompt_version IS NOT @v THEN 1 ELSE 0 END) AS dirty,
+           sum(CASE WHEN e.chunk_id IS NULL THEN 1 ELSE 0 END) AS never,
+           sum(CASE WHEN e.chunk_id IS NOT NULL AND e.prompt_version IS NOT @v THEN 1 ELSE 0 END) AS stale,
+           sum(CASE WHEN (e.chunk_id IS NULL OR e.prompt_version IS NOT @v)
+                     AND COALESCE(s.attempts, 0) >= @failingAt THEN 1 ELSE 0 END) AS failing
+         FROM nodes n
+         LEFT JOIN extracted_chunks e ON e.chunk_id = n.id
+         LEFT JOIN chunk_extraction_state s ON s.chunk_id = n.id
+         WHERE n.subtype = 'chunk'`,
+      )
+      .get({ v: promptVersion, failingAt }) as Record<string, number | null>;
+    return {
+      chunks: r.chunks ?? 0, dirty: r.dirty ?? 0, never: r.never ?? 0,
+      stale: r.stale ?? 0, failing: r.failing ?? 0,
+    };
+  }
+
+  /** Reset the attempt counters so `--retry-failed` can reach chunks a drain has given up on. */
+  clearExtractionFailures(): number {
+    return this.db.prepare("UPDATE chunk_extraction_state SET attempts = 0, last_error = NULL").run()
+      .changes as number;
   }
 
   // Ingest manifest (see ddl `ingest_sources`). File-level record keyed on doc content hash — lets a corpus
@@ -749,16 +968,24 @@ export class GraphStore {
     contentHash: string; path: string | null; title: string | null;
     status: "complete" | "partial"; chunkCount: number; parseFailures: number;
     extractorModel: string | null; at: number;
-  }): void {
-    this.db
-      .prepare(
-        `INSERT INTO ingest_sources (content_hash, path, title, status, chunk_count, parse_failures, extractor_model, ingested_at)
-         VALUES (@contentHash, @path, @title, @status, @chunkCount, @parseFailures, @extractorModel, @at)
-         ON CONFLICT(content_hash) DO UPDATE SET
-           path=@path, title=@title, status=@status, chunk_count=@chunkCount,
-           parse_failures=@parseFailures, extractor_model=@extractorModel, ingested_at=@at`,
-      )
-      .run(rec);
+  }, meta: Meta): void {
+    const m = Meta.parse(meta);
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO ingest_sources (content_hash, path, title, status, chunk_count, parse_failures, extractor_model, ingested_at)
+           VALUES (@contentHash, @path, @title, @status, @chunkCount, @parseFailures, @extractorModel, @at)
+           ON CONFLICT(content_hash) DO UPDATE SET
+             path=@path, title=@title, status=@status, chunk_count=@chunkCount,
+             parse_failures=@parseFailures, extractor_model=@extractorModel, ingested_at=@at`,
+        )
+        .run(rec);
+      // B23: the file-level manifest used to mutate without a log row, so a replay would reconstruct the
+      // graph but not "which documents have been seen" and would re-ingest every unchanged doc.
+      this.log(m, rec.at, "recordIngestedSource", rec.contentHash, null, {
+        status: rec.status, chunkCount: rec.chunkCount, parseFailures: rec.parseFailures,
+      });
+    }).immediate();
   }
   // Provenance read (see ddl `assertion_sources`): the grounding node ids recorded for an assertion, sorted.
   assertionSources(assertionId: string): string[] {

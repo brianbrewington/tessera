@@ -109,7 +109,9 @@ describe("ingestFile — the file-level manifest skip", () => {
     expect(r1.skipped).toBe(false);
     const after1 = calls;
 
-    const r2 = await ingestFile(g, extractor, p); // must NOT skip — status was 'partial'
+    // Must NOT skip. The manifest row now says 'complete' (chunks are written), so what re-enters is the
+    // per-chunk dirty state: an unparsed chunk has no extracted_chunks row and is still owed.
+    const r2 = await ingestFile(g, extractor, p);
     expect(r2.skipped).toBe(false);
     expect(calls).toBeGreaterThan(after1); // the failed chunk retried
     store.close();
@@ -121,8 +123,8 @@ describe("ingestFile — the file-level manifest skip", () => {
     const good = JSON.stringify({ entities: [{ name: "Zulu", type: "CONCEPT", description: "z" }], relations: [] });
     let calls = 0;
     // Only the very first extraction call parses; every later call in this store returns garbage. So chunk 1
-    // completes+memoizes, the rest fail → 'partial'; on re-ingest chunk 1 is a memo hit (no call) and the
-    // failed chunks retry — the file-level skip does NOT shadow this because status is 'partial'.
+    // completes+memoizes and the rest fail; on re-ingest chunk 1 is a memo hit (no call) and the failed
+    // chunks retry — the file-level skip does not shadow this, because extraction is gated per chunk now.
     const extractor = new LlmExtractor(new StubChat(() => { calls++; return calls === 1 ? good : "not json"; }));
     const dir = mkdtempSync(join(tmpdir(), "tessera-memohit-"));
     const p = join(dir, "doc.md");

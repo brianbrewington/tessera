@@ -10,6 +10,21 @@ export interface Doc {
   subject?: string; // the PERSON this document is about (personas) — drives subject-aware extraction; else undefined
 }
 
+/**
+ * persona docs: the subject is the PROFILE: name — but ONLY when it's the document's FIRST non-blank line (a
+ * persona header). A "PROFILE:" line quoted deep in a report or transcript must NOT steer extraction
+ * person-ward, and a `\s*` that spans newlines must not grab the next line. Drives subject-aware
+ * extraction (KI-1).
+ *
+ * Exported because store-driven extraction has to recover the subject WITHOUT the file, for graphs ingested
+ * before the subject was persisted on the SOURCE node. It reads the same header out of chunk zero, so the two
+ * paths must agree by construction rather than by two copies of one regex staying in sync.
+ */
+export function subjectFromText(text: string): string | undefined {
+  const firstLine = text.replace(/^\s+/, "").split("\n", 1)[0] ?? "";
+  return firstLine.match(/^PROFILE:[ \t]*(.+)$/)?.[1]?.trim() || undefined;
+}
+
 const SUPPORTED = new Set([".txt", ".md", ".markdown", ".text"]);
 
 export function isSupported(path: string): boolean {
@@ -68,11 +83,7 @@ export function readDoc(path: string): Doc {
   if (fm) text = text.slice(fm[0].length);
   const h1 = text.match(/^#\s+(.+)$/m);
   if (h1?.[1]) title = h1[1].trim();
-  // persona docs: the subject is the PROFILE: name — but ONLY when it's the document's FIRST non-blank line (a
-  // persona header). A `PROFILE:` line quoted deep in a report/transcript must NOT steer extraction person-ward,
-  // and a `\s*` that spans newlines must not grab the next line. Drives subject-aware extraction (KI-1).
-  const firstLine = text.replace(/^\s+/, "").split("\n", 1)[0] ?? "";
-  const subject = firstLine.match(/^PROFILE:[ \t]*(.+)$/)?.[1]?.trim() || undefined;
+  const subject = subjectFromText(text);
   if (subject) title = subject;
   return { source, title, text: text.trim(), subject };
 }

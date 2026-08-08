@@ -85,6 +85,24 @@ Output ONLY a JSON object — no markdown fence, no prose:
 
 In descriptions, use third person and name subjects explicitly (never "this document" / "the persona"). Output the JSON object only.`;
 
+/**
+ * Salt for the chunk extraction memo. A chunk counts as extracted only if it was extracted under THIS
+ * version, so bumping this re-dirties every chunk in every graph and `tessera extract` heals them at
+ * whatever pace the user chooses.
+ *
+ * BUMP THIS whenever EXTRACTION_SYSTEM or subjectClause changes in a way that would change output.
+ * Without the salt, a graph ingested under an old prompt keeps its stale extractions forever unless
+ * someone remembers `--reextract` — and nobody remembers. test/extract-prompt-version.test.ts pins a
+ * fingerprint of the prompt text, so editing the prompt without bumping this fails the suite rather
+ * than silently freezing the old output.
+ *
+ * Deliberately a hand-maintained constant rather than a hash OF the prompt: `serve` drains dirty chunks
+ * in the background, so a derived version would let a cosmetic typo fix silently re-pay the LLM for a
+ * whole corpus on the next drop. The pinned test supplies the "can't forget"; the constant keeps the
+ * "when" a deliberate decision.
+ */
+export const PROMPT_VERSION = "1";
+
 const norm = (s: string): string => s.trim().toLowerCase();
 
 /** Each balanced {...} group in a string (brace-counting, string-aware), left to right — tolerant of chatty
