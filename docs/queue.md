@@ -71,13 +71,18 @@ than what it can hold, KI-3 moves to the top.
 | 2 | **Media manifest** — byte-hash images, link to parents, no VLM, no extraction | **DONE** 2026-08-08 | Bytes in `media_blobs`, identity = sha256 of bytes, one node per distinct image with an edge to every parent. Never a dirty chunk, never captioned. |
 | 3 | **Session-log ingest** — Claude Code JSONL, prose only | **DONE** 2026-08-08 | `./tessera ingest-session`. Stream-addressed session, turn keyed by record uuid, speaker + timestamp in provenance, no SESSION/AGENT node minted. Kill test passed: a plain SOURCE sufficed. |
 | 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | **NEXT (start here)** | *"not particularly snappy, in my opinion."* Detail below. |
+| 14 | **Dedup experiments, E0+E1 session** | NEXT (after 4) | Read-only, zero chat calls, under an hour plus 15 min of Brian. Placed after 4, not before it: Brian's sequencing for 4 stands, and nothing couples the two. Protocol, controls and pre-committed verdicts: `docs/dedup-experiment-protocol.md`. |
+| 15 | **Resolution view, slice 1** (forms table + read-time union + first anti-edge writer) | NEXT (after 14) | Deterministic, zero LLM calls; testgraph's entity view goes 1714 → ~1394 with no stored row touched. After 14 because E0's frozen labels supply its acceptance counts. Reasoning: `backlog.md`, "Identity as a read-time resolution view" (B27). |
 | 5 | **Provenance-scoped delete** | BLOCKED-BY-DESIGN | Gates pointing any generator at a real graph. Origin marking exists; removal does not. Until it does, first dream ingest goes at a throwaway graph. |
 | 6 | **`HEBBIAN_ASSOC` first writer** | DEFERRED | The one edge a dream exists to produce. Its acceptance test, when the dream path is built. |
-| 7 | **I1 extraction quality** — KI-3, then B5 layer 1, then B7 | DEFERRED, condition below | Promote to #1 the moment we want to claim anything about corpus-scale results. |
+| 7 | **I1 extraction quality** — KI-3, then B7 | DEFERRED, condition below | Promote to #1 the moment we want to claim anything about corpus-scale results. B5 layer 1 has moved: it is now slice 1 of the resolution view (item 15); the jitter half of KI-3 dissolves at read there, the generic-entities half stays prompt work here. |
 | 8 | **SESSION / AGENT node types** | DEFERRED | Until a runner exists or the structural predicate replaces `mode`. See Object model depth. |
 | 9 | **Dream / walk runners** | DEFERRED | Standing rule: not until ingest is solid. |
 | 10 | **Slice 4** — provenance in the layout | DEFERRED | Removes the 36.6 s `h`-toggle cliff by construction. Changes geometry, so not while ingest topology is moving. |
-| 11 | **Clustering / mining experiment** | DEFERRED | Fully specified and read-only. Gated on B5 for the Connector half; the measurement half could run any time. |
+| 11 | **Clustering / mining experiment** | DEFERRED | Fully specified and read-only. Gated on the resolution view (B27, which superseded B5 in shape) for the Connector half; the measurement half could run any time. |
+
+Items 14 and 15 are numbered past 12 and 13 (the raised-needs-a-plan items below) and slotted by table
+position, not by number.
 
 ---
 

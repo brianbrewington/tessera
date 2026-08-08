@@ -55,6 +55,10 @@ cosine-at-creation is EXACTLY what we disabled (`nearDupMerge:false`) because it
   a real corpus. Then the Connector runs on an already-clean node set (dedup precedes it — that's the ordering).
 Composes with the item below + KI-3.
 
+*2026-08-08: superseded in shape by "Identity as a read-time resolution view" (B27, end of this file);
+preserved in substance there. Layer 1 becomes B27 slice 1; Layer 2 becomes B27 slice 2, with the verified
+outcome landing as a SAME_AS edge feeding a view union rather than a collapse at `putNode`.*
+
 ## Connector — before the first REAL-corpus run (cross-review fast-follows, Codex + Fable)
 The merge-blocking findings are fixed (de-anchor gate now enforced via `reasonIsAnchored`, cap clamped in the
 core, `measureCosineDistribution` stride-sampled, same-family refused in `runConnector`). These three are safe to
@@ -315,6 +319,15 @@ real, which `docs/specs/graph-store-spec-v2.md:178` (portable export) implies it
 it. Fix options: log both as first-class ops, or explicitly document them as derived-cache tables excluded from
 replay (and make `export` carry them separately). Decide before the export/restore primitive lands.
 
+**RESOLVED 2026-08-08 — the first option was taken.** `markExtracted` and `recordIngestedSource` both append
+to `mutation_log` now (they gained a `Meta` argument and run inside the same transaction as their write), and
+graphs/testgraph carries 318 `markExtracted` and 23 `recordIngestedSource` ops to prove it. So the replay gap
+described above is closed for those two paths. Two things this does NOT settle, both still open: the newer
+derived-cache tables (`chunk_extraction_state`, `media_blobs`, and any `node_forms`) are deliberately excluded
+from replay and are documented as such at their DDL, which is the second option applied to the tables that
+earned it; and `export`/`restore` still does not exist, so nothing has ever replayed in anger. Flagged by the
+agent writing B27, which is the argument for re-reading a backlog entry before trusting its tense.
+
 ## Slice-3 (`tessera serve`) — open items with explicit dispositions
 
 Recorded because a finding without a disposition is a finding that quietly becomes the default behaviour.
@@ -468,3 +481,214 @@ course, which is an argument for it independent of latency.
 
 **Not this round** (Brian). Recorded now because it is the tractable answer to a risk we just accepted, and
 because the two dirty chunks are evidence the model is already real and already unobserved.
+
+## Identity as a read-time resolution view (B27, 2026-08-08): supersedes B5 in shape, preserves it in substance
+
+Placed at the end rather than beside "Object model depth" deliberately: backlog items are referenced by
+position (B2, B5, B23, B25 appear in `ddl.ts` comments and `queue.md`), and a mid-file insert would silently
+renumber them. This is the second object-model thread; the SESSION delta under "Object model depth" is the
+first. Companion: `docs/dedup-experiment-protocol.md`, the pre-registered experiments that gate slices 2 and
+3 below.
+
+**The recommendation, in one paragraph.** Keep write-time identity exactly as it is (type+name mints a row;
+the raw layer never guesses) and build identity as a READ-TIME RESOLUTION VIEW: a deterministic `node_forms`
+key table computed from each node's name, a union over nodes sharing a form, minus any pair carrying an
+ANTI-EDGE, plus verified SAME_AS edges from an LLM reconciler that reads the originating chunk and is asked
+one-to-many. A merge is a view, never a rewrite: nothing deleted (there is no delete), nothing derived
+stored (so nothing goes stale), and no edge re-adjudication cascade, because edges keep raw endpoints and
+are aggregated at read. Anti-edges and merge verdicts land on existing edge machinery (kind `SAME_AS`,
+polarity supports|contradicts, reason in `edge_assertions`, originating chunk in `assertion_sources`). The
+reconciler is a stateless processor like the Connector, not a store primitive. The first slice is
+deterministic-only: 1714 entities resolve to ~1394 on testgraph without touching a stored row. testgraph is
+the tuning corpus and is never deduped in place. Brian: *"the nice thing? We have a giant test corpus to
+tune on now! So, don't get in a hurry to de-dupe it."*
+
+### A correction first, because the record should show it
+
+An earlier session told Brian there were **81 name-variance groups**. That was misleading: case-only
+variants already normalise to the same identity key (`norm()` lowercases before hashing), so most of the 81
+were **type jitter wearing a name-variance costume**. Verified 2026-08-08 against
+`graphs/testgraph/graph.db`: **202 type-jitter groups** (same normalized name, more than one extracted
+subtype; 469 nodes, 362 cross-type pairs), and **219 stripped-form groups containing more than one node**,
+of which **48 have genuine name variance** (58 pairs) and 171 are pure type jitter. The full measurement
+record, including two more corrections (the "all descriptions mention tessera" suspicion is false at 98 of
+1714, and the stored vectors are nomic-embed-text over `name + ". " + description`, so Brian's remembered
+name-only low-90s threshold transfers nothing), lives in `docs/dedup-experiment-protocol.md` §1.
+
+### The frame-break: type is the caption
+
+The problem is not "dedup is missing". It is that **identity is keyed on nondeterministic model output**.
+`entityIdentity(type, name)` bakes the extractor's type verdict into the content hash, and a 14-way subtype
+rubric at temp 0.4 jitters: `tessera` exists five ways (project s=8, technology s=7, product s=12,
+organization s=4, concept s=2), `Connector` six ways, `mutation_log` six ways, `settle` seven. The repo
+already states the governing principle against itself, in `mediaIdentity`'s comment: keying on a caption
+would make identity depend on nondeterministic output. **Type is the caption.**
+
+Two ways out, argued:
+
+- **(a) Take type out of the identity string.** Dissolves the 202 groups at the source, BUT: it changes
+  every content_hash, so every existing graph re-mints every entity on re-ingest with no delete to clean up;
+  it contradicts the recorded decision that `place\tjava` and `concept\tjava` are distinct; and it forces
+  homograph separation to be perfect at write time, which is the over-merge failure (0.85 cosine, "ANN"
+  swallowed 92) already paid for once.
+- **(b) Leave the stored key alone; demote it from "identity" to "evidence bucket".** Readers get identity
+  from a resolution view. The class is dissolved for every consumer, the recorded decision survives as "the
+  raw layer never guesses", migration cost is zero, and the evidence stays preserved for tuning. Honest
+  cost: rows keep minting at the jitter rate, strength stays fragmented at the raw layer until the view sums
+  it, and every read surface must eventually go through the view.
+
+**Recommendation: (b). Type stops being identity without ever leaving the identity string.**
+
+On the cascade Brian worried about, verbatim: *"all edges to a merged node may need to get re-adjudicated,
+somehow? <true, and, .... OOF that could get expensive even if it's right"*. Under (b) the cascade cannot
+happen, structurally: merging is never a write, edges never move, and the aggregate is recomputed at read.
+
+**Types as a distribution come free** under (b) and need no schema: a resolved node's type is the
+strength-weighted histogram of its members' subtypes, collapsing toward the argmax as evidence accumulates.
+Nothing stored, nothing to re-adjudicate.
+
+### What already exists (verified 2026-08-08)
+
+- **The reconciler in miniature.** `putNode`'s reinforce branch already merges name (fill-if-empty), keeps
+  the richer description, re-embeds on upgrade, bumps strength and version, and logs before/after. It fires
+  only on exact identity match; the view generalises exactly this aggregation to form-sharing groups.
+- **The anti-edge shape.** Edges carry kind+polarity (`contradicts` sits unused in the enum; polarity is
+  `''` on all 3846 testgraph edges), `edge_assertions` carries a prose reason, `assertion_sources` carries
+  set-valued grounding chunk ids, and every edge has status proposed|durable. Brian's anti-edge, verbatim:
+  *"the name proposal that's rejected should carry its associated originating chunk... like an anti-edge. 'I
+  may not be the same as node <other-ID>, with certainty <confidence>'."* That is representable today as ONE
+  new Zod enum value (`SAME_AS`) and zero DDL (`edges.kind` is unconstrained TEXT). The one deviation from
+  the verbatim, deliberate and argued below: no stored certainty number.
+- **The verifier discipline.** `connector.ts` has the whole pattern: geometry proposes and never decides,
+  two gates in diverse model families, `buildNodeContext` walking `APPEARED_IN` for a provenance chunk,
+  dry-run sidecar by default, no numeric confidence stored.
+- **The sure-enough seam.** Brian: *"there has to be a point when we're sure-enough of something."* The seam
+  for that already exists: `status` on every node and edge, `promoteNode` (one caller, a test), and the
+  empty shared vector tiers ARE the promotion machinery. Do not invent a parallel confidence system.
+- **A deterministic homograph signal nobody uses.** The mapper's `here` map already detects a name splitting
+  into two typed nodes WITHIN ONE CHUNK: the extractor asserting in one breath that these are two things.
+  Today it only guards relation wiring. It is the correct first anti-edge writer, at zero LLM cost.
+- The `typeConflict` guard in `putNode` is reachable only via the opt-in cosine path (`nearDupMerge`, 0.99,
+  never passed by any caller) and has fired zero times on testgraph. `SAME_AS` edges never touch it, because
+  they do not touch either node.
+
+### What is missing
+
+1. **A `node_forms` table**: `(form TEXT, node_id TEXT REFERENCES nodes(id), PRIMARY KEY(form, node_id))`
+   plus an index on form. A form is a deterministic key from the node's name: stripped
+   case/whitespace/punctuation/backticks/trailing `()`, snake/camel/space folded. A TABLE, not metadata
+   JSON, because forms are a KEY, not a comparison: "which nodes share this form" must be one indexed
+   lookup, and `json_each` cannot be indexed for that. Forms are pure functions of `nodes.name`, so this is
+   a derived cache in the `extracted_chunks` family: recomputable, excluded from replay, salted by a
+   `FORMS_VERSION` constant with the same pinned-test discipline as `PROMPT_VERSION`. Note: "unioned across
+   mentions" is automatically true today, because a variant spelling mints a variant identity and each row
+   derives its own forms; the union happens in the view. The day the extractor emits proposer forms
+   (Brian: *"it is ok to name your canonical form_s_ if you might have more than one. common forms bridge
+   the connection."*), those stop being derivable and must graduate to logged writes. Recorded now so the
+   graduation is a decision, not a drift.
+2. **The `SAME_AS` edge kind** (polarity `supports` = verified same; `contradicts` = anti-edge). One new
+   enum value in `schema.ts`; everything else rides `putEdge` unchanged, including grounding.
+3. **The resolution view in GraphStore, read-only**: union-find over (form-sharing groups + SAME_AS
+   supports) minus (SAME_AS contradicts pairs, which split their group), exposing `resolveIdentity():
+   Map<id, canonicalId>` and a lazy per-node aggregate (display name, summed strength, subtype histogram,
+   unioned edges and provenance). `reconcile` is NOT a store primitive. The store gains only reads plus form
+   maintenance; the reconciler is a processor-layer client, and merging is never a write.
+4. **The reconciler pass (slice 2)**: candidates from form intersection first (O(1) per node); embeddings
+   only for the residue where forms do not overlap (the Brian / Brian Brewington class); the verifier asked
+   ONE-TO-MANY, per Brian's framing; verdicts land as `SAME_AS` proposed edges with the chunk as grounding.
+   **No confidence numbers stored.** Three reasons, converging: Brian's NVIDIA experience scoring image
+   reconstruction with model-emitted numbers (*"it wasn't reliable."*), the DREAM instance's refusal of the
+   same idea, and the recorded `expert_surprise` watch item (geometry re-entering by the side door). What
+   would earn a number: a calibration curve of verifier verdicts against hand-labeled pairs on testgraph.
+   Until then, verdicts are binary and sureness is structural: independent verdicts from distinct chunks,
+   then promotion.
+5. **The anti-edge drop rule**: an anti-edge names two node ids; if either side is later absorbed into a
+   union, the exclusion is NOT carried to the survivor (Brian's steer: that comparison no longer exists).
+   Because merge is a view, "drop" is a read-time rule in the union-find, not a delete.
+
+### Caching (Brian's cost worry, answered)
+
+Brian, on compute-at-display: *"has to be smart about caching. My gut is that computation could be costly."*
+The answer: union-find over ~1.7k entities and a few hundred SAME_AS edges is sub-millisecond; the real cost
+is per-node aggregation. Cache key: `SELECT max(event_id) FROM mutation_log`, one integer read that
+invalidates precisely on any write. The serve process holds the resolution map in memory keyed on that
+integer and rebuilds on change; per-node aggregates memoize lazily under the same key. At 100k nodes, form
+grouping is one indexed scan and union-find is still linear; the escape hatch is a `resolution`
+derived-cache table in the `edge_prominence` family, invalidated by the same integer. And because nothing
+derived is stored, the re-adjudication cascade cannot happen: edges never move.
+
+### Smallest first slice, and what it refuses
+
+**Slice 1 (deterministic, zero LLM calls).** The form function + `node_forms` + the resolution view unioning
+nodes that share a stripped form, wired into `tessera report` and the viewer's node list; plus the mapper
+writing a `SAME_AS` contradicts anti-edge when one chunk splits a name into two types. Acceptance, measured
+in preview 2026-08-08: testgraph's entity view goes **1714 -> ~1394** (320 unions; `tessera` becomes one
+node with a 5-way subtype histogram, `mutation_log` one from six, `settle` one from seven; exact counts are
+fixed when `FORMS_VERSION` freezes the form function), and adding a single anti-edge visibly re-splits a
+union. **Refusals, by construction:** no embedding-based union; no LLM call; no union of differently-stripped
+names (so Brian / Brian Brewington stays split); no write-time merge; no stored-row change to testgraph.
+
+**Slice 2.** The reconciler pass: form-residue candidates via kNN, one-to-many verifier with the originating
+chunk, `SAME_AS` proposed edges, dry-run sidecar first, the Connector's two-gate and family-diversity
+discipline reused. Gated on the protocol's VERIFIER EARNED verdict (E3).
+
+**Slice 3, experiment-gated.** Fold form/alias proposal into the extraction call as one extra field. Brian's
+caveat governs, verbatim: it *"could sink a tiny LLM into confusion. We can try both ways and compare?"*
+Costs a `PROMPT_VERSION` bump plus per-chunk latency that the extract-performance analysis (queue item 4) is
+about to care about. Run it as the protocol's measured A/B (E4, with E5 as the separate-pass alternative) or
+not at all.
+
+### Interactions
+
+- **KI-3**: the type-jitter half is dissolved at read; the too-many-generic-entities half is untouched and
+  remains I1 prompt work. The tighter type rubric stays worth doing but stops being load-bearing.
+- **B5**: superseded in shape, preserved in substance. Layer 1 becomes slice 1's forms; Layer 2 becomes
+  slice 2's verifier, with one deliberate change: the verified outcome is a `SAME_AS` edge feeding a view
+  union, not a collapse at `putNode`, so an over-merge is one edge to contradict rather than 92 entities to
+  un-swallow.
+- **B7**: partially served, honestly stated. The verifier reading originating chunks prevents NEW
+  cross-persona merges of bare relational terms, and anti-edges record the refusals. It does NOT split
+  already-merged Grandmother rows: reinforcement collapsed those mentions, so per-mention evidence lives
+  only in `APPEARED_IN` and `mutation_log`. B7's preferred fix (extraction-side subject qualification, I1)
+  stands.
+- **The held-back Connector**: the ordering stands and strengthens. The Connector runs over the RESOLVED
+  view, so its candidate band stops being dominated by entity-resolution leakage (its own key finding). Its
+  kNN-slots-eaten-by-provenance fix should land as part of pointing it at the view.
+- **Unused machinery**: status/promotion adopted as the sure-enough seam, policy deferred.
+  `polarity: contradicts` adopted for anti-edges. `vec_*_shared` untouched. `promoteNode` still uncalled;
+  edge promotion is what the sure-enough gate needs first.
+
+### Open questions
+
+- Does stripped-name auto-union across types bite on a corpus with genuine homographs (`graphs/big`'s Java
+  place vs technology)? Measure there before defaulting cross-type union on; a per-graph flag is the cheap
+  hedge, and one anti-edge is the cure. (Hypothesis, not fact: jitter dominates homographs by more than 10:1
+  on technical corpora; testgraph measures ~171:48, `graphs/big` may differ.)
+- Which candidate-key functions beyond stripping are worth it for the residue (token-subset keys, so `Brian`
+  proposes `Brian Brewington` as a candidate without auto-unioning)?
+- Strength semantics in the aggregate: sum overcounts overlap-driven duplicate mentions, max undercounts
+  corroboration. Pick after looking at real hubs through the view.
+- Whether the mapper's `known`-map endpoint resolution should consult the resolution view, and whether that
+  is a slice-1 freebie or a behavior change needing its own test.
+
+### Dispositions
+
+- **Option (a), type out of the identity string: REFUSED.** Re-mints every entity with no delete to clean
+  up, contradicts a recorded decision, and re-fights the over-merge war at write time.
+- **Write-time merge, any layer: REFUSED.** Merging is a view. This is what makes the OOF cascade
+  structurally impossible rather than carefully avoided.
+- **In-place dedup of testgraph: REFUSED.** It is the tuning corpus (Brian, verbatim above). Slice 1 cannot
+  violate this even by accident, because it changes no stored row.
+- **Stored confidence numbers on SAME_AS verdicts: REFUSED until a calibration curve exists** (verifier
+  verdicts against hand-labeled pairs on testgraph). Until then, binary verdicts; sureness is structural.
+- **Anti-edge drop rule: DECIDED** as a read-time rule in the union-find (the exclusion dies with the
+  comparison; it is not carried to a merge survivor).
+- **B5: SUPERSEDED IN SHAPE, preserved in substance**, per the Interactions bullet; a pointer now sits in
+  the B5 entry.
+- **Slice 1: PROPOSED**, queued as item 15 (after the E0+E1 experiment session; see `queue.md`).
+- **Slice 2: GATED** on `docs/dedup-experiment-protocol.md` E3's VERIFIER EARNED verdict.
+- **Slice 3: GATED** on E4's SAME-CALL EARNED verdict; refuted there means E5's separate pass is the design
+  of record. A measured A/B or not at all.
+- **Promotion policy for SAME_AS** (how many independent grounded verdicts = durable): **DEFERRED**, per
+  Brian.
+- **`known`-map consulting the view: OPEN** (see Open questions).
