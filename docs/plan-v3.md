@@ -85,7 +85,15 @@ retrieval index, not in RAG, not counted as structure.** **`promote`** (citation
 independent resurfacings for dream) copies the vector into the shared index and counts it toward prominence +
 Hebbian. Store-internal breaker: >5% sampled hallucination pauses auto-promotion, >10% disables proposal indexing.
 
-### Node types (v1 core — 16)
+### Node types (v1 core — 17)
+
+> **Correction, 2026-08-08.** This heading said 16; the list below has 17, which is also what
+> `src/schema.ts` declares. Found by the DREAM-side reviewer (`docs/reviews/session-object-model-round1-dream.md`).
+> Worth knowing while reading the rest: **6 of the 17 are ever written** (`SOURCE`, `PERSON`, `CONCEPT`,
+> `PROJECT`, `INSIGHT`, `MEMORY`). `AGENT`, `GOAL`, `QUESTION`, `CLAIM`, `QUOTE`, `SESSION`, `PATTERN`,
+> `CONFLICT`, `SYSTEM_FEEDBACK`, `ACTION` and `TASK` have no writer, and `promoteNode` has no caller outside
+> one test, so `vec_node_shared` and `vec_assert_shared` are empty on every real graph. The status lifecycle
+> described just above is a primitive that exists, not a pipeline step that runs.
 
 *Entities:* **PERSON** (human/synthetic persona — **including the operator/user, so promotions are
 attributable**) · **AGENT** (acts *on* the graph) · **PROJECT** · **GOAL**.
@@ -220,7 +228,11 @@ The three moves stand — **converge / synthesize / audit** — each now taking 
    rule, not the corrupted metric. Dedup for low-specificity archetypal questions keys on **(endpoint-pair + normalized
    question)**, since `content_hash`/cosine either false-merge all bridges or admit unbounded near-dups.
 3. **Move 3 — WALK is not a Store primitive.** A pathway = a `SESSION{mode:walk}` node (the mode-strategy runner already
-   exists) with ordinal-tagged member edges, or read straight off the ordered `mutation_log`. A callback = **one new value
+   exists) with ordinal-tagged member edges, or read straight off the ordered `mutation_log`.
+   > **Correction, 2026-08-08.** "the mode-strategy runner already exists" is false and always was: nothing
+   > writes `SESSION`, and no runner exists anywhere in the repo. A plan that claims a runner exists is how a
+   > later round skips asking whether it should. The same reviewer also argues `walk` should not be a SESSION
+   > mode at all, because a walk has no cast — see the Object model depth entry in `docs/backlog.md`. A callback = **one new value
    in the edge `kind` enum, `REFERENCES`** (existing `UNIQUE(from,to,kind,polarity)` gives idempotency). Synthesis = the
    guided-Dream client above. **The only genuine Store-contract change in the whole delta is the `get_heat` overlay read**
    — everything else is a client + one enum value. (Burden of proof, per Codex, unmet: no invariant here that

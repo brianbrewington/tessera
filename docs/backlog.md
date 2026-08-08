@@ -202,6 +202,103 @@ just retrieval.
   Manager/Engine/Service layering), preserving single-writer authority.
 - Reason **graduation**: an edge assertion graduates to a CLAIM/INSIGHT node when detachable + reusable + contestable.
 
+### SESSION: what changed, and what the boundary actually is (2026-08-08)
+
+**Brian:** *"there's more here. a DREAM or THINK-ABOUT is a self-directed SESSION. This is a lot. Needs a plan,
+which we can then throw in the backlog."* And later, on the review round itself: *"meta: the Claude 1-Claude 2
+conversation is a SESSION."*
+
+**No new plan was written, deliberately.** `docs/plan-v3.md` §4 already specifies SESSION with
+`mode: dream|conversation|interview|debate|reflection`, a single concrete session-runner
+(cast → transcript → residue → commit-gate), mode as a strategy object, and its own warning against doing it
+lazily ("five types in a trenchcoat"). Writing a second design would be copy-fork-edit, the anti-pattern
+`ideas-ledger.md` §10 names as preceding rot. What follows is the delta against §4. Everything in §4 remains
+unbuilt: nothing writes SESSION and no runner exists.
+
+**What changed since §4 was written.** One mode became real and measured, and a second turned out to have been
+real all along.
+- `mode: conversation` — Claude Code session logs. Measured on this project's own logs (5 JSONL files, 18 MB,
+  3551 records): by bytes of conversational payload, `tool_result` 45.7%, `tool_use` 23.3%, `thinking` 14.7%,
+  `image` 11.1%, `text` **5.2%**. Stripping system reminders, prose totals **274 KB** (78.9 KB Brian across 81
+  blocks, 195.4 KB assistant across 365). **1.5% of raw bytes.** So ingesting a session is a SELECTION problem,
+  not a conversion problem: converted literally it is ~12,000 chunks and ~25 hours; selected properly, ~187
+  chunks and ~23 minutes. Recorded here because these numbers existed only in a conversation.
+- `mode: review` — `docs/reviews/` is already a corpus of agent-to-agent sessions (26 records at the time of
+  writing), accumulated since the project started. Nobody planned it as one.
+
+**The finding (DREAM-side review, verbatim at `docs/reviews/session-object-model-round1-dream.md`).** §4 holds,
+but the boundary is drawn in the wrong place. The cut is **not** dream-versus-conversation; it is **cast arity
+plus alternation**. Of 186 real dream artifacts, **108 are troupe handoffs** with a session id, an explicit
+parent link and two named agents taking turns; the other **78 are single-pass**, one generation, no order worth
+replaying. So `dream` sits on *both* sides, which is why "does a dream fit SESSION" had no single answer. The
+proposed test is structural and checkable: **if `cast.length >= 2` and turns alternate, it is a SESSION.**
+
+**The amendment: name two objects, not five modes.** An **episode record** (identity, cast, order, turns,
+origin, timestamps) that both ingested and self-directed paths write, and a **generator** (selection, budget,
+breaker, commit policy) that only self-directed modes have. Ingest writes the record and no generator; a dream
+writes both. `mode` becomes a label describing which generator ran, not the thing that branches. This also
+dissolves the mode-conditional-nulls worry: the dreamer's ten governors live in its config, not in the row.
+
+**Blocker on §4 as written: `mode` cannot be stored.** There is no `mode` column on `nodes`, and
+`PutNodeInput` is `.strict()`, so the key is rejected at the boundary today. Cast, budget and transcript order
+have no home either. If SESSION is built, `mode` becomes a real column with a Zod enum, or the discriminator
+becomes the structural predicate above, which needs no column at all. **Do not put it in `metadata` JSON**: a
+strategy object branching on an unvalidated string means the first typo is a silent no-op branch.
+
+**Identity, decided in shape.** A SESSION is a stream, not a document: identity is an external stable id
+(`session\t<ns>\t<sessionId>`), never a content hash, because an append-only log re-hashed after every turn is
+"new content" forever. Its **turns** are the content-addressed units (`turn\t<ns>\t<sessionId>\t<uuid>`), and
+they ride the existing dirty/clean extraction machinery as a `SOURCE` subtype. Correctness comes from per-turn
+identity; a high-water mark is speed only, so losing the bookkeeping degrades to a full re-read rather than to
+duplication. Cost stated honestly: this introduces a **second identity regime** (documents are content-addressed,
+sessions are stream-addressed), which must be documented in `identity.ts` or someone will later "unify" them and
+reintroduce the duplication bug.
+
+**Generalisation worth taking seriously.** Chunk identity is `chunk\t<sourceContentHash>\t<sha16(text)>`, so
+growing *any* document changes every chunk key. Sessions are only where this surfaced first: a running notes
+file, a journal, and the teammate-stack's own append-mostly files have the same shape. The per-turn fix
+generalises directly to sections. **Scope the eventual increment as "append-only sources", with SESSION as its
+first consumer.** (Hypothesis, from both the author and the reviewer; not yet tested against the chunker.)
+
+**The constraint that binds session-log ingest, which is queued NOW.** Whatever ships must preserve **turns as
+parts, with speaker and timestamp**, and attribute extracted MEMORY/INSIGHT to speakers. If the first ingest
+flattens a transcript to prose, turn structure, attribution and the self-versus-other distinction are gone, and
+the unification is foreclosed. That is the entire design obligation today; the rest can wait.
+
+**The kill test.** Ingest one real session log through the ordinary document path (`SOURCE` plus structured
+parts) and ask whether any consumer needs it to be anything else. If a plain `SOURCE` suffices, the unification
+reduces to a pipeline-reuse claim provable the day a dream exists, at zero schema cost. If the transcript
+demonstrably needs runner semantics, that is the evidence to build SESSION, against a real artifact rather than
+two hypotheticals.
+
+**Dispositions.**
+- **New SESSION plan: REFUSED.** §4 is the design of record; this entry is the delta. Any future work is a
+  delta against §4, not a new document.
+- **SESSION and AGENT node types: DEFERRED** until a runner exists or the structural predicate replaces `mode`.
+  Adding two more writerless types to a ledger that already has 11 dead node types, 3 dead edge kinds and an
+  uncalled promote primitive makes the ledger worse, not better.
+- **`mode: walk`: PROPOSED FOR REMOVAL** from the mode list. A walk has no cast, so under the predicate above it
+  is not a SESSION. (`plan-v3.md` §10 Move 3 introduced it as a sixth mode after §4 listed five.)
+- **`origin` threading: DONE** (2026-08-08). `mapExtraction` and `extractPending` take an origin, and
+  `tessera report` counts nodes and assertions by origin. This was the reviewer's CRITICAL: there is no delete
+  for nodes or edges anywhere in the repo, so an unmarked self-directed product is permanently
+  indistinguishable from extracted fact.
+- **Provenance-scoped delete: OPEN, and it gates pointing any generator at a real graph.** Marking now exists;
+  removal does not. Until it does, **the first dream ingest goes at a throwaway graph.** Recorded as the
+  reviewer's explicit request.
+- **`HEBBIAN_ASSOC` has no writer**, and it is the one edge a dream exists to produce (the seed-to-association
+  pairing is the claim; extracting the association text alone does not recover it). If the dream path is built,
+  that edge getting its first writer is the acceptance test, not turn ingest.
+- **Dream/walk runners: stay DEFERRED** under the standing "no resonator, no dream, none of that until ingest is
+  solid" rule. This entry describes the object they would run on, not the organs.
+- **Attribution parity: OPEN on the dream side.** The dreamer's provenance is `turn <n> (role)`, an ordinal into
+  a filtered view that moves when the transcript grows or the filter changes, and it emits no record uuid. The
+  DREAM-side author offered to emit uuids so both paths satisfy one attribution contract. Until then, per-turn
+  attribution is true for ingested conversations and aspirational for dreams.
+- **`AGENT` keying: OPEN.** Per model id makes one node connected to everything that model ever said, which is
+  the over-connected-hub signal. The reviewer proposes `model id + prompt sha256`, on the evidence that the same
+  model under two prompts behaves like two participants.
+
 ## Named-graph management
 switch / rename / merge / delete; per-graph config (extraction model, embedder); an in-db `meta` row instead of the
 `meta.json` sidecar.
