@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+// The `tessera` command.
+//
+// Every hint the CLI prints ("run: tessera extract <graph>"), every command in the design docs, and every
+// example in the README named a binary that did not exist — the real invocation was
+// `npx tsx scripts/cli.ts`. A tool that tells you to type something unrunnable is the same class of quiet
+// dishonesty the rest of this repo works to avoid, so: this is that binary.
+//
+// A Node script rather than a shell script, for three reasons that all bit at some point:
+//   • it resolves its own location, so it works from any directory, through a symlink, and as an npm `bin`;
+//   • npm generates a .cmd wrapper for it on Windows, which it cannot do for bash;
+//   • it can fail with an instruction instead of a stack trace when the dependency is missing.
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// realpathSync so a symlink into ~/.local/bin (or npm link) still finds the repo it points at, rather than
+// looking for node_modules next to the symlink.
+const root = dirname(realpathSync(fileURLToPath(import.meta.url)));
+const tsx = join(root, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
+
+if (!existsSync(tsx)) {
+  console.error(`tessera: missing dependencies — tsx was not found at ${tsx}`);
+  console.error(`  run:  npm install --prefix ${root}`);
+  process.exit(127);
+}
+
+// spawn, not spawnSync: `tessera serve` is long-lived, and inheriting stdio while forwarding signals is what
+// makes ctrl-c stop the server rather than orphaning it.
+const child = spawn(tsx, [join(root, "scripts", "cli.ts"), ...process.argv.slice(2)], {
+  stdio: "inherit",
+  windowsHide: true,
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => { if (!child.killed) child.kill(sig); });
+}
+child.on("exit", (code, signal) => {
+  // Re-raise a signal death as a signal death so `tessera serve` interrupted by ctrl-c reports honestly to
+  // the shell (128+n) rather than as a clean exit.
+  if (signal) { process.kill(process.pid, signal); return; }
+  process.exit(code ?? 1);
+});
+child.on("error", (e) => {
+  console.error(`tessera: could not start tsx — ${e.message}`);
+  process.exit(127);
+});

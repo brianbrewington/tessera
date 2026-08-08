@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "bin": {
+    "tessera": "./tessera"
+  },
   "description": "A zoomable, prominence-ranked map of idea-space with a generative dream engine.",
   "engines": {
     "node": ">=20"

@@ -349,7 +349,8 @@ slices add logic rather than migrations, which is why several tables below have 
 
 <!-- ============================ COMMANDS ============================ -->
 <h2>Which command triggers what</h2>
-<p>There is no <code>bin</code> entry in <code>package.json</code>; everything runs as
+<p>Run as <code>./tessera &lt;command&gt;</code> from the repo, or from anywhere via a symlink or
+<code>npm link</code> (<code>package.json</code> declares it as <code>bin</code>). The underlying invocation is
 <code>npx tsx scripts/cli.ts &lt;command&gt;</code>. Click a row to trace it on the map above.</p>
 <div class="scroll">
 <table>
