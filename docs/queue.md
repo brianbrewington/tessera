@@ -6,7 +6,7 @@ a status, and a pointer to where the thinking lives.
 
 Statuses: **DOING** · **NEXT** · **BLOCKED** (on a named thing) · **DEFERRED** (with a condition) · **DONE**
 
-Last reordered: 2026-08-08.
+Last reordered: 2026-08-08 (item 14 to the top, per Brian).
 
 ---
 
@@ -76,8 +76,8 @@ than what it can hold, KI-3 moves to the top.
 | 1 | **Parts seam** — `readDoc` yields a primary document plus enumerable parts | **DONE** 2026-08-08 | `{doc, parts, skipped}`. Markdown-referenced local images are the first producer. Only the part kinds with a producer are declared. |
 | 2 | **Media manifest** — byte-hash images, link to parents, no VLM, no extraction | **DONE** 2026-08-08 | Bytes in `media_blobs`, identity = sha256 of bytes, one node per distinct image with an edge to every parent. Never a dirty chunk, never captioned. |
 | 3 | **Session-log ingest** — Claude Code JSONL, prose only | **DONE** 2026-08-08 | `./tessera ingest-session`. Stream-addressed session, turn keyed by record uuid, speaker + timestamp in provenance, no SESSION/AGENT node minted. Kill test passed: a plain SOURCE sufficed. |
-| 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | **NEXT (start here)** | *"not particularly snappy, in my opinion."* Detail below. |
-| 14 | **Dedup experiments, E0+E1 session** | NEXT (after 4) | Read-only, zero chat calls, under an hour plus 15 min of Brian. Placed after 4, not before it: Brian's sequencing for 4 stands, and nothing couples the two. Protocol, controls and pre-committed verdicts: `docs/dedup-experiment-protocol.md`. |
+| 14 | **Dedup experiments, E0+E1 session** | **NEXT (start here)** | Read-only, zero chat calls, under an hour plus 15 min of Brian. **Moved above item 4 by Brian, 2026-08-08**, and his reason is stronger than the one first recorded here. I wrote "nothing couples the two, so the swap costs nothing." Wrong: they are coupled, and that coupling is the whole argument. Brian: *"the reason we are running these experiments first is that they materially impact our performance analysis of extraction. we'll re-craft ingest, review+test, then re-extract and then measure/profile things as we go to see where the opportunity is."* E4 asks whether canonical-name output can ride in `EXTRACTION_SYSTEM`; if it can, the prompt gets longer and the per-chunk cost changes. Profiling first would characterise a prompt that is about to be replaced, and the numbers would have to be thrown away. Protocol, controls and pre-committed verdicts: `docs/dedup-experiment-protocol.md`. |
+| 4 | **Performance analysis of `tessera extract`** (Brian, 2026-08-08) | NEXT (after the re-extract) | *"not particularly snappy, in my opinion."* Re-scoped 2026-08-08: not a one-shot analysis before the work, but measurement taken **as the re-crafted ingest lands** — dedup experiments, then re-craft ingest, then review + test, then re-extract, profiling along the way to find where the opportunity actually is. Detail below. |
 | 15 | **Resolution view, slice 1** (forms table + read-time union + first anti-edge writer) | NEXT (after 14) | Deterministic, zero LLM calls; testgraph's entity view goes 1714 → ~1394 with no stored row touched. After 14 because E0's frozen labels supply its acceptance counts. Reasoning: `backlog.md`, "Identity as a read-time resolution view" (B27). |
 | 5 | **Provenance-scoped delete** | BLOCKED-BY-DESIGN | Gates pointing any generator at a real graph. Origin marking exists; removal does not. Until it does, first dream ingest goes at a throwaway graph. |
 | 6 | **`HEBBIAN_ASSOC` first writer** | DEFERRED | The one edge a dream exists to produce. Its acceptance test, when the dream path is built. |
