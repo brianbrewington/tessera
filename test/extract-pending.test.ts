@@ -434,3 +434,71 @@ describe("extraction products can be marked with where they came from", () => {
     store.close();
   });
 });
+
+describe("media is MANIFESTED, not ingested", () => {
+  // The adversarial reviewer's verdict on recursive image ingest: preserve the images, do not caption them.
+  // Captions are the most generic text this pipeline would ever feed itself, and KI-3 (too many too-generic
+  // entities) is the open headline defect. So: bytes durable, traceable to every parent, and nothing enters
+  // the entity graph. It also measures the corpus before anyone decides about a vision model.
+  const png = (kb: number): Buffer =>
+    Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(kb * 1024, 3)]);
+  function docWithImage(body: string, files: Record<string, Buffer>): string {
+    const dir = mkdtempSync(join(tmpdir(), "tessera-media-"));
+    for (const [n, b] of Object.entries(files)) writeFileSync(join(dir, n), b);
+    const p = join(dir, "doc.md");
+    writeFileSync(p, body);
+    return p;
+  }
+
+  it("stores the bytes and links the image to its document", async () => {
+    const { store, g } = fresh();
+    const r = await ingestChunks(g, docWithImage("# Doc\n\n![field](field.png)\n", { "field.png": png(8) }));
+    expect(r.media).toBe(1);
+    const node = store.allNodes().find((n) => n.subtype === "media")!;
+    expect(node.name).toBe("field.png");
+    const counts = store.mediaCounts();
+    expect(counts).toMatchObject({ blobs: 1, nodes: 1 });
+    expect(counts.bytes).toBe(8 * 1024 + 4);
+    store.close();
+  });
+
+  it("NEVER becomes work: a manifested image is not a dirty chunk and costs no LLM call", async () => {
+    const { store, g } = fresh();
+    await ingestChunks(g, docWithImage("# Doc\n\ntext ![a](a.png) more\n", { "a.png": png(8) }));
+    const dirty = store.dirtyChunks(PROMPT_VERSION);
+    expect(dirty.some((c) => c.name === "a.png")).toBe(false);
+
+    const ex = recorder(() => ok("Alpha"));
+    await extractPending(g, ex);
+    expect(store.dirtyCounts(PROMPT_VERSION).dirty).toBe(0);
+    // The image contributed no entity, which is the entire point of manifesting rather than captioning.
+    expect(store.allNodes().some((n) => n.name === "a.png" && n.subtype !== "media")).toBe(false);
+    store.close();
+  });
+
+  it("the SAME image in two documents is ONE node with two parents", async () => {
+    // The logo case. Byte-addressed identity makes this a merge rather than 40 near-duplicates, and it is
+    // exactly the multi-parent shape that used to return duplicate rows from dirtyChunks.
+    const { store, g } = fresh();
+    const bytes = png(8);
+    await ingestChunks(g, docWithImage("# One\n\n![logo](logo.png)\n", { "logo.png": bytes }));
+    await ingestChunks(g, docWithImage("# Two\n\n![logo](logo.png)\n", { "logo.png": bytes }));
+
+    const media = store.allNodes().filter((n) => n.subtype === "media");
+    expect(media.length).toBe(1);
+    expect(store.mediaCounts().blobs).toBe(1); // stored once, not twice
+    const parents = store.allEdges().filter((e) => e.from === media[0]!.id && e.kind === "ORIGINATED_FROM");
+    expect(parents.length).toBe(2); // honest provenance: this image appears in both
+    store.close();
+  });
+
+  it("reports what it refused, so nothing is lost quietly", async () => {
+    const { g } = fresh();
+    const r = await ingestChunks(g, docWithImage(
+      "![tiny](t.png)\n\n![remote](https://example.com/x.png)\n",
+      { "t.png": png(0) },
+    ));
+    expect(r.media).toBe(0);
+    expect(r.skippedParts.map((s) => s.reason).sort()).toEqual(["not a local file", "under 2048 bytes"]);
+  });
+});

@@ -31,6 +31,22 @@ export function chunkIdentity(sourceContentHash: string, rawText: string): strin
   return `chunk\t${sourceContentHash}\t${sha16(rawText)}`;
 }
 
+/**
+ * MEDIA identity — the hash of the BYTES, and never of anything a model said about them.
+ *
+ * Two consequences, both deliberate. The same logo embedded in forty documents is ONE node with forty
+ * parents, which is honest provenance ("this exact image appears in these forty places") and, when
+ * captioning eventually exists, one call instead of forty. And identity exists BEFORE any model runs, so it
+ * cannot drift: keying on a caption would make identity depend on nondeterministic output, and the same
+ * image would mint a new node on every re-read, taking the memo and the manifest down with it.
+ *
+ * Not source-qualified, unlike CHUNK. A chunk is qualified by its document so subject-aware extraction runs
+ * once per doc; that reason does not transfer to an image, and the cost of duplicating would be real work.
+ */
+export function mediaIdentity(bytes: Uint8Array): string {
+  return `media\t${createHash("sha256").update(bytes).digest("hex").slice(0, 32)}`;
+}
+
 /** Canonical undirected endpoint order (kills A->B / B->A double edges for undirected kinds). */
 export function canonical(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];

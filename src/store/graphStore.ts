@@ -900,6 +900,29 @@ export class GraphStore {
    * only never-extracted chunks, because re-extracting a whole corpus after a prompt bump is a decision
    * a user should make, not something a file drop triggers.
    */
+  /**
+   * Store media bytes under their own hash. Idempotent: the same image manifested from a second document is
+   * one row and one node, gaining a parent edge rather than a duplicate.
+   */
+  putMediaBlob(hash: string, mime: string, bytes: Uint8Array): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO media_blobs (hash, mime, size, bytes) VALUES (?, ?, ?, ?)")
+      .run(hash, mime, bytes.byteLength, Buffer.from(bytes));
+  }
+
+  getMediaBlob(hash: string): { mime: string; size: number; bytes: Buffer } | null {
+    const r = this.db.prepare("SELECT mime, size, bytes FROM media_blobs WHERE hash = ?").get(hash) as
+      { mime: string; size: number; bytes: Buffer } | undefined;
+    return r ?? null;
+  }
+
+  /** How much media the graph is carrying: distinct blobs, total bytes, and how many nodes point at them. */
+  mediaCounts(): { blobs: number; bytes: number; nodes: number } {
+    const b = this.db.prepare("SELECT count(*) AS n, COALESCE(sum(size), 0) AS s FROM media_blobs").get() as { n: number; s: number };
+    const n = this.db.prepare("SELECT count(*) AS n FROM nodes WHERE subtype = 'media'").get() as { n: number };
+    return { blobs: b.n, bytes: b.s, nodes: n.n };
+  }
+
   /** Chunk ids belonging to a SOURCE, by its identity string, in chunk order. */
   chunkIdsForSource(sourceIdentityText: string): string[] {
     return (

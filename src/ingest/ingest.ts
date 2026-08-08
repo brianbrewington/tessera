@@ -18,7 +18,7 @@ import { PROMPT_VERSION } from "../extract/extractor.js";
 import type { Meta } from "../schema.js";
 import { readDoc, isSupported } from "./adapters.js";
 import { chunk as splitChunks } from "./chunker.js";
-import { sourceIdentity, chunkIdentity, docContentHash } from "../extract/identity.js";
+import { sourceIdentity, chunkIdentity, docContentHash, mediaIdentity } from "../extract/identity.js";
 import { extractPending } from "./extract-pending.js";
 
 // Ingest owns identity via content_hash of the mapper's identity string; the store's default (no cosine
@@ -33,6 +33,10 @@ export interface ChunkIngestResult {
   /** Chunks already extracted under the current prompt — no LLM cost owed. */
   reused: number;
   chunkIds: string[];
+  /** Images manifested from this document (bytes stored, node + parent edge written, never extracted). */
+  media: number;
+  /** Parts found and deliberately not taken, each with a reason. Never a silent drop. */
+  skippedParts: { name: string; reason: string }[];
   skipped: boolean; // the whole file was skipped (already chunked — zero writes)
 }
 
@@ -97,7 +101,8 @@ export async function ingestChunks(
     const queued = graph.store.dirtyChunks(promptVersion, { ids }).length;
     return {
       source: doc.source, title: doc.title, chunks: prior.chunkCount,
-      queued, reused: prior.chunkCount - queued, chunkIds: ids, skipped: true,
+      queued, reused: prior.chunkCount - queued, chunkIds: ids,
+      media: 0, skippedParts: [], skipped: true,
     };
   }
 
@@ -140,6 +145,34 @@ export async function ingestChunks(
     if (graph.store.isExtracted(chunkNode.id, promptVersion)) reused++;
   }
 
+  // MEDIA: manifested, not ingested. The bytes become durable and traceable to every document that embeds
+  // them; nothing is captioned, OCR'd or extracted, so no image can put a generic entity into a graph whose
+  // headline open defect is already too many generic entities. Identity is the hash of the BYTES, so one logo
+  // across forty documents is one node with forty parents rather than forty near-duplicates.
+  let media = 0;
+  for (const part of read.parts) {
+    if (part.kind !== "media") continue;
+    const identity = mediaIdentity(part.bytes);
+    const hash = identity.slice("media\t".length);
+    graph.store.putMediaBlob(hash, part.mime, part.bytes);
+    // Embedded on its NAME, not its content: there is no text to embed, and embedding bytes would be a
+    // different (image-embedding) decision. The name is weak signal, which is honest for an unread image.
+    const mvec = await graph.embedder.embed(part.name);
+    const mediaNode = await graph.store.putNode(
+      {
+        type: "SOURCE", subtype: "media", origin: "ingest",
+        text: identity, name: part.name,
+        provenance: { mime: part.mime, bytes: part.bytes.byteLength, ...(part.meta ?? {}) },
+      },
+      meta, mvec,
+    );
+    await graph.store.putEdge(
+      { from: mediaNode.id, to: src.id, kind: "ORIGINATED_FROM", reason: `${part.name} is embedded in ${doc.title}`, origin: "ingest" },
+      meta,
+    );
+    media++;
+  }
+
   opts.onChunk?.(chunks.length, chunks.length);
   // The manifest now records only that chunking finished. parse_failures stays at 0 here and lives per-chunk
   // in chunk_extraction_state, where it can be surfaced and retried instead of freezing a whole file.
@@ -151,7 +184,8 @@ export async function ingestChunks(
 
   return {
     source: doc.source, title: doc.title, chunks: chunks.length,
-    queued: chunks.length - reused, reused, chunkIds, skipped: false,
+    queued: chunks.length - reused, reused, chunkIds,
+    media, skippedParts: read.skipped, skipped: false,
   };
 }
 

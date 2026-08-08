@@ -55,6 +55,7 @@ export interface Scorecard {
   // Where the graph's contents came from. This store has no delete, so for anything written by a
   // self-directed run (a dream, a walk) the origin mark is the ONLY separation there is, and a mark
   // nothing reports is not separation.
+  media: { blobs: number; bytes: number; nodes: number };
   nodesByOrigin: Record<string, number>;
   assertionsByOrigin: Record<string, number>;
   failingChunks: { name: string; attempts: number; lastError: string | null }[];
@@ -152,6 +153,7 @@ export function report(dbPath: string): Scorecard {
       orphanEntities, orphanPct: pct(orphanEntities, entities.length),
       mergedPersons,
       dirty: store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS),
+      media: store.mediaCounts(),
       nodesByOrigin: store.countNodesByOrigin(),
       assertionsByOrigin: store.countEdgesByOrigin(),
       failingChunks: store
@@ -175,6 +177,10 @@ export function printScorecard(sc: Scorecard): void {
       p(`    ! ${f.name} — ${f.attempts} attempt(s): ${(f.lastError ?? "unknown").slice(0, 80)}`);
     }
     if (sc.failingChunks.length) p(`    (${sc.failingChunks.length} failing — retry with: tessera extract <graph> --retry-failed)`);
+  }
+  if (sc.media.nodes > 0) {
+    p(`media: ${sc.media.nodes} image(s) manifested, ${sc.media.blobs} distinct, ` +
+      `${(sc.media.bytes / 1024 / 1024).toFixed(1)} MB stored — preserved and traceable, never captioned or extracted`);
   }
   {
     // Only worth printing when something other than ingest is present: on an ordinary graph this is one

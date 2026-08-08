@@ -118,7 +118,10 @@ async function main(): Promise<void> {
             if (r.skipped) { skipped++; console.log(`skip     "${r.title}" (already chunked, ${r.chunks} chunk(s), ${r.queued} still owed)`); continue; }
             chunkedDocs++;
             const owed = r.queued === r.chunks ? "" : `  (${r.reused} already extracted)`;
-            console.log(`chunked  "${r.title}": ${r.chunks} chunk(s), ${r.queued} queued for extraction${owed}`);
+            const img = r.media ? `, ${r.media} image(s) manifested` : "";
+            console.log(`chunked  "${r.title}": ${r.chunks} chunk(s), ${r.queued} queued for extraction${img}${owed}`);
+            // Never a silent drop: an image the adapter refused is named with its reason.
+            for (const s of r.skippedParts) console.error(`  not taken: ${s.name} — ${s.reason}`);
           } catch (e) {
             failed++;
             console.error(`FAILED   ${f}: ${e instanceof Error ? e.message : e}`);

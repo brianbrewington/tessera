@@ -122,6 +122,23 @@ CREATE TABLE IF NOT EXISTS extracted_chunks (
 -- DERIVED CACHE: like extracted_chunks, excluded from mutation_log replay by design (backlog B23). A replay
 -- rebuilds the graph; it does not rebuild "who was mid-extraction when the process died", which is correct —
 -- that state should start empty.
+-- Media bytes, keyed by their own sha256. Stored IN the database, for the same reason chunk raw text is:
+-- extraction reads chunk text from the store, never off disk, and that is the only reason a chunk whose
+-- source file was deleted can still be finished. An image manifested out of a document that later moves or is
+-- removed has exactly the same problem, and a graphs/<name>/media/ directory could be deleted separately from
+-- the graph that references it.
+--
+-- Manifested, not ingested: nothing here is captioned, OCR'd, or extracted. The node that points at a blob
+-- carries no description and never becomes a dirty chunk. That is the whole point of the first slice — it
+-- answers "images get lost" at zero LLM cost and with no risk of feeding generic caption text into a graph
+-- whose headline open defect is already too many too-generic entities (KI-3).
+CREATE TABLE IF NOT EXISTS media_blobs (
+  hash  TEXT PRIMARY KEY,       -- sha256 of the bytes, 32 hex; matches the node's identity string
+  mime  TEXT NOT NULL,
+  size  INTEGER NOT NULL,
+  bytes BLOB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chunk_extraction_state (
   chunk_id        TEXT PRIMARY KEY REFERENCES nodes(id),
   attempts        INTEGER NOT NULL DEFAULT 0,
