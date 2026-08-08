@@ -26,6 +26,11 @@
   #pill .dot{ width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
   #pill .gname{ font-weight:600; font-size:13px; }
   #pill .gcount{ font-family:var(--mono); font-size:11px; color:var(--dim); letter-spacing:.04em; }
+  /* Extraction debt, stated on the map itself. Without it a half-extracted graph is indistinguishable from
+     a thin one, which is exactly how graphs/big carried two missing chunks for months without anyone knowing. */
+  #pill .gdirty{ display:none; font-family:var(--mono); font-size:10px; letter-spacing:.04em; padding:2px 8px;
+    border-radius:99px; color:#f0c674; background:rgba(240,198,116,.13); border:1px solid rgba(240,198,116,.42); cursor:help; }
+  #pill .gdirty.on{ display:inline-block; }
 
   #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
     border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
@@ -45,12 +50,24 @@
   #minimap{ position:fixed; bottom:14px; left:14px; width:268px; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   #minimap .mm-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line); }
   #minimap canvas{ display:block; background:#080a0f; cursor:crosshair; }
-  /* scenes — saved views, bottom-center rack */
-  #scenes{ position:fixed; bottom:14px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:6px;
-    background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:99px; padding:6px 10px; max-width:56vw; overflow-x:auto; }
+  /* scenes — saved views. A VERTICAL stack in the left column, between the zoom rail and the edge budget.
+     It was a bottom-centre row that grew a horizontal scrollbar past a handful of scenes (unreadable, and
+     the scrollbar sat across the map), while this column had an unused gap the whole time. Vertical also
+     gives drag-reorder an obvious place to grab. */
+  /* top clears #altrail (the zoom-tier rail); bottom clears #edgectl, which sits at bottom:220 and is about
+     110px tall. Both neighbours are fixed-position, so this column is a budget, not a flow. */
+  #scenes{ position:fixed; left:14px; top:232px; bottom:356px; width:268px; display:flex; flex-direction:column;
+    gap:6px; z-index:6; pointer-events:none; }
+  #scenes > *{ pointer-events:auto; }
+  #scenes .list{ display:flex; flex-direction:column; gap:4px; overflow-y:auto; overflow-x:hidden; min-height:0; }
+  #scenes .sc{ display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text);
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:5px 9px; cursor:pointer; }
+  #scenes .sc .grip{ color:var(--faint); font-size:11px; cursor:grab; flex:0 0 auto; letter-spacing:-1px; }
+  #scenes .sc .nm{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #scenes .sc.dragging{ opacity:.4; }
+  #scenes .sc.over{ border-color:var(--accent); box-shadow:inset 0 2px 0 -1px var(--accent); }
+  #scenes .foot{ display:flex; flex-wrap:wrap; gap:5px; flex:0 0 auto; }
   #scenes .lab{ font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); flex:0 0 auto; }
-  #scenes .sc{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text); background:var(--surface-2); border:1px solid var(--line);
-    border-radius:99px; padding:4px 10px; cursor:pointer; white-space:nowrap; flex:0 0 auto; }
   #scenes .sc:hover{ border-color:var(--accent); }
   #scenes .sc.on{ background:rgba(122,162,247,.14); border-color:rgba(122,162,247,.4); color:#c8d8fc; }
   #scenes .sc .x{ color:var(--faint); font-size:12px; line-height:1; }
@@ -164,7 +181,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span></div>
+<div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span><span class="gdirty" id="gdirty"></span></div>
 <div id="zcrumb"></div>
 <div id="altrail"><div class="track"></div><div class="dot" id="altdot"></div></div>
 <div id="tip"></div>
@@ -641,31 +658,119 @@ addEventListener('keydown', e=>{
   if(e.key==='Escape') deselect(); else if(e.key==='h'||e.key==='H'){ showProv=!showProv; rebuild(); rerender(); } });
 
 // --- scenes: save the current view (camera + provenance filter + selected node) and fly back to it later.
-// Persisted per-graph in localStorage — the exported viewer is offline HTML, so that's the natural sidecar. ---
+//
+// TWO BACKING STORES, one shape. On file:// there is no server, so localStorage remains the sidecar. When
+// SERVED the database is the source of truth (design §6) — before this, the served page still read
+// localStorage, so a user who correctly followed the slice-2 migration opened the served viewer, saw NO
+// scenes, and had every reason to conclude the migration had failed.
+//
+// A served scene is ANCHORED (node ids) rather than a camera, so it survives any re-settle. A local scene
+// stores the camera. restoreScene handles both: anchors win when present.
 const SKEY='tessera-scenes-'+(GRAPH.name||'graph');
-let scenes=[], activeScene=null;
-function loadScenes(){ try{ scenes=JSON.parse(localStorage.getItem(SKEY))||[]; }catch(e){ scenes=[]; } }
-function persistScenes(){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)); }catch(e){} }
+let scenes=[], activeScene=null, pendingDeletes=[];
+
+function loadScenes(){
+  if(SERVED){ scenes=(GRAPH.scenes||[]).map(fromDbScene); return; }
+  try{ scenes=JSON.parse(localStorage.getItem(SKEY))||[]; }catch(e){ scenes=[]; }
+}
+function fromDbScene(r){
+  return { id:r.id, name:r.name, narr:r.narr||null, scale:r.scale, showProv:!!r.showProv,
+           node:r.focusNode||null, anchors:r.anchors||[], version:r.version, persisted:true };
+}
+function toDbScene(s,i){
+  return { id: s.persisted?s.id:undefined, name:s.name||'', narr:s.narr||null, scale:s.scale,
+           showProv:!!s.showProv, focusNode:s.node||null,
+           anchors: (s.anchors&&s.anchors.length) ? s.anchors : anchorsForCamera(s),
+           legacyId: s.persisted?null:(s.id||null), ordinal:i, version:s.version };
+}
+/** Persist. On file:// that is localStorage; when SERVED it is an all-or-nothing PUT the server can 409. */
+function persistScenes(){
+  if(!SERVED){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)); }catch(e){} return; }
+  const deletes=pendingDeletes.slice(); pendingDeletes=[];
+  fetch('/scenes',{ method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ scenes: scenes.map(toDbScene), deletes }) })
+    .then(async res=>{
+      if(res.status===409){
+        // Someone else changed these scenes. All-or-nothing means nothing was applied, so re-read rather
+        // than leaving the page showing edits the database never accepted.
+        dropStatus('scenes changed elsewhere — reloading them');
+        const fresh=await fetch('/scenes').then(r=>r.json()).catch(()=>null);
+        if(fresh){ scenes=(fresh.scenes||[]).map(fromDbScene); renderScenes(); }
+        return;
+      }
+      if(!res.ok){ dropStatus('could not save scenes ('+res.status+')'); return; }
+      // Re-read so newly created scenes pick up the id and version the STORE minted for them; without this
+      // the next save would look like a create and mint a duplicate.
+      const fresh=await fetch('/scenes').then(r=>r.json()).catch(()=>null);
+      if(fresh){ scenes=(fresh.scenes||[]).map(fromDbScene); renderScenes(); }
+    })
+    .catch(err=>dropStatus('could not save scenes: '+err));
+}
 function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); return; }
-  const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null };
+  const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null,
+            anchors: SERVED?anchorsForCamera({ox,oy,scale}):null, persisted:false };
   scenes.push(s); activeScene=s.id; persistScenes(); renderScenes(); }
 function restoreScene(s,dur){ activeScene=s.id;
   if(!!s.showProv!==showProv){ showProv=!!s.showProv; rebuild(); }   // match the saved provenance filter
   if(s.node){ const n=byId.get(s.node); if(n&&NODES.includes(n)){ walk=[]; openNode(n,false); } else showIdle(); } else showIdle();
-  flyTo(s.ox, s.oy, s.scale, dur); renderScenes(); }                  // animate the camera rather than cutting (dur: tours glide slower)
-function delScene(id){ scenes=scenes.filter(s=>s.id!==id); if(activeScene===id) activeScene=null; persistScenes(); renderScenes(); }
-function renderScenes(){ const box=$('scenes'); box.innerHTML=''; box.appendChild(el('span','lab','scenes'));
-  scenes.forEach(s=>{ const c=el('span','sc'+(s.id===activeScene?' on':'')); c.appendChild(el('span',null,s.name));
-    const x=el('span','x','×'); x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
-    c.onclick=()=>restoreScene(s); box.appendChild(c); });
-  const exp=el('span','add','⤓ export'); exp.title='export scenes to a file, so `tessera scenes import` can move them into the graph';
-  exp.onclick=()=>exportScenes(); box.appendChild(exp);
-  const add=el('span','add','+'); add.title='save this view as a scene — captures the camera and, if a node is open, that node as the scene\'s focus (optional)'; add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
+  const cam = (s.anchors&&s.anchors.length) ? cameraForAnchors(s.anchors, s.scale) : {ox:s.ox, oy:s.oy, scale:s.scale};
+  if(cam) flyTo(cam.ox, cam.oy, cam.scale, dur); // animate the camera rather than cutting (dur: tours glide slower)
+  renderScenes(); }
+function delScene(id){
+  const s=scenes.find(x=>x.id===id);
+  if(s&&s.persisted) pendingDeletes.push(id);
+  scenes=scenes.filter(x=>x.id!==id); if(activeScene===id) activeScene=null;
+  persistScenes(); renderScenes(); }
+
+/** Move a scene from index `from` to index `to`. Extracted so a test can drive the reorder without a DOM. */
+function moveScene(list, from, to){
+  if(from===to||from<0||to<0||from>=list.length||to>=list.length) return list;
+  const out=list.slice(); const [item]=out.splice(from,1); out.splice(to,0,item); return out;
+}
+function reorderScenes(from,to){
+  const next=moveScene(scenes,from,to);
+  if(next===scenes) return;
+  scenes=next; persistScenes(); renderScenes();
+}
+
+// The rack lives in the LEFT column as a vertical stack. It used to be a bottom-centre row that grew a
+// horizontal scrollbar once there were more than a handful of scenes — unreadable, and the left column had
+// an unused gap the whole time. Vertical also gives drag-reorder somewhere obvious to grab.
+function renderScenes(){ const box=$('scenes'); box.innerHTML='';
+  box.appendChild(el('span','lab','scenes'));
+  const list=el('div','list');
+  let dragFrom=-1;
+  scenes.forEach((s,i)=>{
+    const c=el('div','sc'+(s.id===activeScene?' on':''));
+    c.draggable=true;
+    const h=el('span','grip','⠿'); h.title='drag to reorder'; c.appendChild(h);
+    const nm=el('span','nm',s.name); c.appendChild(nm);
+    const x=el('span','x','×'); x.title='delete this scene'; x.onclick=ev=>{ ev.stopPropagation(); delScene(s.id); }; c.appendChild(x);
+    c.onclick=()=>restoreScene(s);
+    c.addEventListener('dragstart', ev=>{ dragFrom=i; c.classList.add('dragging'); ev.dataTransfer.effectAllowed='move';
+      // Firefox refuses to start a drag without data set.
+      try{ ev.dataTransfer.setData('text/plain', String(i)); }catch(_){} });
+    c.addEventListener('dragend', ()=>{ c.classList.remove('dragging'); list.querySelectorAll('.sc').forEach(n=>n.classList.remove('over')); });
+    c.addEventListener('dragover', ev=>{ ev.preventDefault(); ev.stopPropagation(); c.classList.add('over'); });
+    c.addEventListener('dragleave', ()=>c.classList.remove('over'));
+    c.addEventListener('drop', ev=>{ ev.preventDefault(); ev.stopPropagation(); c.classList.remove('over');
+      const from = dragFrom>=0 ? dragFrom : Number(ev.dataTransfer.getData('text/plain'));
+      reorderScenes(from, i); });
+    list.appendChild(c);
+  });
+  box.appendChild(list);
+  const foot=el('div','foot');
+  const add=el('span','add','+ save view'); add.title='save this view as a scene — captures the camera and, if a node is open, that node as the scene\'s focus (optional)';
+  add.onclick=()=>{ const inp=document.createElement('input'); inp.placeholder='name this view…';
     add.replaceWith(inp); inp.focus();
     inp.addEventListener('keydown', ev=>{ if(ev.key==='Enter') saveScene(inp.value); else if(ev.key==='Escape') renderScenes(); });
     inp.addEventListener('blur', ()=> saveScene(inp.value)); };
-  box.appendChild(add);
-  if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); box.appendChild(pl); }
+  foot.appendChild(add);
+  if(scenes.length){ const pl=el('span','add','▶ tour'); pl.title='play a tour through the saved scenes'; pl.onclick=()=>playTour(); foot.appendChild(pl); }
+  // The export bridge is only meaningful on file://: served scenes are already in the database.
+  if(!SERVED&&scenes.length){ const exp=el('span','add','⤓ export'); exp.title='export scenes to a file, so `tessera scenes import` can move them into the graph';
+    exp.onclick=()=>exportScenes(); foot.appendChild(exp); }
+  box.appendChild(foot);
 }
 // --- edge budget control
 function renderEdgeCtl(){
@@ -694,11 +799,24 @@ function renderEdgeCtl(){
   box.appendChild(sl);
 }
 
-loadScenes(); renderScenes(); renderEdgeCtl();
-
 // --- DROP TARGET (slice 3). Only active when the page is SERVED — a file:// bundle has no server to post
 // to, so the handlers are not installed and the page behaves exactly as before.
 const SERVED = location.protocol === 'http:' || location.protocol === 'https:';
+
+// --- EXTRACTION DEBT. Chunks are written fast; extraction happens after. A map rendered mid-drain is
+// INCOMPLETE, and it has to say so — otherwise "the graph looks thin" and "extraction has not run yet" are
+// the same picture, which is the confusion the whole dirty-chunk model exists to remove.
+function setDirtyBadge(n){
+  const el=$('gdirty'); if(!el) return;
+  if(!n){ el.classList.remove('on'); return; }
+  el.textContent='+'+n+' awaiting extraction';
+  el.title=n+' chunk(s) are written but not yet extracted, so their entities are not on this map yet.\n'
+    +(SERVED?'A drop extracts new chunks in the background. ':'')+'For the rest, run:  tessera extract '+(GRAPH.name||'<graph>');
+  el.classList.add('on');
+}
+setDirtyBadge(GRAPH.dirtyChunks||0);
+
+loadScenes(); renderScenes(); renderEdgeCtl();
 function dropUI(){
   let el=document.getElementById('dropzone');
   if(!el){ el=document.createElement('div'); el.id='dropzone';
@@ -724,33 +842,68 @@ if(SERVED){
   addEventListener('dragover', e=>e.preventDefault());
   addEventListener('drop', async e=>{
     e.preventDefault(); depth=0; zone.style.display='none';
-    const f=e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if(!f) return;
-    if(!/\.(md|txt)$/i.test(f.name)){ dropStatus('only .md and .txt are supported — '+f.name+' was not ingested'); return; }
-    dropStatus('reading '+f.name+'…', true);
-    // The SSE stream carries per-chunk progress; extraction is ~10s per chunk, so a 20-page drop is minutes.
+    const all=(e.dataTransfer && e.dataTransfer.files) ? Array.from(e.dataTransfer.files) : [];
+    if(!all.length) return;
+    const {supported, rejected} = partitionDrop(all);
+    if(!supported.length){ dropStatus('only .md and .txt are supported — nothing ingested ('+rejected.join(', ')+')'); return; }
+
+    // The SSE stream now carries TWO phases: 'chunk' while files are being written (fast) and 'extract'
+    // while the server drains the queue in the background. One stream for the whole drop, not one per file.
     const es=new EventSource('/events');
+    let phaseNote='';
     es.onmessage=ev=>{
       try{ const p=JSON.parse(ev.data);
-        if(p.phase==='chunk') dropStatus('ingesting '+f.name+' — chunk '+Math.min(p.i+1,p.of)+' of '+p.of+'…', true);
-        else if(p.phase==='error') { dropStatus('ingest failed: '+p.message); es.close(); }
+        if(p.phase==='chunk') dropStatus(phaseNote+'chunking — '+Math.min(p.i+1,p.of)+' of '+p.of+'…', true);
+        else if(p.phase==='extract') dropStatus('extracting in the background — chunk '+p.i+' of '+p.of+'… (you can keep working)', true);
+        else if(p.phase==='error') dropStatus('extraction failed: '+p.message);
+        else if(p.phase==='done' && p.dirty!==undefined) setDirtyBadge(p.dirty);
       }catch(_){}
     };
+
+    let queued=0, added=0, dedup=0, failed=[];
     try{
-      const res=await fetch('/ingest',{ method:'POST', headers:{'X-Tessera-Filename': f.name}, body: await f.arrayBuffer() });
-      const txt=await res.text();
-      es.close();
-      if(!res.ok){ dropStatus('ingest failed ('+res.status+'): '+txt.slice(0,120)); return; }
-      const r=JSON.parse(txt);
-      // A re-drop of identical bytes is deduped by content hash and adds nothing. Saying "added 0 entities"
-      // reads as a failure, so name what actually happened.
-      if(r.skipped){ dropStatus(f.name+' is already in this map (identical content) — nothing to add'); es.close(); return; }
-      dropStatus('added '+r.entities+' entities, '+r.edges+' edges — reloading…', true);
+      // Sequential, not parallel: the server is single-flight and would 409 concurrent posts. Each POST is
+      // now fast (chunking only), so a multi-file drop is seconds rather than the length of an extraction.
+      for(let i=0;i<supported.length;i++){
+        const f=supported[i];
+        phaseNote=supported.length>1 ? '('+(i+1)+'/'+supported.length+') ' : '';
+        dropStatus(phaseNote+'reading '+f.name+'…', true);
+        try{
+          const res=await fetch('/ingest',{ method:'POST', headers:{'X-Tessera-Filename': f.name}, body: await f.arrayBuffer() });
+          const txt=await res.text();
+          if(!res.ok){ failed.push(f.name+' ('+res.status+')'); continue; }
+          const r=JSON.parse(txt);
+          if(r.skipped && !r.queued){ dedup++; continue; }
+          added++; queued+=(r.queued||0);
+          if(r.dirty!==undefined) setDirtyBadge(r.dirty);
+        }catch(err){ failed.push(f.name); }
+      }
+      dropStatus(summariseDrop({added, queued, dedup, rejected, failed}), queued>0);
       // v1 reloads rather than delta-patching the open map (design §5, deferred). Layout is durable and
-      // additive, so the reload keeps every position you were looking at.
-      setTimeout(()=>location.reload(), 900);
+      // additive, so the reload keeps every position you were looking at. Reload once for the whole drop.
+      if(added>0) setTimeout(()=>location.reload(), 1400);
+      else es.close();
     }catch(err){ es.close(); dropStatus('ingest failed: '+err); }
   });
+}
+
+// Split a dropped FileList into what we can ingest and what we cannot. Extracted so a test can drive it
+// without a DOM: the bug this replaces was `files[0]` — dropping three files ingested one and said nothing
+// about the other two, which is silent data loss in a system whose whole point is completeness.
+function partitionDrop(files){
+  const ok=f=>/\.(md|txt)$/i.test(f.name);
+  return { supported: files.filter(ok), rejected: files.filter(f=>!ok(f)).map(f=>f.name) };
+}
+
+// One honest sentence for a whole drop. Every outcome is NAMED — files queued, files already present,
+// files of the wrong type, files that errored — because the old handler reported only the first file.
+function summariseDrop(s){
+  const parts=[];
+  if(s.added) parts.push(s.added+' file'+(s.added===1?'':'s')+' queued ('+s.queued+' chunk'+(s.queued===1?'':'s')+')');
+  if(s.dedup) parts.push(s.dedup+' already in this map');
+  if(s.rejected.length) parts.push(s.rejected.length+' unsupported: '+s.rejected.join(', '));
+  if(s.failed.length) parts.push(s.failed.length+' failed: '+s.failed.join(', '));
+  return parts.length ? parts.join(' · ') : 'nothing to add';
 }
 
 // --- scene EXPORT: the one-way door (design §5). localStorage is origin-scoped, so once tessera serves the
@@ -777,6 +930,27 @@ function anchorsForCamera(cam){
   const cx=(W/2-cam.ox)/cam.scale, cy=(H/2-cam.oy)/cam.scale;
   return pool.slice().sort((a,b)=> Math.hypot(a.x-cx,a.y-cy)-Math.hypot(b.x-cx,b.y-cy) || (a.id<b.id?-1:1))
     .slice(0,ANCHOR_FALLBACK).map(n=>n.id);
+}
+// The inverse of anchorsForCamera: given the anchor node ids a scene was saved with, frame them.
+// Mirrors frameAnchors() in src/scenes/scene.ts — test/scenes-bridge.test.ts extracts this and asserts the
+// two agree on the same input, so a change to one that is not made to the other fails the build.
+//
+// scale = min(stored, fit) is load-bearing: honour the zoom the user chose, but if the cluster has spread
+// since the scene was saved, zoom out enough that they still see the thing they saved. Pure stored-scale
+// frames the middle of a cluster that no longer fits; pure refit throws away a deliberate close-up.
+const FIT_FRACTION=0.7, ANCHOR_EPS=1e-6;
+function cameraForAnchors(ids, storedScale){
+  const pts=[];
+  for(const id of ids){ const n=byId.get(id); if(n&&NODES.includes(n)) pts.push(n); }
+  if(!pts.length) return null;   // every anchor is gone or hidden — leave the camera alone rather than guessing
+  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
+  const minX=Math.min.apply(null,xs), maxX=Math.max.apply(null,xs);
+  const minY=Math.min.apply(null,ys), maxY=Math.max.apply(null,ys);
+  const cx=(minX+maxX)/2, cy=(minY+maxY)/2;
+  const bw=Math.max(maxX-minX, ANCHOR_EPS), bh=Math.max(maxY-minY, ANCHOR_EPS);
+  const fit=Math.min((W*FIT_FRACTION)/bw, (H*FIT_FRACTION)/bh);
+  const sc=Math.min(storedScale, fit);
+  return { ox: W/2-cx*sc, oy: H/2-cy*sc, scale: sc };
 }
 function exportScenes(){
   if(!scenes.length){ alert('No scenes saved in this browser to export.'); return; }

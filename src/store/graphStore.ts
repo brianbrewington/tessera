@@ -713,6 +713,48 @@ export class GraphStore {
     return tx.immediate();
   }
 
+  /**
+   * Reorder scenes to the given id order. Returns how many rows actually moved.
+   *
+   * `ordinal` is deliberately NOT part of contentKey (src/scenes/scene.ts), so reordering can never mint a
+   * duplicate scene at import — which is what makes drag-reorder safe to expose at all. Carries the layout
+   * batch's no-op rule: a scene already at its target ordinal is not written and its version is not bumped,
+   * so dragging a scene and dropping it back where it started appends nothing to mutation_log.
+   */
+  reorderScenes(orderedIds: readonly string[], meta: Meta): number {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    return this.db.transaction(() => {
+      const upd = this.db.prepare("UPDATE scenes SET ordinal = ?, version = version + 1 WHERE id = ? AND ordinal IS NOT ?");
+      let changed = 0;
+      orderedIds.forEach((id, i) => { changed += upd.run(i, id, i).changes as number; });
+      if (changed > 0) this.log(m, at, "reorderScenes", null, null, { order: [...orderedIds], changed });
+      return changed;
+    }).immediate() as number;
+  }
+
+  /**
+   * Delete a scene and its anchors. Returns false if it was already gone.
+   *
+   * importScenes is insert-only, so before this existed there was NO delete path anywhere in the repo — and
+   * the viewer has had an × on every scene chip the whole time. Wiring served scenes to the database without
+   * this would have made that × filter a local array, look like it worked, and bring the scene back on reload.
+   */
+  deleteScene(id: string, meta: Meta): boolean {
+    const m = Meta.parse(meta);
+    const at = m.effectiveAt ?? Date.now();
+    return this.db.transaction(() => {
+      const before = this.db.prepare("SELECT id, name, content_key AS contentKey, ordinal FROM scenes WHERE id = ?").get(id);
+      if (!before) return false;
+      // Explicit rather than leaning on ON DELETE CASCADE: the cascade only fires while foreign_keys is ON,
+      // which is a pragma set at open time and therefore a thing that could quietly change.
+      this.db.prepare("DELETE FROM scene_anchors WHERE scene_id = ?").run(id);
+      this.db.prepare("DELETE FROM scenes WHERE id = ?").run(id);
+      this.log(m, at, "deleteScene", id, before, null);
+      return true;
+    }).immediate() as boolean;
+  }
+
   allScenes(): Array<{
     id: string; name: string; narr: string | null; scale: number; showProv: boolean;
     focusNode: string | null; ordinal: number; legacyId: string | null; contentKey: string;

@@ -152,13 +152,12 @@ async function main(): Promise<void> {
         console.log(`${before.dirty} chunk(s) owed (${before.never} never extracted, ${before.stale} under an older prompt)`);
 
         const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
+        // NO advisory lock around extraction, deliberately. The lock is a coarse one-writer-at-a-time guard
+        // for whole ingests; extraction is already protected at a finer grain by the per-chunk claim (two
+        // extractors cannot take one chunk) and by the store's BEGIN IMMEDIATE transactions (SQLite
+        // serializes the actual writes). Taking it here would only reintroduce the thing this batch removed:
+        // a long hold that makes LOCK_STALE_MS reachable and blocks a drop for the length of a batch.
         const r = await extractPending(graph, extractor, {
-          // The lock is taken per SMALL BATCH, never across the whole run. That is the whole point: holding
-          // one lock across a multi-hour extraction is what made LOCK_STALE_MS reachable in the first place.
-          withBatch: async (fn) => {
-            const release = acquireIngestLock(graphDir(name), `cli extract ${name}`);
-            try { return await fn(); } finally { release(); }
-          },
           onChunk: (done, total) => process.stdout.write(`\r  extracting ${done}/${total}...`),
         });
         process.stdout.write("\r\x1b[K");

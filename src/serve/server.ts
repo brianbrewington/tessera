@@ -13,16 +13,32 @@ export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 export const TEMP_MAX_AGE_MS = 60 * 60 * 1000;
 
 export interface IngestProgress {
-  phase: "chunk" | "done" | "error";
+  /** chunk = writing chunks (fast) · extract = the background LLM drain · done · error */
+  phase: "chunk" | "extract" | "done" | "error";
   i?: number;
   of?: number;
   chunks?: number;
+  /** Chunks written and now owed to the extractor. What "42 chunks queued" actually means. */
+  queued?: number;
+  /** Chunks owed across the WHOLE graph, so the viewer can be honest about an incomplete map. */
+  dirty?: number;
   entities?: number;
   edges?: number;
   laidOut?: number;
   /** True when content-hash dedup recognised the document — a no-op, not a failure. */
   skipped?: boolean;
   message?: string;
+}
+
+/** What `GET /status` answers. Progress as a queryable FACT, not something inferred from a spinner. */
+export interface ServeStatus {
+  chunks: number;
+  dirty: number;
+  never: number;
+  stale: number;
+  failing: number;
+  /** True while a background extraction drain is running in this process. */
+  draining: boolean;
 }
 
 /** Everything the server needs, injected so tests never need a real graph, LLM, or embedder. */
@@ -35,6 +51,8 @@ export interface ServeDeps {
   isSupported: (filename: string) => boolean;
   readScenes: () => unknown;
   writeScenes: (payload: unknown) => { ok: true } | { ok: false; conflicts: string[] };
+  /** Extraction debt, answerable at any time by any client — after a crash, from another terminal. */
+  status?: () => ServeStatus;
   tempDir?: string;
 }
 
@@ -48,6 +66,7 @@ const ROUTES: Record<string, RouteKind> = {
   "/ingest": "api",
   "/events": "api",
   "/scenes": "api",
+  "/status": "api",
 };
 
 /** Sweep stale uploads at startup: a SIGKILL cannot run a `finally`, so `finally` alone is not a guarantee. */
@@ -160,6 +179,11 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
 
         if (path === "/scenes" && req.method === "GET") {
           return send(res, 200, JSON.stringify(deps.readScenes()), "application/json");
+        }
+
+        if (path === "/status" && req.method === "GET") {
+          if (!deps.status) return send(res, 404, "status not available");
+          return send(res, 200, JSON.stringify(deps.status()), "application/json");
         }
 
         if (path === "/scenes" && req.method === "PUT") {

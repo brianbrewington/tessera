@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { layoutPass } from "../src/layout/pass.js";
-import { selectAnchors } from "../src/scenes/scene.js";
+import { selectAnchors, frameAnchors } from "../src/scenes/scene.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -188,5 +188,72 @@ describe("the export must not anchor to hidden provenance (Fable, HIGH)", () => 
     const fn = extractFn("anchorsForCamera");
     expect(fn).toContain("const pool = NODES;");
     expect(fn).not.toMatch(/=\s*nodes\.filter/); // the pre-fix form
+  });
+});
+
+describe("the scenes rack is reorderable, and the reorder is extractable", () => {
+  // Drag-reorder was deferred to v1.5 ("named tours, drag-reorder"); Brian pulled it forward. The array move
+  // is extracted from the template so the ordering logic is testable without a DOM and without dispatching
+  // synthetic drag events, which test the browser more than they test us.
+  const moveScene = new Function(`${extractFn("moveScene")}; return moveScene;`)() as <T>(l: T[], f: number, t: number) => T[];
+
+  it("moves an item and shifts the rest", () => {
+    expect(moveScene(["a", "b", "c", "d"], 0, 2)).toEqual(["b", "c", "a", "d"]);
+    expect(moveScene(["a", "b", "c", "d"], 3, 0)).toEqual(["d", "a", "b", "c"]);
+    expect(moveScene(["a", "b", "c"], 1, 2)).toEqual(["a", "c", "b"]);
+  });
+
+  it("returns the SAME array reference for a no-op, so a drop-in-place persists nothing", () => {
+    const l = ["a", "b", "c"];
+    expect(moveScene(l, 1, 1)).toBe(l); // identity, not just equality — reorderScenes early-returns on this
+  });
+
+  it("refuses out-of-range indices rather than corrupting the list", () => {
+    const l = ["a", "b"];
+    expect(moveScene(l, -1, 0)).toBe(l);
+    expect(moveScene(l, 0, 9)).toBe(l);
+  });
+});
+
+describe("cameraForAnchors mirrors frameAnchors — the restore half of the bridge", () => {
+  // anchorsForCamera (save) already had a mirror test. Its inverse did not exist in the viewer until served
+  // scenes needed it: a scene from the database carries node ids, not a camera. Two implementations of the
+  // same framing equations will drift unless something fails when they do.
+  const camFor = (ids: string[], stored: number, nodeList: any[], W: number, H: number) =>
+    new Function("ids", "storedScale", "NODES", "byId", "W", "H",
+      `${extractFn("cameraForAnchors")}
+       ${TEMPLATE.match(/const FIT_FRACTION=[^\n]*\n/)![0]}
+       return cameraForAnchors(ids, storedScale);`,
+    )(ids, stored, nodeList, new Map(nodeList.map((n) => [n.id, n])), W, H);
+
+  const nodes = [
+    { id: "a", x: -100, y: -50, deg: 3 },
+    { id: "b", x: 300, y: 150, deg: 2 },
+    { id: "c", x: 20, y: 900, deg: 1 },
+  ];
+
+  it("agrees with frameAnchors on the same anchors", () => {
+    const ids = ["a", "b"];
+    const pts = nodes.filter((n) => ids.includes(n.id)).map((n) => ({ x: n.x, y: n.y }));
+    const ts = frameAnchors(pts, 1.4, { w: 1200, h: 800 });
+    const vw = camFor(ids, 1.4, nodes, 1200, 800);
+    expect(vw.scale).toBeCloseTo(ts.scale, 9);
+    expect(vw.ox).toBeCloseTo(ts.ox, 9);
+    expect(vw.oy).toBeCloseTo(ts.oy, 9);
+  });
+
+  it("agrees on the single-anchor case, where stored scale must win", () => {
+    const ts = frameAnchors([{ x: -100, y: -50 }], 2.5, { w: 1200, h: 800 });
+    const vw = camFor(["a"], 2.5, nodes, 1200, 800);
+    expect(vw.scale).toBeCloseTo(ts.scale, 9);
+    expect(vw.scale).toBeCloseTo(2.5, 9); // the deliberate close-up is not thrown away
+    expect(vw.ox).toBeCloseTo(ts.ox, 9);
+  });
+
+  it("returns null when every anchor is gone, rather than guessing a camera", () => {
+    // frameAnchors THROWS on an empty set ("a scene must resolve to something"). In the browser a throw
+    // would break the click; returning null leaves the camera where it is, which is the honest no-op.
+    expect(camFor(["vanished"], 1, nodes, 1200, 800)).toBeNull();
+    expect(() => frameAnchors([], 1, { w: 1200, h: 800 })).toThrow();
   });
 });

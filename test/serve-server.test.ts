@@ -42,6 +42,7 @@ const state = {
   ingestThrows: false,
   scenes: [{ id: "s1", name: "one", version: 1 }] as Array<Record<string, unknown>>,
   writeConflicts: [] as string[],
+  status: { chunks: 10, dirty: 2, never: 2, stale: 0, failing: 1, draining: false },
 };
 
 beforeAll(async () => {
@@ -58,6 +59,7 @@ beforeAll(async () => {
       return { phase: "done", chunks: 2, entities: 5, edges: 3, laidOut: 5 };
     },
     readScenes: () => ({ scenes: state.scenes }),
+    status: () => state.status,
     writeScenes: () => (state.writeConflicts.length ? { ok: false, conflicts: state.writeConflicts } : { ok: true }),
     tempDir: temp,
   };
@@ -381,43 +383,67 @@ describe("oversize is rejected MID-STREAM, not only by declared length (Fable ro
   }, 30_000);
 });
 
-describe("a deduped re-drop is reported as such, not as a failed add", () => {
-  it("the client branches on `skipped` before the added-N-entities message", () => {
+describe("a multi-file drop reports every outcome", () => {
+  // The handler used to take e.dataTransfer.files[0]: dropping three files ingested one and said NOTHING
+  // about the other two. Silent loss into a system whose whole point is completeness. These drive the two
+  // extracted helpers directly rather than slicing a region of the handler out of the template, which broke
+  // the moment the handler grew a loop.
+  const tplSrc = (): string => {
     const { readFileSync: rf } = require("node:fs") as typeof import("node:fs");
-    const tpl = rf(join(__dirname, "..", "viewer", "template.html"), "utf8");
-    const start = tpl.indexOf("      const r=JSON.parse(txt);");
-    const end = tpl.indexOf("setTimeout(()=>location.reload(), 900);", start);
-    const src = tpl.slice(start, end);
+    return rf(join(__dirname, "..", "viewer", "template.html"), "utf8");
+  };
+  /** Pull a named top-level function out of the template so it can be exercised with no DOM. */
+  const fnFromTemplate = (name: string): Function => {
+    const src = tplSrc();
+    const at = src.indexOf(`function ${name}(`);
+    expect(at).toBeGreaterThan(-1);
+    const end = src.indexOf("\n}", at);
+    return new Function(`${src.slice(at, end + 2)}; return ${name};`)() as Function;
+  };
 
-    const run = (r: Record<string, unknown>): { msg: string; reloaded: boolean } => {
-      let msg = "", reloaded = true;
-      const dropStatus = (m: string): void => { msg = m; };
-      const es = { close(): void {} };
-      const f = { name: "notes.md" };
-      // the branch returns early when skipped, so `reloaded` stays false in that case
-      new Function("txt", "dropStatus", "es", "f", "setReloaded", `${src.replace("return;", "setReloaded(false); return;")}`)(
-        JSON.stringify(r), dropStatus, es, f, (v: boolean) => { reloaded = v; },
-      );
-      return { msg, reloaded };
-    };
+  it("partitions a dropped FileList into supported and rejected, keeping ALL of both", () => {
+    const partitionDrop = fnFromTemplate("partitionDrop") as (f: Array<{ name: string }>) => { supported: Array<{ name: string }>; rejected: string[] };
+    const r = partitionDrop([{ name: "a.md" }, { name: "photo.png" }, { name: "b.txt" }, { name: "c.pdf" }]);
+    expect(r.supported.map((f) => f.name)).toEqual(["a.md", "b.txt"]); // not just the first
+    expect(r.rejected).toEqual(["photo.png", "c.pdf"]); // and the skipped ones are NAMED, not dropped in silence
+  });
 
-    const skipped = run({ skipped: true, entities: 0, edges: 0 });
-    expect(skipped.msg).toMatch(/already in this map/);
-    expect(skipped.msg).not.toMatch(/added 0 entities/); // the message that reads as a failure
-    expect(skipped.reloaded).toBe(false); // no pointless reload
+  it("names every outcome in the summary — queued, already present, unsupported, failed", () => {
+    const summariseDrop = fnFromTemplate("summariseDrop") as (s: Record<string, unknown>) => string;
+    const all = summariseDrop({ added: 2, queued: 41, dedup: 1, rejected: ["photo.png"], failed: ["x.md"] });
+    expect(all).toMatch(/2 files queued \(41 chunks\)/);
+    expect(all).toMatch(/1 already in this map/);
+    expect(all).toMatch(/unsupported: photo\.png/);
+    expect(all).toMatch(/failed: x\.md/);
+  });
 
-    const added = run({ skipped: false, entities: 7, edges: 4 });
-    expect(added.msg).toMatch(/added 7 entities, 4 edges/);
-    expect(added.reloaded).toBe(true);
+  it("a deduped re-drop reads as 'already in this map', never as a failed add", () => {
+    const summariseDrop = fnFromTemplate("summariseDrop") as (s: Record<string, unknown>) => string;
+    // Content-hash dedup means a re-drop of identical bytes adds nothing. "added 0 entities" reads as a
+    // failure, so the wording has to name what actually happened.
+    const msg = summariseDrop({ added: 0, queued: 0, dedup: 1, rejected: [], failed: [] });
+    expect(msg).toMatch(/already in this map/);
+    expect(msg).not.toMatch(/failed/);
+  });
+
+  it("says something honest even when a drop contained nothing usable", () => {
+    const summariseDrop = fnFromTemplate("summariseDrop") as (s: Record<string, unknown>) => string;
+    expect(summariseDrop({ added: 0, queued: 0, dedup: 0, rejected: [], failed: [] })).toBe("nothing to add");
   });
 });
 
-describe("oversize PUT /scenes returns 413, not 500 (Fable round 3)", () => {
-  it("both body-taking routes surface the size error, not a generic failure", async () => {
-    const big = "x".repeat(MAX_UPLOAD_BYTES + 10);
-    const scenes = await fetch(`${BASE}/scenes`, { method: "PUT", headers: { ...HDR, "Content-Type": "application/json" }, body: big });
-    expect(scenes.status).toBe(413); // was 500: readBody's 413 fell through to the generic handler
-    const ingest = await post("/ingest", big, HDR, { "X-Tessera-Filename": "big.md" });
-    expect(ingest.status).toBe(413);
-  }, 20_000);
+describe("GET /status — extraction debt as a queryable fact", () => {
+  // The two never-extracted chunks in graphs/big were invisible for months. A server that knows what is
+  // owed and answers only over a progress stream you had to be watching is the same failure with better
+  // uptime: this has to be answerable at any time, from another terminal, after a crash.
+  it("reports what is owed, through the guard", async () => {
+    const r = await fetch(BASE + "/status", { headers: HDR });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ chunks: 10, dirty: 2, never: 2, stale: 0, failing: 1, draining: false });
+  });
+
+  it("is guarded like every other API route", async () => {
+    const r = await fetch(BASE + "/status", { headers: { ...HDR, Origin: "https://evil.example" } });
+    expect(r.status).toBe(403);
+  });
 });

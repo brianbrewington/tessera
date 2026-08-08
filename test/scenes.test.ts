@@ -42,6 +42,65 @@ describe("contentKey — the import idempotency key", () => {
   });
 });
 
+describe("scenes are editable, not just importable", () => {
+  // importScenes is insert-only. Before reorderScenes/deleteScene existed there was no UPDATE and no DELETE
+  // for scenes anywhere in the repo — while the viewer has always had an × on every scene chip. Wiring
+  // served scenes to the db without these would have made that × a lie that survived until reload.
+  const mk = (name: string, anchors: string[], ordinal: number) =>
+    withKey({ name, narr: null, scale: 1, showProv: false, focusNode: null, anchors, ordinal });
+
+  it("reorderScenes moves rows and leaves contentKey untouched — the invariant drag-reorder rests on", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 3);
+    s.importScenes([mk("A", [ids[0]!], 0), mk("B", [ids[1]!], 1), mk("C", [ids[2]!], 2)], meta);
+    const before = s.allScenes();
+    expect(before.map((x) => x.name)).toEqual(["A", "B", "C"]);
+
+    const moved = s.reorderScenes([before[2]!.id, before[0]!.id, before[1]!.id], meta);
+    expect(moved).toBe(3);
+    const after = s.allScenes();
+    expect(after.map((x) => x.name)).toEqual(["C", "A", "B"]);
+    // The keys are unchanged, so a later `tessera scenes import` still sees these as the SAME scenes and
+    // counts them as duplicates rather than importing three new ones.
+    expect(new Set(after.map((x) => x.contentKey))).toEqual(new Set(before.map((x) => x.contentKey)));
+    s.close();
+  });
+
+  it("reordering to the SAME order writes nothing (the no-op rule)", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 2);
+    s.importScenes([mk("A", [ids[0]!], 0), mk("B", [ids[1]!], 1)], meta);
+    const cur = s.allScenes();
+    expect(s.reorderScenes(cur.map((x) => x.id), meta)).toBe(0);
+    expect(s.allScenes().map((x) => x.version)).toEqual(cur.map((x) => x.version)); // no version churn
+    s.close();
+  });
+
+  it("deleteScene removes the scene AND its anchors, and is honest about a missing id", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 2);
+    s.importScenes([mk("A", [ids[0]!, ids[1]!], 0), mk("B", [ids[1]!], 1)], meta);
+    const target = s.allScenes().find((x) => x.name === "A")!;
+
+    expect(s.deleteScene(target.id, meta)).toBe(true);
+    expect(s.allScenes().map((x) => x.name)).toEqual(["B"]);
+    // @ts-expect-error — deliberate private access: the orphan-anchor check is about raw rows
+    const orphans = (s.db.prepare("SELECT count(*) AS n FROM scene_anchors WHERE scene_id = ?").get(target.id) as { n: number }).n;
+    expect(orphans).toBe(0);
+    expect(s.deleteScene(target.id, meta)).toBe(false); // already gone
+    s.close();
+  });
+
+  it("a deleted scene can be saved again (its content key is free)", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 1);
+    s.importScenes([mk("A", [ids[0]!], 0)], meta);
+    s.deleteScene(s.allScenes()[0]!.id, meta);
+    expect(s.importScenes([mk("A", [ids[0]!], 0)], meta).imported).toBe(1);
+    s.close();
+  });
+});
+
 describe("importScenes — crossing the one-way door", () => {
   it("imports scenes with COLLIDING legacy ids as two distinct rows", async () => {
     // 'sc' + performance.now() is milliseconds since PAGE LOAD, so two scenes saved at similar page ages in

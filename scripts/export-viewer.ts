@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
+import { PROMPT_VERSION } from "../src/extract/extractor.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TPL = `${here}/../viewer/template.html`;
@@ -38,6 +39,13 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
     reason: store.edgeReason(e.id) ?? "", // latest — for the hover tooltip
     reasons: store.edgeReasons(e.id), // ALL assertions — for the right-click deep-inspect
   }));
+  // Scenes travel with the bundle. Design §6 makes the db the source of truth in served mode, but the served
+  // page still read localStorage — so a user who correctly followed the slice-2 migration opened the served
+  // viewer, saw NO scenes, and had every reason to conclude the migration had failed. The data was safe the
+  // whole time; nothing displayed it.
+  const scenes = store.allScenes();
+  // Extraction debt, so the map can say it is incomplete rather than just looking thin.
+  const dirtyChunks = store.dirtyCounts(PROMPT_VERSION).dirty;
   store.close();
 
   // Stored layout travels with the bundle (design §3.5). Without this the CLI would write positions to
@@ -46,7 +54,7 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   const layout: Record<string, [number, number]> = {};
   for (const [id, p] of storedLayout) layout[id] = [p.x, p.y];
 
-  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);
