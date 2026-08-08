@@ -755,6 +755,36 @@ export class GraphStore {
     }).immediate() as boolean;
   }
 
+  /**
+   * The whole `PUT /scenes` apply, in ONE transaction, with the ordering resolved INSIDE it.
+   *
+   * It used to be three separate store calls — deleteScene, importScenes, reorderScenes — under a server
+   * comment promising ALL-OR-NOTHING. Only the 409 preflight was atomic. A reviewer walked it: delete three
+   * scenes, add two, have the import throw, and the deletes are already committed. Scenes are the one thing
+   * in this store that CAN be deleted and they carry the only human-authored prose in it, so a partial apply
+   * is the single place real writing can be lost.
+   *
+   * Ordering has to follow the inserts, because a new scene's id is minted here. Resolving it by content key
+   * inside the transaction is what lets the whole thing be one unit; that need is what tempted the original
+   * into three calls.
+   */
+  syncScenesResolved(
+    deletes: readonly string[],
+    create: ReadonlyArray<Parameters<GraphStore["importScenes"]>[0][number]>,
+    want: ReadonlyArray<{ id: string | null; key: string }>,
+    meta: Meta,
+  ): { deleted: number; imported: number; reordered: number } {
+    return this.db.transaction(() => {
+      let deleted = 0;
+      for (const id of deletes) if (this.deleteScene(id, meta)) deleted++;
+      const imported = create.length ? this.importScenes(create, meta).imported : 0;
+      const byKey = new Map(this.allScenes().map((x) => [x.contentKey, x.id]));
+      const order = want.map((w) => w.id ?? byKey.get(w.key)).filter((x): x is string => !!x);
+      const reordered = order.length ? this.reorderScenes(order, meta) : 0;
+      return { deleted, imported, reordered };
+    }).immediate() as { deleted: number; imported: number; reordered: number };
+  }
+
   allScenes(): Array<{
     id: string; name: string; narr: string | null; scale: number; showProv: boolean;
     focusNode: string | null; ordinal: number; legacyId: string | null; contentKey: string;

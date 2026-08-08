@@ -29,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--reextract] [--no-recursive]\n  tessera ingest-session <name> <log.jsonl...>  [--user <name>]\n  tessera extract <name> [--retry-failed]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--rechunk] [--no-recursive]\n  tessera ingest-session <name> <log.jsonl...>  [--user <name>]\n  tessera extract <name> [--retry-failed] [--force]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
   process.exit(1);
 }
 
@@ -54,9 +54,16 @@ async function main(): Promise<void> {
     case "ingest": {
       // Corpus ingest: paths may be files OR directories (recursive by default). Incremental + content-dedup'd —
       // an unchanged doc is skipped file-level (zero writes). One bad file never aborts the run. --dry-run prints
-      // the plan and writes nothing; --reextract bypasses the chunk memo; --no-recursive stays out of subdirs.
+      // the plan and writes nothing; --no-recursive stays out of subdirs. --rechunk re-reads and re-chunks a
+      // document whose chunks are already written; it does NOT re-extract, because since the split this
+      // command never calls the LLM. Re-extraction is `tessera extract --force`. `--reextract` is kept as a
+      // deprecated alias that warns, because it used to mean re-extract and silently stopped.
       const flags = new Set(args.filter((a) => a.startsWith("--")));
-      const reextract = flags.has("--reextract");
+      const rechunk = flags.has("--rechunk") || flags.has("--reextract");
+      if (flags.has("--reextract")) {
+        console.error("note: --reextract now means --rechunk; it re-chunks but does NOT re-extract.");
+        console.error("      to re-pay the LLM for already-extracted chunks:  tessera extract <name> --force");
+      }
       const dryRun = flags.has("--dry-run");
       const recursive = !flags.has("--no-recursive");
       const [name, ...inputs] = args.filter((a) => !a.startsWith("--"));
@@ -88,7 +95,7 @@ async function main(): Promise<void> {
             try {
               const hash = docContentHash(readDoc(f).doc.text);
               const prior = g?.store.getIngestedSource(hash) ?? null;
-              if (reextract || !prior) cls = "new";
+              if (rechunk || !prior) cls = "new";
               else {
                 // Chunks exist, but do they OWE extraction? Since the split, `status` only means "chunks
                 // written", so keying the plan on it alone would report a document as unchanged while every
@@ -123,7 +130,7 @@ async function main(): Promise<void> {
           try {
             // CHUNK ONLY. Extraction is `tessera extract`, so this loop never calls the LLM and the advisory
             // lock is held for a bounded, predictable time rather than across a multi-hour extraction.
-            const r = await ingestChunks(graph, f, { rechunk: reextract, extractorModel });
+            const r = await ingestChunks(graph, f, { rechunk, extractorModel });
             chunks += r.chunks; queued += r.queued;
             if (r.skipped) { skipped++; console.log(`skip     "${r.title}" (already chunked, ${r.chunks} chunk(s), ${r.queued} still owed)`); continue; }
             chunkedDocs++;
@@ -198,6 +205,11 @@ async function main(): Promise<void> {
       // chunks can ever be finished.
       const flags = new Set(args.filter((a) => a.startsWith("--")));
       const retryFailed = flags.has("--retry-failed");
+      // --force re-extracts chunks already marked clean at the current PROMPT_VERSION. It exists because
+      // `tessera ingest --reextract` re-CHUNKS and no longer re-extracts (the split moved extraction out of
+      // that command), so after the split there was no way to reach extractPending's `force` path from the
+      // CLI at all: the flag was documented, the option existed, and nothing could call it.
+      const force = flags.has("--force");
       const [name] = args.filter((a) => !a.startsWith("--"));
       if (!name) usage();
       if (!existsSync(join(graphDir(name), "graph.db"))) { console.error(`no graph db for '${name}' — ingest something first`); process.exit(1); }
@@ -210,7 +222,8 @@ async function main(): Promise<void> {
           console.log(`cleared attempt counts on ${cleared} chunk(s)`);
         }
         const before = graph.store.dirtyCounts(PROMPT_VERSION);
-        if (before.chunks === 0) {
+        if (force) console.log("--force: re-extracting chunks already marked clean (this re-pays the LLM)");
+        if (before.chunks === 0 && !force) {
           // "all 0 chunks are current" is technically true and actively misleading: nothing was ever
           // ingested here. Saying so, and naming where the work actually is, is the difference between a
           // five-second correction and concluding the ingest silently failed.
@@ -222,7 +235,7 @@ async function main(): Promise<void> {
           }
           break;
         }
-        if (before.dirty === 0) { console.log(`nothing to extract — all ${before.chunks} chunk(s) are current`); break; }
+        if (before.dirty === 0 && !force) { console.log(`nothing to extract — all ${before.chunks} chunk(s) are current`); break; }
         console.log(`${before.dirty} chunk(s) owed (${before.never} never extracted, ${before.stale} under an older prompt)`);
 
         const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
@@ -232,6 +245,7 @@ async function main(): Promise<void> {
         // serializes the actual writes). Taking it here would only reintroduce the thing this batch removed:
         // a long hold that makes LOCK_STALE_MS reachable and blocks a drop for the length of a batch.
         const r = await extractPending(graph, extractor, {
+          force,
           onChunk: (done, total) => process.stdout.write(`\r  extracting ${done}/${total}...`),
         });
         process.stdout.write("\r\x1b[K");

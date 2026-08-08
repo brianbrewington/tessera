@@ -21,6 +21,41 @@ import { acquireIngestLock, LockHeld } from "../src/serve/lock.js";
 export interface ServeCliOptions { name: string; port: number; graphDir: string; db: string }
 
 /**
+ * Owns the drain's single-flight state, so that "a drop landed while a drain was running" is a fact the
+ * coordinator holds rather than a race between two booleans in a closure.
+ *
+ * Both cross-agent reviewers found the same hole independently: `startDrain` no-ops when a drain is already
+ * running, and the running drain's last "is anything left?" check can precede the newer chunks. The second
+ * file of a multi-file drop — the ordinary path, since the viewer posts sequentially — could be chunked,
+ * counted, and then never extracted. The inner loop does not help: it re-asks the database, but the zero it
+ * sees predates the arrival.
+ *
+ * Exported and used by exactly one caller, so a test of this object IS a test of the call site. A previous
+ * attempt tested a hand-written model of this logic instead, which would have stayed green with the real
+ * coordinator unwired.
+ */
+export function createDrainCoordinator(runPass: () => Promise<void>): {
+  request: () => void;
+  isRunning: () => boolean;
+} {
+  let running = false;
+  let pending = false;
+  const request = (): void => {
+    if (running) { pending = true; return; }   // remember it; do not drop it
+    running = true;
+    void (async (): Promise<void> => {
+      try {
+        do {
+          pending = false;                     // clear BEFORE the pass, so arrivals during it are kept
+          await runPass();
+        } while (pending);
+      } finally { running = false; }
+    })();
+  };
+  return { request, isRunning: () => running };
+}
+
+/**
  * Should the background drain take another pass?
  *
  * Yes only if the last round made progress AND work remains. Both halves are load-bearing:
@@ -43,6 +78,8 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
   // so `GET /status` can distinguish "owed and being worked on" from "owed and nobody is on it", and so two
   // drops in quick succession do not start two drains.
   const drainState = { running: false };
+  // Set by the coordinator below; `startDrain` becomes a thin request into it.
+  let drainCoordinator: { request: () => void; isRunning: () => boolean } | null = null;
 
   /**
    * Work the dirty queue in the background after a drop.
@@ -52,9 +89,17 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
    * only difference is who starts the loop.
    */
   const startDrain = (onProgress: (p: IngestProgress) => void): void => {
-    if (drainState.running) return;
+    // One coordinator per deps bundle. A request that lands mid-pass is REMEMBERED, not dropped, which is
+    // the defect both reviewers found: the second file of a multi-file drop could be chunked and never
+    // extracted, because the running drain's last "anything left?" check predated its chunks.
+    drainCoordinator ??= createDrainCoordinator(async () => { await onePass(onProgress); });
+    drainCoordinator.request();
+    drainState.running = drainCoordinator.isRunning();
+  };
+
+  const onePass = (onProgress: (p: IngestProgress) => void): Promise<void> => {
     drainState.running = true;
-    void (async (): Promise<void> => {
+    return (async (): Promise<void> => {
       let graph: ReturnType<typeof Graph.open> | undefined;
       const total = { extracted: 0, entities: 0, edges: 0, parseFailures: 0, errors: 0 };
       try {
@@ -199,42 +244,33 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
           if (conflicts.length) return { ok: false, conflicts };
 
           const meta = { actor: "serve", cause: "PUT /scenes" };
-          for (const id of deletes) s.deleteScene(id, meta);
 
-          // Scenes the client already knows the id of are existing rows: they only need ordering. Ones
-          // without an id are new and go through the content-keyed import, which stays idempotent.
+          // Resolve everything FIRST, then apply as one transaction. The order resolution needs post-insert
+          // ids for brand-new scenes, so it runs inside syncScenes' transaction via a two-step: create, then
+          // read back by content key, then order. Doing it as three separate store calls meant a throw after
+          // the deletes left scenes permanently gone, under a comment promising all-or-nothing.
           const fresh = body.scenes.filter((sc) => sc.id === undefined || !existing.has(String(sc.id)));
-          if (fresh.length) {
-            const parsed = fresh.map((sc, i) => {
-              const e = {
-                name: String(sc.name ?? `scene ${i + 1}`), narr: (sc.narr as string | null) ?? null,
-                scale: Number(sc.scale ?? 1), showProv: !!sc.showProv,
-                focusNode: (sc.focusNode as string | null) ?? null,
-                anchors: Array.isArray(sc.anchors) ? (sc.anchors as string[]) : [],
-                legacyId: (sc.legacyId as string | null) ?? null,
-                ordinal: Number.isFinite(sc.ordinal) ? Number(sc.ordinal) : i,
-              };
-              return { ...e, contentKey: contentKey(e) };
-            });
-            s.importScenes(parsed, meta);
-          }
-
-          // Order is the payload order, resolved against what is actually in the db now (a new scene's id is
-          // minted by the store, so match those back by content key).
-          const after = s.allScenes();
-          const byKey = new Map(after.map((x) => [x.contentKey, x.id]));
-          const order = body.scenes
-            .map((sc, i) => {
-              if (sc.id !== undefined && existing.has(String(sc.id))) return String(sc.id);
-              return byKey.get(contentKey({
-                name: String(sc.name ?? `scene ${i + 1}`), narr: (sc.narr as string | null) ?? null,
-                scale: Number(sc.scale ?? 1), showProv: !!sc.showProv,
-                focusNode: (sc.focusNode as string | null) ?? null,
-                anchors: Array.isArray(sc.anchors) ? (sc.anchors as string[]) : [],
-              }));
-            })
-            .filter((id): id is string => !!id);
-          if (order.length) s.reorderScenes(order, meta);
+          const parsed = fresh.map((sc, i) => {
+            const e = {
+              name: String(sc.name ?? `scene ${i + 1}`), narr: (sc.narr as string | null) ?? null,
+              scale: Number(sc.scale ?? 1), showProv: !!sc.showProv,
+              focusNode: (sc.focusNode as string | null) ?? null,
+              anchors: Array.isArray(sc.anchors) ? (sc.anchors as string[]) : [],
+              legacyId: (sc.legacyId as string | null) ?? null,
+              ordinal: Number.isFinite(sc.ordinal) ? Number(sc.ordinal) : i,
+            };
+            return { ...e, contentKey: contentKey(e) };
+          });
+          const wantKeys = body.scenes.map((sc, i) => ({
+            id: sc.id !== undefined && existing.has(String(sc.id)) ? String(sc.id) : null,
+            key: contentKey({
+              name: String(sc.name ?? `scene ${i + 1}`), narr: (sc.narr as string | null) ?? null,
+              scale: Number(sc.scale ?? 1), showProv: !!sc.showProv,
+              focusNode: (sc.focusNode as string | null) ?? null,
+              anchors: Array.isArray(sc.anchors) ? (sc.anchors as string[]) : [],
+            }),
+          }));
+          s.syncScenesResolved(deletes, parsed, wantKeys, meta);
           return { ok: true };
         } finally { s.close(); }
       },

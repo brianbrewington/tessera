@@ -250,3 +250,48 @@ describe("restore framing (design §4.2)", () => {
     expect(() => frameAnchors([], 1, VP)).toThrow(/must resolve to something/);
   });
 });
+
+describe("a scene sync is all-or-nothing, as the server has always claimed", () => {
+  // Found by Grok: PUT /scenes ran deleteScene, importScenes and reorderScenes as three separate store
+  // transactions under a comment promising ALL-OR-NOTHING. Only the 409 preflight was atomic. Scenes are the
+  // ONE thing in this store that can be deleted, and they hold the only human-authored prose in it, so a
+  // partial apply is the single place real writing can be lost.
+  const mk = (name: string, anchors: string[], ordinal: number) =>
+    withKey({ name, narr: `narration for ${name}`, scale: 1, showProv: false, focusNode: null, anchors, ordinal });
+
+  it("a failure partway through leaves the scenes exactly as they were", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 3);
+    s.importScenes([mk("A", [ids[0]!], 0), mk("B", [ids[1]!], 1), mk("C", [ids[2]!], 2)], meta);
+    const before = s.allScenes();
+    expect(before.length).toBe(3);
+
+    // A create whose anchors reference a node that does not exist is skipped by importScenes, so force a
+    // real throw the way a disk or busy error would: an invalid ordinal type reaches SQLite as a bind error.
+    const bad = { ...mk("D", [ids[0]!], 0), ordinal: {} as unknown as number };
+    expect(() =>
+      s.syncScenesResolved([before[0]!.id, before[1]!.id], [bad], [], meta),
+    ).toThrow();
+
+    // The deletes must NOT have survived the throw.
+    const after = s.allScenes();
+    expect(after.map((x) => x.name).sort()).toEqual(["A", "B", "C"]);
+    expect(after.map((x) => x.narr)).toEqual(before.map((x) => x.narr)); // narration intact
+    s.close();
+  });
+
+  it("a successful sync deletes, creates and orders in one go", async () => {
+    const s = mkStore();
+    const ids = await nodes(s, 3);
+    s.importScenes([mk("A", [ids[0]!], 0), mk("B", [ids[1]!], 1)], meta);
+    const cur = s.allScenes();
+    const keep = cur.find((x) => x.name === "B")!;
+    const drop = cur.find((x) => x.name === "A")!;
+    const fresh = mk("C", [ids[2]!], 1);
+
+    const r = s.syncScenesResolved([drop.id], [fresh], [{ id: null, key: fresh.contentKey }, { id: keep.id, key: keep.contentKey }], meta);
+    expect(r).toMatchObject({ deleted: 1, imported: 1 });
+    expect(s.allScenes().map((x) => x.name)).toEqual(["C", "B"]); // C first, per the requested order
+    s.close();
+  });
+});

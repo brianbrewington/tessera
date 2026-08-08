@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { createTesseraServer, sweepTemp, MAX_UPLOAD_BYTES, type IngestProgress, type ServeDeps } from "../src/serve/server.js";
-import { shouldDrainAgain } from "../scripts/serve.js";
+import { shouldDrainAgain, createDrainCoordinator } from "../scripts/serve.js";
 
 /**
  * Raw HTTP over a socket, because `fetch` treats Host as a FORBIDDEN header and silently substitutes the
@@ -518,5 +518,51 @@ describe("the background drain keeps going until the queue is dry", () => {
     // Without this half it spins forever: a chunk past the attempt limit stays dirty BY DESIGN, so
     // "remaining > 0" is permanently true and a progress-blind loop would burn the GPU on nothing.
     expect(shouldDrainAgain(0, 3)).toBe(false);
+  });
+});
+
+
+describe("the drain coordinator does not lose work that arrives mid-pass", () => {
+  // Found independently by BOTH cross-agent reviewers. `startDrain` no-ops while a drain runs, and the
+  // running drain's last "anything left?" check can precede the newer chunks, so the second file of a
+  // multi-file drop could be chunked and then never extracted. This tests the object the server actually
+  // uses; an earlier version of this test drove a hand-written model of the logic and would have stayed
+  // green with the real coordinator unwired.
+  it("runs a second pass when a request arrives while one is in flight", async () => {
+    let passes = 0;
+    let release: (() => void) | null = null;
+    const coord = createDrainCoordinator(async () => {
+      passes++;
+      if (passes === 1) await new Promise<void>((r) => { release = r; });  // hold pass 1 open
+    });
+    coord.request();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(passes).toBe(1);
+    expect(coord.isRunning()).toBe(true);
+
+    coord.request();          // the drop that used to be swallowed
+    release!();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(passes).toBe(2);
+  });
+
+  it("does not spin when nothing arrived during the pass", async () => {
+    let passes = 0;
+    const coord = createDrainCoordinator(async () => { passes++; });
+    coord.request();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(passes).toBe(1);
+    expect(coord.isRunning()).toBe(false);
+  });
+
+  it("a pass that throws still clears the flag, so the drain is not wedged forever", async () => {
+    let passes = 0;
+    const coord = createDrainCoordinator(async () => { passes++; throw new Error("ollama died"); });
+    coord.request();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(coord.isRunning()).toBe(false);
+    coord.request();                                  // must be able to start again
+    await new Promise((r) => setTimeout(r, 10));
+    expect(passes).toBe(2);
   });
 });
