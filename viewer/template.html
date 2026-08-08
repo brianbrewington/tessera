@@ -686,11 +686,16 @@ function toDbScene(s,i){
 /** Persist. On file:// that is localStorage; when SERVED it is an all-or-nothing PUT the server can 409. */
 function persistScenes(){
   if(!SERVED){ try{ localStorage.setItem(SKEY, JSON.stringify(scenes)); }catch(e){} return; }
-  const deletes=pendingDeletes.slice(); pendingDeletes=[];
+  // Take a copy but DO NOT clear yet: if the PUT fails, the scene is already gone from the local list while
+  // its row is still in the database, so dropping the id here would strand the delete until the user thought
+  // to do it again. Cleared only once the server has accepted it.
+  const deletes=pendingDeletes.slice();
+  const restoreDeletes=()=>{ for(const d of deletes) if(pendingDeletes.indexOf(d)<0) pendingDeletes.push(d); };
   fetch('/scenes',{ method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ scenes: scenes.map(toDbScene), deletes }) })
     .then(async res=>{
       if(res.status===409){
+        restoreDeletes();
         // Someone else changed these scenes. All-or-nothing means nothing was applied, so re-read rather
         // than leaving the page showing edits the database never accepted.
         dropStatus('scenes changed elsewhere — reloading them');
@@ -698,13 +703,14 @@ function persistScenes(){
         if(fresh){ scenes=(fresh.scenes||[]).map(fromDbScene); renderScenes(); }
         return;
       }
-      if(!res.ok){ dropStatus('could not save scenes ('+res.status+')'); return; }
+      if(!res.ok){ restoreDeletes(); dropStatus('could not save scenes ('+res.status+')'); return; }
+      pendingDeletes=pendingDeletes.filter(d=>deletes.indexOf(d)<0); // accepted — now they can go
       // Re-read so newly created scenes pick up the id and version the STORE minted for them; without this
       // the next save would look like a create and mint a duplicate.
       const fresh=await fetch('/scenes').then(r=>r.json()).catch(()=>null);
       if(fresh){ scenes=(fresh.scenes||[]).map(fromDbScene); renderScenes(); }
     })
-    .catch(err=>dropStatus('could not save scenes: '+err));
+    .catch(err=>{ restoreDeletes(); dropStatus('could not save scenes: '+err); });
 }
 function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); return; }
   const s={ id:'sc'+performance.now().toFixed(0), name, ox, oy, scale, showProv, node: selected?selected.id:null,
@@ -713,7 +719,13 @@ function saveScene(name){ name=(name||'').trim(); if(!name){ renderScenes(); ret
 function restoreScene(s,dur){ activeScene=s.id;
   if(!!s.showProv!==showProv){ showProv=!!s.showProv; rebuild(); }   // match the saved provenance filter
   if(s.node){ const n=byId.get(s.node); if(n&&NODES.includes(n)){ walk=[]; openNode(n,false); } else showIdle(); } else showIdle();
-  const cam = (s.anchors&&s.anchors.length) ? cameraForAnchors(s.anchors, s.scale) : {ox:s.ox, oy:s.oy, scale:s.scale};
+  // Anchors win when the scene has them (served scenes always should). Fall back to a stored camera only if
+  // one is actually there: a scene row whose anchors all resolved away has no camera either, and
+  // flyTo(undefined, undefined, …) would throw the view somewhere meaningless. Leaving the camera put is the
+  // honest no-op — the panel and provenance filter above have already been applied.
+  const cam = (s.anchors&&s.anchors.length) ? cameraForAnchors(s.anchors, s.scale)
+            : (Number.isFinite(s.ox)&&Number.isFinite(s.oy)) ? {ox:s.ox, oy:s.oy, scale:s.scale}
+            : null;
   if(cam) flyTo(cam.ox, cam.oy, cam.scale, dur); // animate the camera rather than cutting (dur: tours glide slower)
   renderScenes(); }
 function delScene(id){
@@ -806,15 +818,27 @@ const SERVED = location.protocol === 'http:' || location.protocol === 'https:';
 // --- EXTRACTION DEBT. Chunks are written fast; extraction happens after. A map rendered mid-drain is
 // INCOMPLETE, and it has to say so — otherwise "the graph looks thin" and "extraction has not run yet" are
 // the same picture, which is the confusion the whole dirty-chunk model exists to remove.
-function setDirtyBadge(n){
+// `b` may be a plain total or the {dirty,never,stale,failing} breakdown. The breakdown matters because the
+// background drain does NOT touch every kind of debt: it skips stale-prompt chunks (re-extracting a corpus
+// is a decision, not a side effect of dropping a file) and chunks past the attempt limit. A badge that said
+// "a drop will handle this" about chunks no drop will ever touch would be a new silent lie in the exact
+// place this batch went to remove one.
+function setDirtyBadge(b){
   const el=$('gdirty'); if(!el) return;
-  if(!n){ el.classList.remove('on'); return; }
-  el.textContent='+'+n+' awaiting extraction';
-  el.title=n+' chunk(s) are written but not yet extracted, so their entities are not on this map yet.\n'
-    +(SERVED?'A drop extracts new chunks in the background. ':'')+'For the rest, run:  tessera extract '+(GRAPH.name||'<graph>');
+  const d = (b && typeof b === 'object') ? b : { dirty: b||0, never: b||0, stale: 0, failing: 0 };
+  if(!d.dirty){ el.classList.remove('on'); return; }
+  el.textContent='+'+d.dirty+' awaiting extraction';
+  const cmd='tessera extract '+(GRAPH.name||'<graph>');
+  const lines=[d.dirty+' chunk(s) are written but not yet extracted, so their entities are not on this map yet.'];
+  const auto = SERVED ? Math.max(0, d.never - d.failing) : 0;
+  if(auto) lines.push(auto+' will extract in the background after a drop.');
+  if(d.stale) lines.push(d.stale+' were extracted under an older prompt and need:  '+cmd);
+  if(d.failing) lines.push(d.failing+' failed repeatedly and need:  '+cmd+' --retry-failed');
+  if(!auto && !d.stale && !d.failing) lines.push('run:  '+cmd);
+  el.title=lines.join('\n');
   el.classList.add('on');
 }
-setDirtyBadge(GRAPH.dirtyChunks||0);
+setDirtyBadge(GRAPH.dirty||GRAPH.dirtyChunks||0);
 
 loadScenes(); renderScenes(); renderEdgeCtl();
 function dropUI(){

@@ -21,6 +21,18 @@ import { acquireIngestLock, LockHeld } from "../src/serve/lock.js";
 export interface ServeCliOptions { name: string; port: number; graphDir: string; db: string }
 
 /**
+ * Should the background drain take another pass?
+ *
+ * Yes only if the last round made progress AND work remains. Both halves are load-bearing:
+ *  - "work remains" alone would spin forever on chunks the drain is not allowed to touch (a poison chunk
+ *    past FAILING_ATTEMPTS stays dirty by design, so `remaining > 0` is permanently true).
+ *  - "made progress" alone would stop while chunks queued mid-drain sat untouched.
+ */
+export function shouldDrainAgain(extractedThisRound: number, remaining: number): boolean {
+  return extractedThisRound > 0 && remaining > 0;
+}
+
+/**
  * The dependency bundle, extracted so the SERVE call site of the advisory lock is reachable from a test.
  * It was not, and unwiring it left the whole suite green — half of the one-sided-lock defect could revert.
  */
@@ -44,23 +56,38 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
     drainState.running = true;
     void (async (): Promise<void> => {
       let graph: ReturnType<typeof Graph.open> | undefined;
+      const total = { extracted: 0, entities: 0, edges: 0, parseFailures: 0, errors: 0 };
       try {
         graph = Graph.open(opts.name);
         const extractorModel = process.env.TESSERA_EXTRACT_MODEL || "qwen2.5:14b";
         const extractor = new LlmExtractor(new OllamaChat(extractorModel), { temperature: 0.4 });
-        const r = await extractPending(graph, extractor, {
-          // Never-extracted chunks only. Re-extracting a whole corpus because PROMPT_VERSION changed is a
-          // decision worth 33 minutes of someone's GPU — it should not be triggered by dropping a file.
-          includeStale: false,
-          // The poison guard: a chunk the model cannot parse must not be retried on every drop forever.
-          // `tessera extract --retry-failed` is how a human reaches it.
-          maxAttempts: FAILING_ATTEMPTS,
-          onChunk: (done, total) => onProgress({ phase: "extract", i: done, of: total }),
-        });
-        if (r.extracted > 0) {
+        // LOOP until dry. extractPending processes the snapshot it took when it started, so a second drop
+        // arriving mid-drain would queue chunks this drain never looks at — and startDrain's own
+        // already-running guard means no new drain starts for them either. They would sit dirty until the
+        // next drop or an explicit `tessera extract`, which is precisely the silent debt this batch exists
+        // to abolish.
+        for (;;) {
+          const r = await extractPending(graph, extractor, {
+            // Never-extracted chunks only. Re-extracting a whole corpus because PROMPT_VERSION changed is a
+            // decision worth 33 minutes of someone's GPU — it should not be triggered by dropping a file.
+            includeStale: false,
+            // The poison guard: a chunk the model cannot parse must not be retried on every drop forever.
+            // `tessera extract --retry-failed` is how a human reaches it.
+            maxAttempts: FAILING_ATTEMPTS,
+            onChunk: (done, n) => onProgress({ phase: "extract", i: done, of: n }),
+          });
+          total.extracted += r.extracted; total.entities += r.entities; total.edges += r.edges;
+          total.parseFailures += r.parseFailures; total.errors += r.errors;
+          const remaining = graph.store.dirtyCounts(PROMPT_VERSION).never;
+          if (!shouldDrainAgain(r.extracted, remaining)) break;
+        }
+        if (total.extracted > 0) {
           // The passes ARE lock-worthy: they read the whole graph and write a batch. If a CLI ingest holds
           // the lock, skip them rather than queueing — both passes are idempotent and the next `tessera view`
           // or extract run does the work.
+          //
+          // Their own try/catch: a pass failing AFTER a successful extraction is not an extraction failure,
+          // and reporting it as one tells the user their chunks were lost when they are safely in the graph.
           try {
             const release = acquireIngestLock(opts.graphDir, `serve drain ${opts.name}`);
             try {
@@ -68,14 +95,16 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
               prominencePass(graph.store, { actor: "serve", cause: `drain ${opts.name}` });
             } finally { release(); }
           } catch (e) {
-            if (!(e instanceof LockHeld)) throw e;
+            if (!(e instanceof LockHeld)) {
+              console.error(`drain: extraction succeeded but the layout/prominence pass failed — ${e instanceof Error ? e.message : String(e)}`);
+            }
           }
         }
         onProgress({
-          phase: "done", entities: r.entities, edges: r.edges,
+          phase: "done", entities: total.entities, edges: total.edges,
           dirty: graph.store.dirtyCounts(PROMPT_VERSION).dirty,
-          message: r.parseFailures || r.errors
-            ? `${r.extracted} extracted, ${r.parseFailures + r.errors} could not be extracted — see: tessera report ${opts.name}`
+          message: total.parseFailures || total.errors
+            ? `${total.extracted} extracted, ${total.parseFailures + total.errors} could not be extracted — see: tessera report ${opts.name}`
             : undefined,
         });
       } catch (e) {

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { GraphStore } from "../src/store/graphStore.js";
 import { StubEmbedder } from "../src/embedder.js";
 import { PROMPT_VERSION } from "../src/extract/extractor.js";
+import { FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TPL = `${here}/../viewer/template.html`;
@@ -44,8 +45,11 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   // viewer, saw NO scenes, and had every reason to conclude the migration had failed. The data was safe the
   // whole time; nothing displayed it.
   const scenes = store.allScenes();
-  // Extraction debt, so the map can say it is incomplete rather than just looking thin.
-  const dirtyChunks = store.dirtyCounts(PROMPT_VERSION).dirty;
+  // Extraction debt, so the map can say it is incomplete rather than just looking thin. The BREAKDOWN, not
+  // just a total: a background drain skips stale-prompt and repeatedly-failing chunks, so a badge built on
+  // the total alone would promise something no drop is going to do.
+  const dirty = store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS);
+  const dirtyChunks = dirty.dirty;
   store.close();
 
   // Stored layout travels with the bundle (design §3.5). Without this the CLI would write positions to
@@ -54,7 +58,7 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   const layout: Record<string, [number, number]> = {};
   for (const [id, p] of storedLayout) layout[id] = [p.x, p.y];
 
-  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);

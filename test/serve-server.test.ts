@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { createTesseraServer, sweepTemp, MAX_UPLOAD_BYTES, type IngestProgress, type ServeDeps } from "../src/serve/server.js";
+import { shouldDrainAgain } from "../scripts/serve.js";
 
 /**
  * Raw HTTP over a socket, because `fetch` treats Host as a FORBIDDEN header and silently substitutes the
@@ -445,5 +446,26 @@ describe("GET /status — extraction debt as a queryable fact", () => {
   it("is guarded like every other API route", async () => {
     const r = await fetch(BASE + "/status", { headers: { ...HDR, Origin: "https://evil.example" } });
     expect(r.status).toBe(403);
+  });
+});
+
+describe("the background drain keeps going until the queue is dry", () => {
+  // Found independently by me and by a cross-agent review (Composer). extractPending processes the SNAPSHOT
+  // it took on entry, and startDrain refuses to start a second drain while one is running. So dropping two
+  // files — which the new multi-file handler does as a matter of course — queued the second file's chunks
+  // into a drain that had already looked away, and nothing ever scheduled another. They stayed dirty
+  // indefinitely: exactly the silent debt this batch exists to abolish, reintroduced by its own fix.
+  it("goes again when a round made progress and work remains", () => {
+    expect(shouldDrainAgain(5, 12)).toBe(true);
+  });
+
+  it("stops when the queue is empty", () => {
+    expect(shouldDrainAgain(5, 0)).toBe(false);
+  });
+
+  it("stops when a round extracted nothing, even though work remains", () => {
+    // Without this half it spins forever: a chunk past the attempt limit stays dirty BY DESIGN, so
+    // "remaining > 0" is permanently true and a progress-blind loop would burn the GPU on nothing.
+    expect(shouldDrainAgain(0, 3)).toBe(false);
   });
 });
