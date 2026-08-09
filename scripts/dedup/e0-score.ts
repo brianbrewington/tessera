@@ -38,7 +38,13 @@ for (const { qid, set } of labels.audit_key) {
   if (!bySet.has(set)) bySet.set(set, { n: 0, bad: 0, unsure: 0, badQids: [] });
   const rec = bySet.get(set)!;
   if (a === undefined) continue;
-  if (a === "unsure") { rec.unsure++; rec.n++; continue; }
+  // An "unsure" is NOT a clean judgment and must not sit in the contamination denominator as though it
+  // were. Counting it in `n` while never counting it in `bad` silently reports it as evidence the set is
+  // clean. Found by the analogy_maker instance's note (docs/notes/, 2026-08-08 §5b): an "I can't call this"
+  // is a property of the rater at that moment, and 30 verdicts of which 18 are unsure is not 30 verdicts.
+  // It happens to change nothing here because Brian returned zero unsures, which is exactly why it would
+  // have survived to bite a later run.
+  if (a === "unsure") { rec.unsure++; continue; }
   rec.n++;
   const contaminated = POSITIVE.has(set) ? a === "not-same" : a === "same";
   if (contaminated) { rec.bad++; rec.badQids.push(qid); }
