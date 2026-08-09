@@ -249,6 +249,44 @@ stratified subsample cuts it to ~56 min at the price of noisier jitter counts; d
 confounds the prompt change with run variance); arms run on different days or model versions; temperature
 changed between arms.
 
+## E4 ADDENDUM (pre-registered 2026-08-09, BEFORE any E4 run): Arm C and wall-clock
+
+*Brian chose to extend E4 rather than run it as first written. This section is frozen before the harness
+executes, and the Arm-C prompt text is written into the sidecar before the first call, exactly as Arm B's is.*
+
+**Why extend it.** E1 found that identity rides on the NAME and that descriptions actively hurt identity
+matching (recall 0.846 name-only vs 0.169 name+description). Descriptions are also the bulk of the GENERATED
+tokens, and generation is where the ~7.5 s/chunk goes. So "are descriptions dead weight?" is simultaneously a
+quality question and the prompt-side performance lever, and it costs one more arm on a harness that is
+already running three.
+
+**Arm C — lean descriptions.** Identical to Arm A except the description instruction is replaced by a short
+one capping the description at roughly a dozen words, and the "self-contained, retrieval-ready sentence"
+requirement is dropped. Nothing else changes: same entity rules, same DO-NOT-EXTRACT list, same relation
+rules, same temperature.
+
+**New measurement, applied to every arm: WALL-CLOCK PER CHUNK.** The original E4 measured quality only,
+which was an omission given Brian tied this experiment to the extraction performance analysis (queue item 4).
+Median and p90 seconds per chunk are recorded per arm, and A-vs-A' supplies the timing noise floor exactly as
+it supplies the quality noise floor.
+
+**Decision rule for Arm C (frozen).** Arm C is SAFE if its parse-failure and entities-per-chunk deltas are
+within 1.5x the A-vs-A' churn, the same bar Arm B must clear. Arm C is WORTH IT only if it is also safe AND
+its median per-chunk time is faster than Arm A by more than 2x the A-vs-A' timing spread. Faster but unsafe
+is refused. Safe but not faster means descriptions are free and the lever is elsewhere, which is a result.
+
+**The limitation, stated up front so a good result is not over-read.** This harness writes no graph, so it
+CANNOT measure what descriptions are actually for: semantic neighbourhood in `layout/pass.ts` and the
+Connector. A SAFE + WORTH-IT verdict on Arm C therefore licenses only a follow-up, never a ship. The gate
+before shipping Arm C is registered here now: embed Arm A and Arm C descriptions for the same entities and
+show the semantic neighbourhood is preserved. Until that runs, Arm C stays a measurement.
+
+**Corpus decision, made before running as the protocol requires:** the registered 150-chunk stratified
+subsample, not the full 318. Four arms x 150 chunks x ~7.5 s is about 75 minutes; the full corpus would be
+~2.6 hours. The price is noisier jitter/variant counts, which are exactly Arm B's headline metric, so: if
+Arm B lands within 20% of its "jitter halved" threshold in either direction, the result is declared
+INCONCLUSIVE and re-run on the full corpus rather than called.
+
 ## E5: does the originating chunk improve proposed canonical forms?
 
 **Question.** When a separate pass proposes a canonical name, does showing it the originating chunk collapse
