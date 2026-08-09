@@ -252,3 +252,79 @@ bits threshold is calibrated on 130 positives and 300 negatives from one graph, 
 that no number merges unattended still stands. What changed is that there is now a measured, zero-cost way
 to say which candidates deserve a verifier call and which are already beyond reasonable doubt — and that
 directly cuts E3's call volume, which is the expensive part.
+
+---
+
+# Correction, 2026-08-09: the string features were validated against their own definition
+
+**Retracting part of the addendum above.** Brian proposed that cosine and bits form a joint operating curve
+rather than two thresholds. Testing that produced a feature (agreement ratio) that scored **recall 1.000 at
+zero false admits**, cross-validated. That number is not a result. It is circular, and the circularity
+invalidates the string half of the previous section.
+
+## What happened
+
+E0 constructs P-variant as *"distinct normalized names, identical after `[^a-z0-9]` strip"* and P-jitter as
+*"same normalized name, different subtype."* Measured directly:
+
+- **130 of 130** P-variant pairs are byte-identical after stripping.
+- **277 of 277** P-jitter pairs are byte-identical after stripping.
+
+So for every positive in every set, the longest common substring **is** the whole name and the residue is
+empty. `residual = 0` and `ratio = 1.000` are not properties the feature discovered; they are restatements
+of the predicate that built the label. Any string-agreement feature will separate these sets perfectly, and
+learning that tells us nothing about the world.
+
+This is the same shape as the degeneracy flagged in the protocol's reframe 3 (jitter positives score cosine
+1.0 on name-only *by construction*). I named that trap, registered a handling for it, and then walked into a
+fresh instance of it on a different feature.
+
+## What survives, and what does not
+
+| feature | status |
+|---|---|
+| **cosine (name-only)** | **stands.** The embedder has no knowledge of the construction rule, so P-variant is a fair test of it. E1's 0.846, the description-drag finding, and E2's per-type floors are unaffected. |
+| shared bits | **not clean evidence.** Partly circular. It is not *trivially* perfect (recall 0.115 at FP=0, because bits scales with name length and short names like `AGENT` score low), but it is measured on a set defined by the same predicate. |
+| residual bits / agreement ratio | **void.** Exactly the label rule, restated. |
+| the joint cosine+bits curve | **unvalidated.** The earlier table (cosine OR bits ≥ 100 → 0.985 recall) inherits the contamination and should not be used to set a policy. |
+
+## The deeper problem, which is worth more than the retraction
+
+**Every positive we have is a string match, and string matches do not need any of this machinery.**
+
+Layer 1 already resolves string-identical pairs deterministically and exactly: no threshold, no embedding, no
+verifier, no risk. The 277 jitter pairs and 130 variant pairs are, in the end, a `GROUP BY strip(name)`.
+
+The pairs the dedup project actually exists for are the ones with **no string identity**: `Brian` vs
+`Brian Brewington`, a concept named two genuinely different ways in two documents. **We have zero labeled
+examples of those.** So the current label sets cannot test the question that matters most, and a good score
+on them can be achieved by a rule that adds nothing over Layer 1.
+
+Brian's operating-curve intuition is not refuted by this. It is aimed at a region we have no data for:
+
+> "A very specific name that near-matches another very-specific name is a no brainer. There's probably a
+> whole operating curve of such things."
+
+That is a claim about *near*-matches. Our positives are *exact* matches. The curve he is describing lives in
+the gap between them, and building it requires labels from that gap.
+
+## What this changes about what to do next
+
+1. **Layer 1 ships regardless and needs no further evidence.** It is exact string work over 407 pairs. None
+   of this correction touches it. If anything the correction strengthens the case: the deterministic layer is
+   demonstrably sufficient for the entire labeled population.
+2. **E3 becomes the load-bearing experiment, not a follow-up.** A verifier-grade model is the cheapest way to
+   *generate* labels in the unlabeled region: propose non-string-identical candidates from cosine space, have
+   the model judge them, and have Brian audit a sample of the judgments. That produces the positive set this
+   protocol lacks.
+3. **A new label set is needed before any string feature is trusted:** pairs that are semantically the same
+   and lexically different. Registered here so it is not quietly skipped, and it must be built *without* a
+   string rule or it reproduces this exact error.
+4. **The `AGENT` datapoint gains weight.** It is the one audited pair with identical names that Brian called
+   not-same, and it is the only evidence in the entire run that string identity is not sufficient for
+   identity. One datapoint, so a hypothesis, not a finding.
+
+**The methodological rule this earns, stated for the next person:** a label set built by a rule cannot
+evaluate a feature that reimplements the rule. Before trusting a feature, ask what predicate created the
+positives and whether the feature can see it. Cosine passed that test; the string features did not, and a
+cross-validated 1.000 is a symptom rather than a triumph.
