@@ -2,7 +2,8 @@
 
 *A pre-registered protocol in the style of `docs/clustering-mining-sketch.md`: every label set, decision
 rule, control and verdict is committed here BEFORE anything runs, so a result cannot be tuned into passing.
-Status: protocol only; nothing has run. Every script is read-only over `graphs/testgraph/graph.db`; sidecars
+Status: **E0 and E1 have run (2026-08-08); results in `docs/dedup-e0-e1-results.md`. E2-E5 have not.** The
+registered rules below are NOT edited after the fact — results live in the companion document. Every script is read-only over `graphs/testgraph/graph.db`; sidecars
 land in `graphs/testgraph/dedup/` (the `graphs/big/mine/` precedent), each recording embedder, model tags,
 seeds, and the frozen decision rules. The fixture is opened read-only in every script: testgraph is never
 deduplicated, never re-extracted, never written. E4's arms write JSON sidecars, not graphs. Facts marked
