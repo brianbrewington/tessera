@@ -119,3 +119,136 @@ distinct *name* pairs, 130 counts *node* pairs, and E1 embeds nodes. Both number
    promotes or demotes the verdict above, and its sample is reused for E3's kappa so it is never asked twice.
 2. **E2**, free, over the existing sidecar.
 3. **E3** (~600 chat calls) and **E4** (the expensive one) after that.
+
+---
+
+# Addendum, same day: E0 scored, E2 answered, and Brian's observation made operational
+
+*The 40-pair blind audit came back 2026-08-09T00:21Z. Fixture md5 still `a97e6077e571f217122f6b2457e81e0e`.*
+
+## E0 scored — and a flaw in my own pre-registration
+
+| set | n | contaminated | rate | 95% Wilson CI |
+|---|---|---|---|---|
+| P-jitter | 15 | 1 | 6.7% | [1.2%, 29.8%] |
+| P-variant | 10 | 0 | 0.0% | [0.0%, 27.8%] |
+| **N-hard** | 10 | **0** | 0.0% | [0.0%, 27.8%] |
+| N-random | 5 | 0 | 0.0% | [0.0%, 43.4%] |
+
+**The judge is validated.** All 15 negatives were called correctly. The N sets were audited alongside the P
+sets precisely to catch a judge who answers "same" to everything, and that check passes cleanly. N-hard being
+uncontaminated matters more than any other number here, because E1's entire floor is `max(N-hard cosine)` —
+a single mislabeled negative at the top of that distribution would silently depress every recall number in
+the table.
+
+**But the registered rule cannot be evaluated as written, and that is my error.** The rule says "P-set
+contamination **upper bound** ≤ 10%". At n=15 a flawless audit still has a Wilson upper bound of 20%, and at
+n=10 it is 28%. The smallest sample where zero errors could clear a 10% upper bound is **n=35 per set**. I
+registered 15/10/5/10. So the rule is arithmetically unsatisfiable at the sample size I chose, and swapping
+quietly to the point estimate to make it pass would be exactly the tuning the pre-registration exists to
+prevent.
+
+Two honest readings, and the choice is Brian's:
+- **On point estimates** (6.7% and 0.0%), both P sets are comfortably usable and E1's verdict promotes.
+- **On upper bounds** as registered, neither set can be certified at any sample this size, and the fix is
+  ~25 more pairs per P set — roughly 10 more minutes.
+
+**Recommendation:** treat the verdict as *supported but not certified*, proceed with E2 and E3 (neither of
+which is gated on certification), and spend the extra 10 minutes only if a merge is about to be made durable
+on the strength of it. Nothing here writes to a graph yet, so the bound is not load-bearing today.
+
+**The one rejected pair is itself a finding:** `AGENT` (other) vs `AGENT` (concept). Byte-identical names,
+and Brian still said not-same — a bare generic word carries no evidence of shared referent. That is the
+lowest-information name in the whole sample, and it previews the next section exactly.
+
+## E2 — the registered question, answered: PER-TYPE floors, decisively
+
+Registered rule: *spread ≤ 0.03 means one global floor is defensible; over 0.03 means per-type floors.*
+
+| subtype pairing | n | zero-FP floor |
+|---|---|---|
+| concept + concept | 47 | 0.8066 |
+| technology + technology | 28 | 0.7549 |
+| concept + other | 23 | 0.5757 |
+| concept + technology | 30 | 0.5401 |
+
+**Spread = 0.2665**, nearly nine times the threshold. One global floor is refuted.
+
+**And the global floor is set by a single pair, from the subtype I nearly deleted.**
+
+> `docs/reviews/durable-map-state-r5.md` vs `docs/durable-map-state-design.md` — cosine **0.8818**
+
+Two genuinely different documents sharing most of a path. They are `file`-subtype entities: the same 110
+nodes that `type != 'SOURCE'` would have silently dropped. Removing `file` entities from the negatives moves
+the floor from 0.8818 to 0.8066 and **P-variant recall from 0.846 to 0.928**.
+
+So those 110 nodes are simultaneously essential to include and the thing corrupting the global floor. That is
+not a contradiction, it is the per-type result stated concretely: **file paths need their own floor**, because
+near-identical paths are the norm for distinct files and would be strong evidence of identity anywhere else.
+
+## Brian's observation, and the first version of it that was wrong
+
+His note, verbatim:
+
+> "the more unusual the name, the faster I click 'same' with confidence. you could probably even time it.
+> Like how much do I actually read before making the call. Easy: getIndexedIdFromGraphStore() vs
+> get_indexed_id_from_graph_store. Hard: Software vs Code. I don't know how to use this observation...just
+> noticed some notion of name-surprise impacts my matching confidence."
+
+**First attempt: inverted, and instructively so.** I scored a name by the rarity of its tokens *across this
+graph's entity names*. In a corpus about a codebase, `get`/`id`/`graph`/`store` appear in dozens of names
+while `software` appears in one, so the metric called `getIndexedIdFromGraphStore` common (7.55 bits) and
+`Software` rare (10.74) — backwards from what he described. Caught/missed separation was 0.26 bits, i.e.
+nothing. Corpus-internal document frequency is not general-language improbability.
+
+**Second attempt, and the better reading of his claim:** the confidence does not come from either name. It
+comes from **the improbability of what the two names share**. Agreeing on 26 characters of
+`getindexedidfromgraphstore` cannot be coincidence; agreeing on `code` says almost nothing. So: longest
+common substring of the stripped names, scored in bits against a character-trigram model built from the
+corpus's own chunk prose.
+
+It now reproduces his intuition on every example he gave:
+
+| pair | shared substring | bits |
+|---|---|---|
+| getIndexedIdFromGraphStore / get_indexed_id_from_graph_store | `getindexedidfromgraphstore` | **313.8** |
+| Software / software | `software` | 102.5 |
+| AGENT / AGENT | `agent` | 49.3 |
+| Software / Code | `o` | **13.8** |
+
+And it separates far more cleanly than cosine does: **P-variant mean 128.3 bits, N-hard mean 21.9 bits.**
+Note where `AGENT` lands — 49.3 bits, low, the one pair he rejected.
+
+## The two signals are complementary, which is the operational result
+
+The 20 P-variant pairs cosine misses average **116.5 bits** — they are mostly high-improbability pairs, so
+shared-bits catches what cosine drops. Combining them (cosine floor 0.8818, name-only):
+
+| rule | P-variant recall | N-hard admitted |
+|---|---|---|
+| cosine alone | 0.846 | 0 of 300 |
+| shared-bits alone (≥100) | 0.769 | 3 of 300 |
+| **cosine OR bits ≥ 100** | **0.985** | 3 of 300 |
+| **cosine AND bits ≥ 60** | **0.754** | **0 of 300** |
+
+That is exactly the two-tier policy the protocol wanted, and it arrives without a single LLM call:
+
+- **AND** is the auto-merge tier: 75% of true duplicates, zero known-confusable admissions, no verifier.
+- **OR** is the candidate tier for E3's verifier: 98.5% recall, and only 3 negatives for the verifier to
+  reject.
+
+**Where shared-bits fails, stated plainly** — the three negatives it admits at ≥100 bits:
+
+1. `docs/reviews/durable-map-state-r5.md` vs `docs/durable-map-state-design.md` (196 bits) — file paths again
+2. `Node Ontology` vs `Edge Ontology` (121 bits) — one word differs inside a long shared string
+3. `have a model name the group` vs `gate the grouping with an LLM verifier` (113 bits) — long prose-like names
+
+All three are the same shape: **long structured names whose difference is small in characters but total in
+meaning.** A character metric cannot see that, which is precisely the job E3's verifier exists to do. The
+signals fail in different places, which is why combining them works.
+
+**Not claimed:** that this replaces the verifier, or that these constants transfer to another corpus. The
+bits threshold is calibrated on 130 positives and 300 negatives from one graph, and the pre-committed rule
+that no number merges unattended still stands. What changed is that there is now a measured, zero-cost way
+to say which candidates deserve a verifier call and which are already beyond reasonable doubt — and that
+directly cuts E3's call volume, which is the expensive part.
