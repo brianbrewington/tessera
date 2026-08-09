@@ -1,95 +1,154 @@
 # tessera
 
-*A named, persistent **knowledge graph** grown from whatever you feed it — personas, chat transcripts, code, a
-wiki page, an email thread, book chapters — via LLM entity+relation extraction, rendered as a browsable map.
-Pronounced, deliberately, tes-SER-uh — one tile of a larger mosaic.*
+*A named, persistent **knowledge graph** grown from whatever you feed it — personas, chat transcripts, design
+docs, session logs, book chapters — via local LLM entity+relation extraction, rendered as a browsable map.
+Pronounced, deliberately, tes-SER-uh: one tile of a larger mosaic.*
 
-> **Status: a tracer bullet that runs.** Every architectural layer is wired end-to-end and the whole assembly
-> does one basic thing well — *create a named graph, ingest a `.txt`/`.md` file, and browse its real typed
-> entities and both-endpoints edges*. The identity/provenance/RAG model is reviewed and load-bearing; the
-> "resonator" and "dream" engines from earlier designs are **explicitly deferred** until basic ingest is
-> rock-solid. This will change under you. On purpose.
+> **Status: it runs, end to end, and it is still moving.** You can create a graph, drop a folder of documents
+> on it, extract, and browse 2000 real typed entities in a live map with saved views. Nothing here calls out
+> to a cloud: extraction and embeddings are local Ollama models. The generative "dream" engine from earlier
+> designs is still deferred on purpose. Expect this to change under you.
 
-## What it does today
+## The one thing to know first
 
-You keep **one named graph per domain** — say `personas` in one, `book-ideas` in another — each a persistent
-SQLite database. You point ingest at a document; tessera reads it, chunks it, runs a real LLM extraction, and
-maps the result into a typed graph you can open in a browser.
+**Ingest and extraction are two separate commands, and that is deliberate.**
 
 ```
-named graph → adapter (txt/md) → chunker → extractor (LLM) → graph-mapper → GraphStore → viewer
+tessera ingest   → read, chunk, embed, store        seconds        no LLM calls
+tessera extract  → entities and relations per chunk ~7.5s/chunk    one LLM call each
 ```
 
-Everything is a **Node** or an **Edge**. The extractor pulls typed **entities** (`PERSON`, `PLACE`, `CONCEPT`,
-`PROJECT`, `TECHNOLOGY`, …) and **relations** whose reason *names both endpoints* — because those reasons are
-the primary retrieval signal, not decoration. A shared entity across documents (`De Doorns`, `Klipgat Farm`)
-merges into **one hub**; the over-connected hubs are the trope signal you're looking for.
+Extraction is roughly 97% of the wall-clock, so binding it to ingest meant a folder drop blocked for half an
+hour and a crash in minute 28 lost everything. Splitting them makes "dirty" a durable SQL fact — *a chunk with
+no extraction row for the current prompt version* — rather than a queue that can be lost. Ingest returns fast
+and tells you what it owes; extract drains it, resumably, from any terminal, even after a reboot, and even if
+the source file has since been deleted.
+
+So a normal session is two commands, and the second one is the one that costs you.
 
 ## Quickstart
 
-Requires **Node ≥ 20** and a running **[Ollama](https://ollama.com)** (chat + embeddings, all local):
+Requires **Node ≥ 20** and a running **[Ollama](https://ollama.com)**:
 
 ```bash
 npm install
-ollama pull qwen2.5:14b        # extraction model (default; override with TESSERA_EXTRACT_MODEL)
-ollama pull nomic-embed-text   # embeddings   (default; override with TESSERA_EMBED_MODEL)
+ollama pull qwen2.5:14b        # extraction  (override: TESSERA_EXTRACT_MODEL)
+ollama pull nomic-embed-text   # embeddings  (override: TESSERA_EMBED_MODEL)
 
-npx tsx scripts/cli.ts graph create personas
-npx tsx scripts/cli.ts ingest personas path/to/a-persona.md
-npx tsx scripts/cli.ts view personas     # writes graphs/personas/view.html — open it
+./tessera graph create notes
+./tessera ingest notes ~/writing            # files or whole directories, recursive
+./tessera extract notes                     # the expensive half; resumable
+./tessera serve notes                       # live map at http://127.0.0.1:7777
 ```
 
-`ingest` reports what it did — chunks, entities, edges, and a fail-loud warning if any chunk's model reply
-couldn't be parsed. A re-ingest of the same document is idempotent (it reinforces, it doesn't duplicate).
+`./tessera` is a real command in the repo root; no global install, no `npx tsx scripts/cli.ts`. Every command
+also works headless, so `ingest` + `extract` can run from cron while you read the map.
 
-## The identity model (the reviewed core)
+Re-running `ingest` on the same document is idempotent: it reinforces, it does not duplicate. Re-running
+`extract` costs nothing when everything is current, and says so.
 
-The store stays domain-agnostic — it dedups on `content_hash(text)`. The **mapper owns the identity policy** by
-constructing each node's `text` (the dedup basis) and its first-class `name`/`description`. This is the contract
-three cross-model reviewers converged on; the full spec is **[`docs/ingest-model.md`](docs/ingest-model.md)**.
+## Commands
 
-- **Hubs merge by type + name** — `PLACE "De Doorns"` is one node across every document (the trope signal).
-- **Type is part of identity** — `PLACE "Java"` and `CONCEPT "Java"` are deliberately two nodes.
-- **PERSON is source-qualified** — two documents naming the same person stay distinct until you *choose* to
-  resolve them; cross-document "is this the same person?" is entity-resolution, and it's deferred.
-- **Chunks are first-class nodes.** Each chunk is a node holding its raw text, embedded on that text, linked
-  `ORIGINATED_FROM` its `SOURCE` — because a RAG built on this retrieves *chunks*, not whole documents.
-- **Nodes and edges carry real GUIDs**; `RELATED` edges are canonicalized (undirected, one edge per pair); edge
-  reasons are stored as idempotent assertions so re-ingest doesn't bloat them.
+```
+graph create <name> | graph list          list reports size and extraction debt per graph
+ingest <name> <path...>                   files or dirs, recursive; --dry-run --rechunk --no-recursive
+ingest-session <name> <log.jsonl...>      Claude Code session logs; --user <name>
+extract <name>                            --retry-failed  --force
+view <name>                               writes a standalone graphs/<name>/view.html
+serve <name>                              live viewer + drag-drop ingest; --port
+scenes import <name> <scenes.json>
+report <name>                             the scorecard: chunks, entities, edges, what is owed
+connect <name>                            cross-document Connector; --commit --floor --k --cap
+paths <name> <A> <B>                      how two entities connect
+common <name> <A> <B> [C ...]             what several entities share
+```
 
-Node/edge record shapes, columns, and the full type enums are in **[`docs/schema.md`](docs/schema.md)**.
+## What `serve` gives you that `view` does not
 
-## Architecture at a glance
+`view` writes one self-contained HTML file you can mail to someone. `serve` binds a graph over
+`http://127.0.0.1:PORT` and adds the things that need a writer:
 
-- **`src/graph.ts`** — a name → `graphs/<name>/graph.db` (+ a `meta.json` sidecar). `Graph.open/list`.
-- **`src/ingest/`** — `adapters.ts` (file → `{source,title,text}`, txt/md only), `chunker.ts` (deliberately
-  naive ~1500-char paragraph splitter — size/overlap tuning is coupled to the extraction model and deferred),
-  `ingest.ts` (orchestrator), `mapper.ts` (extraction → typed nodes + provenance + canonical edges).
-- **`src/extract/`** — `extractor.ts` (a `Chat`-backed `Extractor`; a ported LightRAG/UNIVERSAL prompt with
-  NEGATIVE_CONSTRAINTS and the both-endpoints edge rule; JSON output, Zod-validated, dangling relations
-  dropped), `identity.ts` (the identity strings), `typemap.ts` (fine extraction types → few store types).
-- **`src/store/graphStore.ts`** — the sole writable authority: `better-sqlite3` + `sqlite-vec`, WAL,
-  single-writer (`BEGIN IMMEDIATE`), every mutation appended to a replay-grade `mutation_log`.
-- **`src/model.ts`** — a thin read-only value layer; `Edge` owns its graded `Assertion`s.
+- **Drag a file or a folder onto the map** and it ingests. The drop returns immediately and the chunks are
+  extracted in the background; a badge tells you how many are still owed.
+- **Scenes** — saved camera positions with a name and a narration, stored in the database rather than in
+  browser localStorage, reorderable by dragging, and exportable. These hold the only human-authored prose in
+  the system, so scene writes are all-or-nothing in one transaction.
+- **`GET /status`** answers `dirty` / `failing` / `draining` as facts you can query from another terminal.
 
-## What's deferred (honestly)
+The viewer itself is a semantic-zoom map: node size and label budget follow prominence, so a continent-level
+view shows landmarks and a district-level view shows most things. Provenance nodes (documents and chunks) are
+present but hidden until you press `h`, because they are the RAG substrate rather than the semantic map.
 
-Earlier tessera designs reached for a prominence-ranked semantic-zoom map and a generative "dream" connection
-engine. Those are real and still the destination — but **not until basic ingest is solid**. On the backlog
-(**[`docs/backlog.md`](docs/backlog.md)**): more formats (PDF, docx, slides, OCR), the resonator
-(decay/prominence/clustering), the dream, cross-graph entity resolution, chunker×model tuning, and an embedder
-head-to-head. The design summary (**[`docs/design-summary.md`](docs/design-summary.md)**) records the full
-architecture and the open questions the reviews pressure-tested.
+## The identity model
 
-## How it's built
+The store is domain-agnostic: it dedups on `content_hash(text)`. The **mapper owns identity policy** by
+constructing each node's `text`. Full spec: **[`docs/ingest-model.md`](docs/ingest-model.md)**; record shapes
+and enums in **[`docs/schema.md`](docs/schema.md)**.
 
-Every design doc and code slice passes a **multi-model peer-review gate** — frontier models from other labs
-(Codex, Grok, Composer) reviewing before a change is "done", asked to *demonstrate* a flaw, not just describe
-it. The reviewed identity model above exists because that gate caught a real class of bug (type-blind dedup
-silently overriding the identity policy) before it scaled.
+- **Entities merge by type + name.** `PLACE "De Doorns"` is one node across every document. The
+  over-connected hubs that result are the signal you came for.
+- **Type is part of identity.** `PLACE "Java"` and `CONCEPT "Java"` are deliberately two nodes.
+- **PERSON is *not* source-qualified.** A real person appearing in two documents is **one** node. Path
+  qualification used to keep them apart, which fought the dedup layer rather than helping it; same-name
+  collisions are entity resolution's problem, and entity resolution is a real layer, not a workaround.
+- **Chunks are first-class nodes** holding their raw text, embedded on that text, linked `ORIGINATED_FROM`
+  their `SOURCE` — because RAG over this retrieves chunks, not whole documents.
+- **Documents are content-addressed; sessions are not.** A document *is* its bytes, so its identity is a hash
+  of its text. A session is a *stream* that grows while you work, so hashing it would mint a new source on
+  every read. Sessions are addressed by a stable id and their **turns** are the content-addressed units. Two
+  regimes on purpose; collapsing them reintroduces the duplication bug they exist to prevent.
+- **Media is the hash of the bytes**, never of anything a model said about it. The same logo in forty
+  documents is one node with forty parents. Images are manifested, not captioned — deliberately.
+
+## Architecture
+
+- **`src/graph.ts`** — name → `graphs/<name>/graph.db` plus a `meta.json` sidecar.
+- **`src/ingest/`** — `adapters.ts` (file → document *plus enumerable parts*; `.txt`/`.md` today, with
+  markdown-referenced images as the first part producer), `chunker.ts` (a deliberately naive ~1500-char
+  splitter; size, overlap and extraction model are one joint tuning problem and are deferred together),
+  `ingest.ts` (the fast half), `extract-pending.ts` (the LLM half, under per-chunk claims), `mapper.ts`.
+- **`src/extract/`** — `extractor.ts` (a `Chat`-backed extractor whose edge reasons must name **both**
+  endpoints, since those reasons are the retrieval signal; JSON out, Zod-validated, dangling relations
+  dropped), `identity.ts`, `typemap.ts`.
+- **`src/store/graphStore.ts`** — the sole writable authority. `better-sqlite3` + `sqlite-vec`, WAL,
+  single-writer via `BEGIN IMMEDIATE`, every mutation appended to a replay-grade `mutation_log`.
+- **`src/serve/`, `scripts/serve.ts`, `viewer/template.html`** — the server, its drain coordinator, and the
+  single-file viewer.
+
+Two chunk extractors never collide because a claim is one `UPDATE ... WHERE` inside a transaction: SQLite
+serializes it, so the row-level claim is the concurrency primitive rather than a hand-rolled file lock.
+
+## What is deferred, honestly
+
+On the backlog (**[`docs/backlog.md`](docs/backlog.md)**), with reasons and revisit conditions rather than
+just names: more formats (PDF, docx, OCR), the dream/walk generators, cross-graph entity resolution,
+chunker × model tuning, provenance in the layout, and an admin surface across graphs.
+
+Entity **resolution** is the live one. Measured on the tuning corpus: 1714 entities, of which 277 pairs differ
+only by extracted type and 130 only by punctuation. Those are deterministic string work. The interesting
+residue — the same thing named two genuinely different ways — is being worked through a pre-registered
+experiment protocol (**[`docs/dedup-experiment-protocol.md`](docs/dedup-experiment-protocol.md)**) rather than
+by intuition. Results, including a retraction of one of our own findings, are in
+**[`docs/dedup-e0-e1-results.md`](docs/dedup-e0-e1-results.md)**.
+
+**[`docs/queue.md`](docs/queue.md)** is what is actually being worked on next, in order.
+
+## How it is built
+
+Every design doc and code slice passes a **cross-agent review gate**: models from other labs (Codex, Grok,
+Composer) review before a change is called done, and they are asked whether the *design* is right before they
+are asked to find line-level defects. That gate has repeatedly caught things this repo would otherwise have
+shipped — a scene sync that promised atomicity in a comment and ran three transactions, a background drain
+that silently dropped work arriving mid-pass.
+
+The discipline that goes with it, learned the expensive way and worth inheriting:
+
+- **Write the failing test first and watch it fail.** A broken instrument fails toward green.
+- **Verify a reviewer's claims about the code before acting on them, and your own before publishing them.**
+- **A finding without a disposition quietly becomes the default behaviour.**
 
 ```bash
-npm test        # vitest — mapping/identity/provenance fixtures, deterministic (no network)
+npm test        # 321 passing, 1 skipped — deterministic, no network
 npm run typecheck
 ```
 
