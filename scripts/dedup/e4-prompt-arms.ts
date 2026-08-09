@@ -77,11 +77,12 @@ type ArmResult = {
   descChars: number[]; secs: number[];
   names: { name: string; type: string }[];
   canonicalOffered: number;
+  canonicalForms: string[];
 };
 
 async function runArm(a: { key: string; prompt: string; note: string }): Promise<ArmResult> {
   const chat = new OllamaChat(MODEL);
-  const r: ArmResult = { arm: a.key, note: a.note, chunks: 0, parseFailures: 0, entities: 0, relations: 0, bannedReasons: 0, descChars: [], secs: [], names: [], canonicalOffered: 0 };
+  const r: ArmResult = { arm: a.key, note: a.note, chunks: 0, parseFailures: 0, entities: 0, relations: 0, bannedReasons: 0, descChars: [], secs: [], names: [], canonicalOffered: 0, canonicalForms: [] };
   for (const c of chunks) {
     const t0 = process.hrtime.bigint();
     let raw = "";
@@ -97,9 +98,26 @@ async function runArm(a: { key: string; prompt: string; note: string }): Promise
     for (const e of out.extraction.entities) {
       r.descChars.push((e.description ?? "").length);
       r.names.push({ name: e.name, type: e.type });
-      if (Array.isArray((e as unknown as { canonical?: unknown[] }).canonical) && ((e as unknown as { canonical: unknown[] }).canonical).length) r.canonicalOffered++;
+      // NOTE: canonical is NOT counted here, and must not be. `Entity` is a bare z.object, so Zod STRIPS
+      // unknown keys — reading e.canonical after parseExtraction always yields undefined no matter what the
+      // model said. The first run of this harness did exactly that and reported "canonical offered on
+      // 0/1052 entities", which measured the parser and not the model. Counted from the RAW json below.
     }
     for (const rel of out.extraction.relations) if (BANNED.some((b) => norm(rel.reason ?? "").includes(b))) r.bannedReasons++;
+    // Canonical, counted from the RAW model output, because the production schema cannot represent it.
+    // This is the instrument the first run lacked.
+    try {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        const j = JSON.parse(m[0]) as { entities?: { canonical?: unknown }[] };
+        for (const e of j.entities ?? []) {
+          const c = e.canonical;
+          if (Array.isArray(c) ? c.filter((x) => String(x ?? "").trim()).length > 0 : String(c ?? "").trim().length > 0) r.canonicalOffered++;
+          if (Array.isArray(c)) r.canonicalForms.push(...c.map((x) => String(x)));
+          else if (c) r.canonicalForms.push(String(c));
+        }
+      }
+    } catch { /* raw was not clean JSON; parse-failure is already counted above */ }
     if (r.chunks % 20 === 0) process.stdout.write(`\r  arm ${a.key}: ${r.chunks}/${chunks.length}   `);
   }
   process.stdout.write(`\r  arm ${a.key}: ${r.chunks}/${chunks.length} done        \n`);
@@ -176,7 +194,7 @@ async function main(): Promise<void> {
     churn: { entities_per_chunk: churnEnt, parse_fail: churnPF, median_seconds: churnTime },
     arms: res.map((x) => ({ arm: x.arm, note: x.note, entities_per_chunk: epc(x), parse_fail_rate: pf(x), banned_reasons: x.bannedReasons,
       mean_desc_chars: mean(x.descChars), median_s: median(x.secs), p90_s: p90(x.secs), total_s: x.secs.reduce((a, b) => a + b, 0),
-      canonical_offered: x.canonicalOffered, dedup: dedupStats(x.names) })),
+      canonical_offered: x.canonicalOffered, canonical_sample: x.canonicalForms.slice(0, 40), dedup: dedupStats(x.names) })),
     verdicts,
   }, null, 1));
   db.close();

@@ -377,3 +377,70 @@ to *generate* labels in the unlabeled region either. So the sequence that remain
 2. **Re-run E3 with a neutral prompt**, gemma3:12b first. Cheap, and it is the only thing standing between us
    and a label-generating loop.
 3. **Only then** build the non-string-identical positive set, and only then revisit the operating curve.
+
+---
+
+# E4 — the prompt arms, and a third instrument failure
+
+*Ran 2026-08-09. 4 arms x 150 stratified chunks, qwen2.5:14b @ temp 0.4, 600 calls. No graph written,
+PROMPT_VERSION not bumped, fixture read-only.*
+
+| arm | entities/chunk | parse-fail | desc chars | median s | p90 s | jitter | variant |
+|---|---|---|---|---|---|---|---|
+| A (current) | 7.27 | 1.3% | 111 | 8.54 | 13.95 | 73 | 20 |
+| A' (variance control) | 7.35 | 1.3% | 112 | 8.21 | 14.49 | 66 | 19 |
+| B (canonical field) | 7.01 | 1.3% | 111 | **9.32** | **18.23** | 65 | 18 |
+| C (lean descriptions) | **8.29** | 1.3% | **29** | **5.78** | 10.90 | 89 | 22 |
+
+**Churn floor (A vs A'): 0.080 entities/chunk, 0.0pp parse-fail, 0.33 s median.** The control did its job:
+without it, Arm C's +1.02 entities/chunk would look like noise instead of 12.75x the noise.
+
+## The instrument failure, first, because it voids Arm B's headline
+
+The harness reported **"canonical offered on 0 of 1052 entities"** and that number measures nothing about the
+model. `Entity` in `src/extract/extractor.ts` is a bare `z.object({name, type, description})`, and Zod strips
+unknown keys, so `parseExtraction` discarded every `canonical` field before the counter ran.
+
+I reused `parseExtraction` deliberately, so that "parse failure" would mean mechanically the same thing here
+as in production. That reasoning was correct for parse-failure rate and wrong for measuring a **new** field,
+because the production parser is *defined* not to know about it. Same shape as the `analogy_maker` instance's
+defect (n headings indistinguishable from n analogies): **the check and the thing checked shared a premise.**
+
+The timing is what exposed it. Arm B ran **9.32 s median against A's 8.54, and p90 18.23 against 13.95** — it
+generated materially *more*, which is not what a model ignoring an instruction does. Arm B is being re-run
+with the canonical field counted from the raw response, independent of the production schema.
+
+**What survives from Arm B regardless:** adding the field costs **+9% median and +31% p90** and does not halve
+minted duplicates (93 → 83 combined jitter+variant, against a 46 threshold). So even if the canonicals turn
+out to be good, they are not free and they did not clean up the graph on their own.
+
+## Arm C: refused as registered, and the most useful measurement of the night
+
+The registered rule is *"faster but unsafe is refused."* Arm C is exactly that:
+
+- **SAFE = false.** Entities/chunk moved 7.27 → 8.29, which is **12.75x the churn floor**. Asking for terse
+  descriptions did not just shorten descriptions, it changed what the model extracted.
+- **WORTH IT = true.** Median **8.54 s → 5.78 s, a 32% cut**; p90 down 22%.
+- And it minted *more* near-duplicates, not fewer: jitter 73 → 89, variant 20 → 22.
+
+So: **refused.** Descriptions cannot simply be shortened to buy speed.
+
+**But the decomposition it produces is the thing queue item 4 was going to spend a day looking for.** Total
+description output per chunk fell from ~807 characters (7.27 x 111) to ~240 (8.29 x 29), a **70% cut in
+generated description text, which bought only a 32% cut in wall-clock.**
+
+If time were dominated by output tokens, those would move together. They do not, which means roughly **half
+the per-call cost is fixed** — prompt evaluation of a 2,980-character system prompt, request overhead, model
+scheduling — and is paid identically whether the model writes 807 characters or 240.
+
+*Stated as an inference with its assumption visible: this assumes time is roughly linear in generated tokens
+within this range. It is a decomposition estimate, not a profile. But it points the performance work at the
+fixed half — prompt length, batching several chunks per call, keeping the model resident — rather than at
+trimming output, which has now been measured and has less headroom than it appears.*
+
+**The `analogy_maker` inversion warning did not reproduce, and a cousin of it did.** They warned that asking
+for fewer items per call made their model write *more* per item. Here, description characters went 111 → 29
+exactly as instructed. But the model redistributed rather than shrank: fewer characters per description,
+**14% more entities**. The output budget moved sideways. Worth carrying as the general form: when you
+constrain one dimension of generated output, check what expanded, not just whether the constrained thing
+shrank.
