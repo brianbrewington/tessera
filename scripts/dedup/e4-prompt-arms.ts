@@ -20,8 +20,13 @@ import { EXTRACTION_SYSTEM, parseExtraction } from "../../src/extract/extractor.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const dir = process.argv[2] ?? "graphs/testgraph/dedup";
-const N_CHUNKS = Number(process.argv[3] ?? 150);   // registered: the 150-chunk stratified subsample
+const argv = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const dir = argv[0] ?? "graphs/testgraph/dedup";
+const N_CHUNKS = Number(argv[1] ?? 150);           // registered: the 150-chunk stratified subsample
+// --arms=A,B re-runs a subset. Its ONLY legitimate use is re-running an arm whose measurement was broken;
+// it must never be used to re-roll an arm whose RESULT was disliked, which is how a pre-registered
+// experiment quietly becomes a search. Any subset run writes to its own sidecar and says so.
+const armFilter = (process.argv.find((a) => a.startsWith("--arms=")) ?? "").slice(7).split(",").filter(Boolean);
 const TEMP = 0.4;                                   // reproduces the fixture's regime; identical across arms
 const MODEL = "qwen2.5:14b";
 const SEED = 20260809;
@@ -45,12 +50,15 @@ const ARM_C_PROMPT = EXTRACTION_SYSTEM.replace(
   "- description: a terse label, at most a dozen words. Not a sentence. Just enough to disambiguate the name.",
 );
 
-const ARMS: { key: string; prompt: string; note: string }[] = [
+const ALL_ARMS: { key: string; prompt: string; note: string }[] = [
   { key: "A", prompt: EXTRACTION_SYSTEM, note: "current EXTRACTION_SYSTEM (the fixture's regime)" },
   { key: "A'", prompt: EXTRACTION_SYSTEM, note: "VARIANCE CONTROL — identical to A, fresh run" },
   { key: "B", prompt: ARM_B_PROMPT, note: "canonical field added" },
   { key: "C", prompt: ARM_C_PROMPT, note: "lean descriptions" },
 ];
+const ARMS = armFilter.length ? ALL_ARMS.filter((a) => armFilter.includes(a.key)) : ALL_ARMS;
+const SUBSET = ARMS.length !== ALL_ARMS.length;
+const OUT = SUBSET ? `e4-arms-${ARMS.map((a) => a.key).join("")}.json` : "e4-arms.json";
 
 function rng(seed: number): () => number {
   let s = seed >>> 0;
@@ -151,17 +159,21 @@ async function main(): Promise<void> {
   console.log(`E4: ${ARMS.length} arms x ${chunks.length} chunks, ${MODEL} @ temp ${TEMP}`);
   console.log(`estimated ${Math.round(ARMS.length * chunks.length * 7.5 / 60)} min. Fixture is read-only; no graph is written.\n`);
   // The arm prompts are written to the sidecar BEFORE any call, per the protocol.
-  writeFileSync(join(dir, "e4-prompts.json"), JSON.stringify({ frozen_before_run: true, model: MODEL, temperature: TEMP, n_chunks: chunks.length, arms: ARMS }, null, 1));
+  writeFileSync(join(dir, SUBSET ? `e4-prompts-${ARMS.map((a) => a.key).join("")}.json` : "e4-prompts.json"), JSON.stringify({ frozen_before_run: true, model: MODEL, temperature: TEMP, n_chunks: chunks.length, arms: ARMS }, null, 1));
 
   const res: ArmResult[] = [];
   for (const a of ARMS) res.push(await runArm(a));
 
-  const A = res.find((x) => x.arm === "A")!, A2 = res.find((x) => x.arm === "A'")!;
+  const A = res.find((x) => x.arm === "A")!;
+  // Without A' there is NO churn floor, and a delta reported in units of a floor that was not measured is
+  // worse than no delta at all. A subset run says so instead of quietly substituting A for its own control.
+  const A2 = res.find((x) => x.arm === "A'") ?? null;
+  if (!A2) console.log("\nNOTE: A' was not run, so there is no churn floor. Deltas below are RAW and the\nSAFE verdict is NOT computable — re-run the full set to decide anything.");
   const epc = (x: ArmResult): number => x.entities / x.chunks;
   const pf = (x: ArmResult): number => x.parseFailures / x.chunks;
-  const churnEnt = Math.abs(epc(A2) - epc(A)) || 1e-9;
-  const churnPF = Math.abs(pf(A2) - pf(A));
-  const churnTime = Math.abs(median(A2.secs) - median(A.secs));
+  const churnEnt = A2 ? (Math.abs(epc(A2) - epc(A)) || 1e-9) : NaN;
+  const churnPF = A2 ? Math.abs(pf(A2) - pf(A)) : NaN;
+  const churnTime = A2 ? Math.abs(median(A2.secs) - median(A.secs)) : NaN;
 
   console.log("\narm  entities/chunk  parse-fail  banned  desc chars  median s  p90 s   jitter  variant  canon");
   for (const x of res) {
@@ -175,7 +187,7 @@ async function main(): Promise<void> {
   console.log(`\nA-vs-A' CHURN FLOOR — entities/chunk ${churnEnt.toFixed(3)} · parse-fail ${(100 * churnPF).toFixed(1)}pp · median time ${churnTime.toFixed(2)}s`);
 
   const verdicts: Record<string, unknown> = {};
-  for (const key of ["B", "C"]) {
+  for (const key of ["B", "C"].filter((k) => ARMS.some((a) => a.key === k))) {
     const x = res.find((r) => r.arm === key)!;
     const dEnt = Math.abs(epc(x) - epc(A)), dPF = Math.abs(pf(x) - pf(A));
     const safe = dEnt <= 1.5 * churnEnt && dPF <= 1.5 * Math.max(churnPF, 0.01);
@@ -188,7 +200,7 @@ async function main(): Promise<void> {
     if (key === "C") console.log(`Arm C: entity delta = ${(dEnt / churnEnt).toFixed(2)}x churn · SAFE=${safe} · median ${faster >= 0 ? "faster" : "SLOWER"} by ${Math.abs(faster).toFixed(2)}s (churn ${churnTime.toFixed(2)}s) · WORTH IT=${worthIt}`);
   }
 
-  writeFileSync(join(dir, "e4-arms.json"), JSON.stringify({
+  writeFileSync(join(dir, OUT), JSON.stringify({
     experiment: "E4", protocol: "docs/dedup-experiment-protocol.md + 2026-08-09 addendum",
     model: MODEL, temperature: TEMP, n_chunks: chunks.length, seed: SEED, fixture_written: false, prompt_version_bumped: false,
     churn: { entities_per_chunk: churnEnt, parse_fail: churnPF, median_seconds: churnTime },
