@@ -328,3 +328,52 @@ the gap between them, and building it requires labels from that gap.
 evaluate a feature that reimplements the rule. Before trusting a feature, ask what predicate created the
 positives and whether the feature can see it. Cosine passed that test; the string features did not, and a
 cross-validated 1.000 is a symptom rather than a triumph.
+
+---
+
+# E3 — the verifier question: not earned, but failing in the safe direction
+
+*Ran 2026-08-09. 240 trials (100 HIT, 100 NULL, 40 JUDGMENT) against two model families, 480 calls, temp 0.
+No confidence field in the schema, no cosines shown to the model. Fixture md5 unchanged.*
+
+| model | decoy-pick (≤2%) | null abstention (≥95%) | hit recall (≥90%) | kappa vs Brian (≥0.6) | verdict |
+|---|---|---|---|---|---|
+| qwen2.5:14b | **0.0%** ✅ | 94.0% ❌ | 57.0% ❌ | 0.42 ❌ | not verifier-grade |
+| gemma3:12b | **0.0%** ✅ | 87.0% ❌ | 78.0% ❌ | **0.65** ✅ | not verifier-grade |
+
+**VERIFIER: NOT EARNED**, by the registered rule, which requires all four bars from at least one family.
+
+**But read the failure direction before concluding anything.** The registered kill condition was *"decoy-pick
+over 5% for both families: creation-time LLM merge is REFUSED."* Decoy-pick came in at **0.0% for both**, over
+480 trials with a planted impostor in every single list. That is the one metric needing no labels and no
+human, and it is spotless: neither model ever reached for a same-subtype, different-document, no-shared-token
+candidate. They are not pattern-matching on shape. They fail by refusing to merge things they should merge,
+which is the direction a graph can survive.
+
+**A caveat I have to own, because it is my fault and it moves two of the four numbers.** The system prompt I
+wrote contains *"Most of the time the correct answer is NONE. Prefer NONE whenever you are not sure."* That is
+a conservatism knob, set by me, arbitrarily, and hit-recall and null-abstention trade off directly along it.
+The registered verdict stands as recorded — the rules were frozen and the run is the run — but "these models
+cannot verify merges" is **not** established by this. What is established is that these models with *this
+prompt* sit too far toward refusal. A neutral-prompt re-run is the honest next step and it is cheap.
+
+**Position bias, checked.** The registered control voids a run if the model favours position 1. Neither does;
+both skew *away* from it (qwen 9/17/30/23, gemma 15/25/39/33 across A/B/C/D). So the control does not fire,
+but the bias is real and pointed the other way, and a shuffled-seed replication should confirm it is the
+shuffle rather than the models.
+
+**Parse failures: zero, both families.** The forced JSON schema held across 480 calls.
+
+**gemma3:12b clears the kappa bar (0.65)** and is the only family to agree with Brian at better than chance-
+corrected 0.6. Given it also has the higher hit recall, it is the candidate for the re-run.
+
+## Where this leaves the whole line of work
+
+The retraction above showed that every labeled positive we have is a string match, and string matches need no
+model. E3 now shows that our two local candidates will not, as prompted, supply judgments trustworthy enough
+to *generate* labels in the unlabeled region either. So the sequence that remains is:
+
+1. **Ship Layer 1.** Deterministic, exact, 407 pairs, no threshold and no model. Unaffected by everything above.
+2. **Re-run E3 with a neutral prompt**, gemma3:12b first. Cheap, and it is the only thing standing between us
+   and a label-generating loop.
+3. **Only then** build the non-string-identical positive set, and only then revisit the operating curve.
