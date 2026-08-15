@@ -974,3 +974,130 @@ run today. **Recommended order when the appetite arrives:** write the question s
 first (it is the long pole and it is human time), build arm 1 while that happens, then arms 2 and 3.
 
 **Disposition: PLANNED, NOT SCHEDULED.** Brian: *"Not yet."*
+
+---
+
+## The surprise map: let prediction error move the geometry (Brian, 2026-08-15)
+
+*"like a surprise map. something shows up and if it slots in with what is already known/expected, little
+changes. Brains (and Brians!) are drawn to novelty, to the unexpected."*
+
+**This is the strongest idea in this stretch and it should be recorded as such.** It resolves a problem
+raised two turns earlier and left open: a layout that adapts to what you are interested in is a filter bubble
+made of geometry, because relevance is self-confirming. It brings you closer to what you already lean toward
+and quietly loses the ability to surprise you.
+
+Brian's formulation inverts the objective and dissolves that. **Movement is not proportional to relevance,
+it is proportional to prediction error.** A new document that slots into the existing structure changes
+almost nothing, which is correct — you already knew that. A document that does not fit *forces* geometry to
+move, and the movement itself is the notification. The map stops being a picture of the corpus and becomes a
+picture of *what the corpus did to your model of it*.
+
+### Why this is well-founded rather than merely poetic
+
+- It has real theory behind it. Predictive-processing accounts of perception (and Itti & Baldi's "Bayesian
+  surprise attracts human attention", NIPS 2005 / Vision Research 2009) argue that attention is drawn by
+  KL divergence between prior and posterior belief — literally, by how much an observation changed your
+  model. That is the same quantity proposed here, applied to a map instead of a retina.
+- **It respects the stability constraint instead of fighting it.** Every other adaptive-layout idea trades
+  away the "a map you learned stays put" rule. This one *derives* stability: an unsurprising ingest moves
+  nothing precisely because it was unsurprising. Stillness becomes meaningful rather than merely preserved.
+- It gives movement a semantics. Today a node moving means "the settle ran". Under this rule, movement means
+  "this did not fit what was here". That is a channel currently carrying nothing.
+
+### What would have to be built, and the honest hard part
+
+The mechanism is not the hard part. Displacement is already measurable, and the tutorial
+(`docs/tutorials/`) established neighbourhood preservation as the way to measure what a layout keeps.
+
+The hard part is **the prior**: surprise is only defined relative to an expectation, so the map needs a model
+of what it expected. Candidates, cheapest first:
+
+1. **Positional.** Where would the existing layout have put this node? Seed it by the semantic rule already
+   in `layout/pass.ts` §3.3(b), then measure how far the settle drags it. Large drag = poor fit = real
+   surprise. **This needs nothing new** and is the obvious first probe.
+2. **Predictive.** Hold out a document, ask what the graph predicts its entities and relations would be,
+   compare to what extraction actually produced. Expensive but it is the honest version.
+3. **Density.** Surprise as the local sparsity of embedding space where the newcomer lands — arriving where
+   nothing is, versus arriving in a crowd.
+
+### The trap to avoid, stated now
+
+Novelty and noise are indistinguishable from inside the metric. A garbled chunk, a parse failure, a
+badly-extracted generic entity — all of these are maximally "surprising" and all of them are junk. A surprise
+map naively built would faithfully devote its most dramatic motion to the worst data in the corpus. Any
+version of this needs a quality term, and the honest first experiment should check whether measured surprise
+correlates with extraction quality before it is believed.
+
+**Disposition: QUEUED as a probe.** Probe 1 above is nearly free: instrument the existing layout to record
+per-node displacement between seed and settled position, ingest a document, and look at what moved most. If
+the top-moving nodes are interesting, the idea is real. If they are parse failures, the quality term is the
+project.
+
+---
+
+## Attention in transformers, viewed as a graph (Brian, 2026-08-15)
+
+*"I wonder about the intersection between these attention-formed graph views and transformers. Like how
+might we illustrate the shifts in attention that comprise progression through a transformer by looking at
+the graph."*
+
+**The connection is more literal than it sounds, and that is worth stating precisely, because the word
+"attention" is doing double duty and conflating the two senses would be a genuine error.** Perceptual
+attention (what a viewer looks at) and transformer attention (a softmax over query-key dot products) are
+different things that share a name.
+
+But there is a real, non-analogical claim underneath: **a transformer's attention pattern IS a weighted
+directed graph over tokens, and a forward pass IS a sequence of such graphs.** Each head at each layer emits
+an n x n weight matrix; that is an adjacency matrix. A 12-layer, 12-head model produces 144 graphs over the
+same node set. So "illustrate the shifts in attention that comprise progression through a transformer by
+looking at the graph" is not a metaphor to be constructed — it is a description of what the object already
+is.
+
+What makes it interesting *here* rather than generically: tessera has spent this session building machinery
+for exactly this shape of problem — a fixed node set, edges that change, and the question of how to lay it
+out so a human can see the change. The dynamic-graph stability problem is the same problem. The answer we
+reached for the map (fix the geometry, vary the emphasis) is the standard answer for attention visualisation
+too, and arriving at it from two directions is mild evidence it is right.
+
+**Deferred, and honest about why:** this is a teaching and research thread, not a tessera feature. It does
+not make the knowledge graph better. It is recorded because the analogy may repay the map (an attention
+matrix is a dynamic weighted graph with ground truth available, which is a rare and useful test case for
+layout stability work) and because Brian is building an attention book. See the sequel tutorial.
+
+---
+
+## A human-in-the-loop measurement apparatus for attention (Brian, 2026-08-15)
+
+*"a game idea: see if you can get a human, picking tokens, to _be_ a transformer, completing sentences
+(somewhat) at random. then compare to what the actual network does... somewhere in there is a measurement
+apparatus for attention with a human in the loop. that is barely half an idea."*
+
+**Levelling, as requested: the game as literally stated does not work, and the reason is instructive.** A
+human picking tokens "somewhat at random" is not doing what a transformer does. A transformer does not pick;
+it emits a full distribution over the vocabulary, and sampling from that distribution is a separate step done
+by the decoder. A human producing one token gives you one sample, and you cannot recover a distribution from
+single samples without many trials.
+
+**But the other half of the idea is real, and it is older and better-founded than either of us assumed.**
+Shannon did essentially this in 1951 ("Prediction and Entropy of Printed English", Bell System Technical
+Journal 30:50-64): he had humans guess successive letters of English text and used the *number of guesses
+required* to bound the entropy of English. The number-of-guesses trick is exactly the move that recovers a
+distribution from a human who can only produce one answer at a time. That is the apparatus, and it has been
+sitting in the literature for seventy-five years.
+
+The modern descendant is the **cloze task** in psycholinguistics: cloze probability (the fraction of humans
+completing a context with a given word) versus model surprisal, with reading time as the dependent measure.
+That literature is large and the correlation between surprisal and reading time is one of its more robust
+findings. So "compare human prediction to what the network does" is a running research programme rather than
+a new idea — which is good news, because it means there is a method to borrow instead of invent.
+
+**What would be genuinely new**, and is the part worth pursuing: doing it over a *corpus the human authored
+or knows intimately*, which is precisely what tessera holds. Shannon measured the entropy of English. The
+interesting question here is the entropy of **your own corpus to you** versus to a model — where you are
+surprised and the model is not, and vice versa. That difference is a measurement of what you know that the
+model does not, and it is the same quantity the surprise map above wants for its prior.
+
+**Disposition: PARKED as a research thread, with the method identified.** Not a tessera feature. The
+playable version lives in the sequel tutorial as a teaching device, and the honest framing there is
+Shannon's guessing game rather than "be a transformer".
