@@ -635,10 +635,17 @@ function draw(){
     // The halo fades QUADRATICALLY while the core fades linearly. The halo is 2.4x the radius and it ADDS
     // across overlapping neighbours, so on a crowded map it — not the core — is what turns 1714 nodes into a
     // uniform grey wash. Killing it early on weak nodes buys most of the clarity at no cost to legibility.
-    ctx.globalAlpha = base * a * a;
-    const g=ctx.createRadialGradient(x,y,0,x,y,rr*2.4);        // soft glow halo
-    g.addColorStop(0,col); g.addColorStop(1,'rgba(0,0,0,0)');
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,rr*2.4,0,7); ctx.fill();
+    // The halo fades quadratically, so at low alpha it contributes nothing visible — but building the
+    // gradient object costs the same regardless. With the fade at full strength most nodes sit near 0.02,
+    // whose halo is 0.0004: invisible, and 2000 gradient allocations per frame at 60fps to draw it. Skip
+    // below the threshold where Harrison et al. found legibility bottoms out.
+    const halo = base * a * a;
+    if(halo > 0.004){
+      ctx.globalAlpha = halo;
+      const g=ctx.createRadialGradient(x,y,0,x,y,rr*2.4);      // soft glow halo
+      g.addColorStop(0,col); g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,rr*2.4,0,7); ctx.fill();
+    }
     ctx.globalAlpha = base * a;
     ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x,y,rr,0,7); ctx.fill();   // core
     if(n===selected||n===hoverNode){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,rr,0,7); ctx.stroke(); }
@@ -673,6 +680,10 @@ function draw(){
   try{ ctx.letterSpacing='0px'; }catch(e){} ctx.textBaseline='alphabetic';
   drawMinimap();
   if(ti!==lastTi){ updateChrome(ti); lastTi=ti; }
+  // While the optimiser is running the map is NOT changing — compute is off-screen by design — so redrawing
+  // 2055 gradient-filled nodes sixty times a second is pure competition for the same thread. Back off to a
+  // slow tick so the controls stay live and the CPU goes where the work is.
+  if(layoutRun){ setTimeout(()=>requestAnimationFrame(draw), 180); return; }
   requestAnimationFrame(draw);
 }
 
@@ -1223,9 +1234,13 @@ function makeTsne(ids, perp, init, attraction){
   // scale the init small — t-SNE expects to start compact, and a large spread stalls early exaggeration
   const sc=Math.max(1e-6, Math.max(...init.flat().map(Math.abs)));
   const Y=init.map(p=>[p[0]/sc*1e-2, p[1]/sc*1e-2]);
-  return { n, P:Q, Y, attraction: attraction ?? 1, gains:Y.map(()=>[1,1]), vel:Y.map(()=>[0,0]), iter:0,
+  // Allocated ONCE and reused. This buffer was being created fresh inside step(): 32MB per step at n=2055,
+  // roughly 260MB/s of garbage, which stutters the whole page and keeps hurting afterwards through heap
+  // fragmentation. Nothing about the algorithm needed a new array; it is fully overwritten each pass.
+  const numBuf = new Float64Array(n*n);
+  return { n, P:Q, Y, num:numBuf, attraction: attraction ?? 1, gains:Y.map(()=>[1,1]), vel:Y.map(()=>[0,0]), iter:0,
     step(){
-      const {n,Y}=this; const num=new Float64Array(n*n); let Z=0;
+      const {n,Y,num}=this; let Z=0;
       for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
         const dx=Y[i][0]-Y[j][0], dy=Y[i][1]-Y[j][1], q=1/(1+dx*dx+dy*dy);
         num[i*n+j]=q; num[j*n+i]=q; Z+=2*q; }
@@ -1282,7 +1297,9 @@ function startLayout(perp, initMode, attraction, onTick){
   // subset save tear the map, and the stored layout covers every node anyway.
   const ids=nodes.filter(n=>EMB[n.id]).map(n=>n.id);
   if(ids.length<8) return null;
-  const init = initMode==='pca' ? pcaInit(ids) : ids.map(id=>{ const n=nodes.find(x=>x.id===id); return [n.x,n.y]; });
+  // A Map, not nodes.find() per id — that was O(n^2), 4.2M comparisons before the run even started.
+  const pos=new Map(nodes.map(n=>[n.id,n]));
+  const init = initMode==='pca' ? pcaInit(ids) : ids.map(id=>{ const n=pos.get(id); return [n.x,n.y]; });
   const t=makeTsne(ids, perp, init, attraction);
   const total=500;
   pending={ids, t, total, done:false, perp, initMode, attraction};
@@ -1546,13 +1563,20 @@ function renderLayoutCtl(box){
   } else {
     bar.appendChild(btn('Compute', ()=>{
       saveMsg=''; layoutStatus='computing…';
-      const ok=startLayout(layoutPerp, layoutInit, layoutAttr, (it,done)=>{
-        layoutStatus = done ? 'ready — nothing moved yet' : ('computing '+Math.round(100*it/500)+'%');
-        if(done) renderEdgeCtl();
-        else { const el=document.getElementById('lay-stat'); if(el) el.textContent=layoutStatus; }
-      });
-      if(!ok) layoutStatus='too few nodes carry vectors';
+      // makeTsne() is O(n^2 d) and takes about four seconds at 2055 nodes — a hard freeze with no repaint.
+      // Deferring it by two frames lets the "preparing" text actually reach the screen first, so the tab
+      // looks busy rather than hung. It does not make the work cheaper; it stops it looking like a crash.
+      layoutStatus='preparing (a few seconds)…';
       renderEdgeCtl();
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        const ok=startLayout(layoutPerp, layoutInit, layoutAttr, (it,done)=>{
+          layoutStatus = done ? 'ready — nothing moved yet' : ('computing '+Math.round(100*it/500)+'%');
+          if(done) renderEdgeCtl();
+          else { const el=document.getElementById('lay-stat'); if(el) el.textContent=layoutStatus; }
+        });
+        if(!ok){ layoutStatus='too few nodes carry vectors'; }
+        renderEdgeCtl();
+      }));
     }, true));
   }
   const ub=btn('Undo', ()=>{
