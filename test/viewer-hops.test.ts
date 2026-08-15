@@ -139,3 +139,55 @@ describe("the hop→opacity ladder", () => {
     for (let i = 1; i < seq.length; i++) expect(seq[i]!).toBeLessThanOrEqual(seq[i - 1]!);
   });
 });
+
+describe("the adaptive zoom ceiling", () => {
+  const tightest = new Function(
+    `${TPL.match(/function tightestSpacing\(pts\)\{[\s\S]*?\n\}/)![0]}; return tightestSpacing;`,
+  )() as (pts: number[][]) => number | null;
+
+  it("ignores EXACTLY coincident points, which no zoom level can separate", () => {
+    // The graph has 20 nodes at identical positions. Including them drives the ceiling to infinity while
+    // fixing nothing, because zoom multiplies a zero distance by a constant and gets zero.
+    const grid: number[][] = [];
+    for (let i = 0; i < 40; i++) grid.push([i * 10, 0]);
+    const withDupes = [...grid, [0, 0], [0, 0], [10, 0]];
+    expect(tightest(grid)).toBeCloseTo(10, 3);
+    expect(tightest(withDupes)).toBeCloseTo(10, 3); // unchanged: the duplicates are skipped
+  });
+
+  it("reports a TIGHT cluster, not the average spacing", () => {
+    // The whole point: one dense clump inside a sparse field must set the ceiling, or you hit the cap before
+    // the clump comes apart. That is the failure Brian hit after applying a t-SNE layout.
+    const sparse: number[][] = [];
+    for (let i = 0; i < 60; i++) sparse.push([i * 100, 0]);
+    const clumped = [...sparse];
+    for (let i = 0; i < 6; i++) clumped.push([5000 + i * 0.5, 500]);
+    const a = tightest(sparse)!, b = tightest(clumped)!;
+    expect(b).toBeLessThan(a);
+    expect(b).toBeLessThanOrEqual(0.5);
+  });
+
+  it("returns null when there is nothing to measure", () => {
+    expect(tightest([])).toBeNull();
+    expect(tightest([[0, 0]])).toBeNull();
+  });
+
+  it("agrees with brute force on a small random set", () => {
+    // The grid bucketing is an optimisation; it must not change the answer. Without this check the whole
+    // ceiling could be wrong in a way that only shows on real data.
+    const pts: number[][] = [];
+    for (let i = 0; i < 120; i++) pts.push([Math.sin(i * 7.3) * 500, Math.cos(i * 3.1) * 500]);
+    const nn: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      let best = Infinity;
+      for (let j = 0; j < pts.length; j++) {
+        if (i === j) continue;
+        const d = Math.hypot(pts[i]![0]! - pts[j]![0]!, pts[i]![1]! - pts[j]![1]!);
+        if (d > 1e-3 && d < best) best = d;
+      }
+      if (Number.isFinite(best)) nn.push(best);
+    }
+    nn.sort((a, b) => a - b);
+    expect(tightest(pts)).toBeCloseTo(nn[Math.floor(0.02 * (nn.length - 1))]!, 6);
+  });
+});

@@ -286,6 +286,7 @@ function rebuild(reposition){
     }
   } else { for(const e of EDGES) e.prom = 0.5; }
   edgeEpoch++;                     // EDGES has just been replaced — invalidate anything derived from it
+  recomputeZoomCeiling();          // the visible set changed, so the tightest spacing may have too
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
@@ -707,7 +708,7 @@ cv.addEventListener('contextmenu', ev=>{ ev.preventDefault();
   const e=edgeAt(ev.clientX,ev.clientY);
   if(e && (!f || edgeIsFocused(e))) openEdge(e); });
 cv.addEventListener('wheel', ev=>{ ev.preventDefault(); camAnim=null; const [wx,wy]=toWorld(ev.clientX,ev.clientY);
-  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.12,Math.min(8,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
+  scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(ZOOM_MIN,Math.min(maxScale,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
 // --- panel: idle / node focus (left-click) / node deep (right-click) / edge — one component, breadcrumb walk ---
 const panel=$('panel'), pscroll=$('pscroll'), pactions=$('pactions'), crumb=$('crumb');
@@ -728,12 +729,55 @@ function centerOn(n){ ox=W/2-n.x*scale; oy=H/2-n.y*scale; }
  * output to its own world radius, which has no relation to where the camera was looking at the CLI layout.
  * Found by review — without this, Apply can drop the whole graph off-screen and read as "Compute failed".
  */
+// --- ADAPTIVE ZOOM CEILING ------------------------------------------------------------------------------
+// A fixed 8x cap was sized for the force layout, whose repulsion term establishes a hard minimum spacing
+// (measured: ~20 world units, so the tightest real pair is already 160px apart at 8x). It is meaningless for
+// a t-SNE layout, where non-uniform spacing is the entire point and a cluster can be a few units across —
+// you hit the ceiling long before the cluster comes apart. So the ceiling follows the geometry instead.
+//
+// COINCIDENT NODES ARE EXCLUDED and are a different problem: this graph has 20 nodes at EXACTLY the same
+// position, and no zoom level separates a zero distance. Including them would drive the ceiling to infinity
+// while fixing nothing. They need a draw-time offset, which is a separate change.
+const ZOOM_GAP_PX = 44;      // the on-screen separation the tightest real pair should reach at full zoom
+const ZOOM_MIN = 0.12, ZOOM_FLOOR_MAX = 8, ZOOM_HARD_MAX = 400;
+let maxScale = ZOOM_FLOOR_MAX;
+
+/** Low percentile of nearest-neighbour distance, grid-bucketed so this stays linear rather than O(n^2). */
+function tightestSpacing(pts){
+  if(pts.length < 2) return null;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const p of pts){ if(p[0]<x0)x0=p[0]; if(p[0]>x1)x1=p[0]; if(p[1]<y0)y0=p[1]; if(p[1]>y1)y1=p[1]; }
+  const span=Math.max(x1-x0, y1-y0) || 1;
+  const cell=Math.max(1e-6, span/Math.max(8, Math.floor(Math.sqrt(pts.length))));
+  const grid=new Map();
+  pts.forEach((p,i)=>{ const k=Math.floor(p[0]/cell)+','+Math.floor(p[1]/cell);
+    if(!grid.has(k)) grid.set(k,[]); grid.get(k).push(i); });
+  const nn=[];
+  pts.forEach((p,i)=>{
+    let best=Infinity; const gx=Math.floor(p[0]/cell), gy=Math.floor(p[1]/cell);
+    for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++)
+      for(const j of (grid.get((gx+dx)+','+(gy+dy))||[])){
+        if(i===j) continue;
+        const d=Math.hypot(p[0]-pts[j][0], p[1]-pts[j][1]);
+        if(d>1e-3 && d<best) best=d;          // >1e-3 skips coincident pairs, which zoom cannot help
+      }
+    if(Number.isFinite(best)) nn.push(best);
+  });
+  if(!nn.length) return null;
+  nn.sort((a,b)=>a-b);
+  return nn[Math.floor(0.02*(nn.length-1))];   // p2: ignore a handful of outliers, still serve the tight tail
+}
+function recomputeZoomCeiling(){
+  const sep = tightestSpacing(NODES.map(n=>[n.x,n.y]));
+  maxScale = sep ? Math.min(ZOOM_HARD_MAX, Math.max(ZOOM_FLOOR_MAX, ZOOM_GAP_PX/sep)) : ZOOM_FLOOR_MAX;
+}
+
 function fitAll(){
   if(!NODES.length) return;
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(const n of NODES){ if(n.x<x0)x0=n.x; if(n.x>x1)x1=n.x; if(n.y<y0)y0=n.y; if(n.y>y1)y1=n.y; }
   const w=Math.max(1,x1-x0), h=Math.max(1,y1-y0);
-  scale=Math.max(0.12,Math.min(8, 0.86*Math.min(W/w, H/h)));
+  scale=Math.max(ZOOM_MIN,Math.min(maxScale, 0.86*Math.min(W/w, H/h)));
   ox=W/2-((x0+x1)/2)*scale; oy=H/2-((y0+y1)/2)*scale;
 }
 
@@ -1246,7 +1290,9 @@ function acceptLayout(){
   pushUndo('before t-SNE (perplexity '+pending.perp+', '+pending.initMode+' init)');
   writeBack(pending.ids, pending.t.Y);
   appliedIds = pending.ids.slice();
-  pending=null; draw();
+  pending=null;
+  recomputeZoomCeiling();          // a new layout means new spacing, and t-SNE's is far tighter
+  draw();
   fitAll();                       // the optimiser normalises to its own radius; bring the camera with it
 }
 function discardLayout(){
