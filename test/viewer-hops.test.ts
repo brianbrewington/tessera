@@ -362,3 +362,58 @@ describe("persisted dimming preferences are validated, not trusted", () => {
     expect(load(JSON.stringify({ mode: "wat" })).mode).toBe("neighbours");
   });
 });
+
+describe("the geometric falloff generator (Matthew's shape)", () => {
+  const build = (): { ladder: () => number[]; setRatio: (r: number) => void; setHop2: (v: number) => void } =>
+    new Function(
+      `${TPL.match(/const HOP_LADDER_DEFAULT[^\n]*\n/)![0]}let HOP_LADDER = HOP_LADDER_DEFAULT.slice();
+       ${TPL.match(/const HOP_RATIO_DEFAULT[^\n]*\n/)![0]}let hopRatio = HOP_RATIO_DEFAULT;
+       ${TPL.match(/function applyHopRatio\(\)\{[\s\S]*?\n\}/)![0]}
+       return { ladder: () => HOP_LADDER, setRatio: r => { hopRatio = r; applyHopRatio(); },
+                setHop2: v => { HOP_LADDER[2] = v; applyHopRatio(); } };`,
+    )() as ReturnType<typeof build>;
+
+  it("multiplies each hop past 2 by the ratio", () => {
+    const L = build();
+    L.setHop2(0.3);
+    L.setRatio(0.3);
+    const l = L.ladder();
+    expect(l[2]).toBeCloseTo(0.3, 4);
+    expect(l[3]).toBeCloseTo(0.09, 4);
+    expect(l[4]).toBeCloseTo(0.027, 4);
+    expect(l[5]).toBeCloseTo(0.008, 3);
+  });
+
+  it("leaves hops 0, 1 and 2 alone — the generator only writes the TAIL", () => {
+    // The two controls have to compose: hop 2 is the halo brightness a human chose, the ratio is how fast
+    // things vanish past it. A generator that overwrote hop 2 would fight the person using it.
+    const L = build();
+    L.setHop2(0.33);
+    L.setRatio(0.5);
+    const l = L.ladder();
+    expect(l[0]).toBe(1);
+    expect(l[1]).toBe(1);
+    expect(l[2]).toBe(0.33);
+  });
+
+  it("rebuilds the tail from a CHANGED hop 2, not from the old one", () => {
+    const L = build();
+    L.setRatio(0.5);
+    L.setHop2(0.8);
+    expect(L.ladder()[3]).toBeCloseTo(0.4, 4);
+  });
+
+  it("stays monotone and inside [0,1] across the whole offered ratio range", () => {
+    for (const r of [0.05, 0.1, 0.3, 0.5, 0.7]) {
+      const L = build();
+      L.setHop2(0.33);
+      L.setRatio(r);
+      const l = L.ladder();
+      for (let i = 3; i < l.length; i++) {
+        expect(l[i]!).toBeLessThanOrEqual(l[i - 1]!);
+        expect(l[i]!).toBeGreaterThanOrEqual(0);
+        expect(l[i]!).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+});

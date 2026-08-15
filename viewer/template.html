@@ -491,7 +491,7 @@ let HOP_NONE = HOP_NONE_DEFAULT;
 // you to your own previous guess is not a reset.
 const PREF_KEY = 'tessera-dim-' + (GRAPH.name || 'graph');
 function savePrefs(){
-  try{ localStorage.setItem(PREF_KEY, JSON.stringify({ ladder:HOP_LADDER, none:HOP_NONE, fade:fadeStrength, mode:focusMode })); }
+  try{ localStorage.setItem(PREF_KEY, JSON.stringify({ ladder:HOP_LADDER, none:HOP_NONE, fade:fadeStrength, mode:focusMode, ratio:hopRatio })); }
   catch(e){ /* private mode, quota, file:// with storage disabled — a lost preference is not worth throwing over */ }
 }
 function loadPrefs(){
@@ -504,6 +504,7 @@ function loadPrefs(){
   if(typeof p.none==='number' && Number.isFinite(p.none) && p.none>=0 && p.none<=1) HOP_NONE=p.none;
   if(typeof p.fade==='number' && Number.isFinite(p.fade) && p.fade>=0 && p.fade<=1) fadeStrength=p.fade;
   if(p.mode==='hops' || p.mode==='neighbours') focusMode=p.mode;
+  if(typeof p.ratio==='number' && Number.isFinite(p.ratio) && p.ratio>0 && p.ratio<1) hopRatio=p.ratio;
 }
 function hopAlpha(h){
   if(h===undefined || h===null) return HOP_NONE;
@@ -1404,6 +1405,17 @@ function renderEdgeCtl(){
 }
 
 // --- the hop ladder editor: brightness per hop, draggable ------------------------------------------------
+// Matthew's shape: a geometric falloff rather than seven hand-set numbers. Applied from hop 2 DOWNWARD, so
+// the two controls compose instead of fighting — whatever brightness hop 2 is set to is the halo, and the
+// ratio decides how fast everything past it disappears. Hops 0 and 1 stay present; unreachable stays its own
+// thing, since "not connected" is not the far end of a distance.
+const HOP_RATIO_DEFAULT = 0.3;
+let hopRatio = HOP_RATIO_DEFAULT;
+function applyHopRatio(){
+  for(let i=3;i<HOP_LADDER.length;i++)
+    HOP_LADDER[i] = Math.round(HOP_LADDER[2]*Math.pow(hopRatio, i-2)*1000)/1000;
+}
+
 function renderHopLadder(box){
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:8px';
   const rows=[...HOP_LADDER.map((v,i)=>({label: i===HOP_LADDER.length-1 ? i+'+' : String(i), get:()=>HOP_LADDER[i], set:v=>{HOP_LADDER[i]=v;}})),
@@ -1440,6 +1452,25 @@ function renderHopLadder(box){
     row.appendChild(lab); row.appendChild(track); row.appendChild(num);
     wrap.appendChild(row);
   }
+  // the generator sits under the rungs: move it and the tail is rewritten; drag a rung after that and the
+  // hand edit stands until the ratio moves again.
+  const gr=document.createElement('div');
+  gr.style.cssText='display:grid;grid-template-columns:18px 1fr 30px;gap:6px;align-items:center;margin-top:7px';
+  const gl=document.createElement('span');
+  gl.style.cssText='font-family:var(--mono);font-size:9px;color:var(--accent);text-align:right'; gl.textContent='×';
+  const gs=document.createElement('input'); gs.type='range'; gs.min='5'; gs.max='70'; gs.value=String(Math.round(hopRatio*100));
+  gs.style.cssText='width:100%';
+  const gn=document.createElement('span');
+  gn.style.cssText='font-family:var(--mono);font-size:9.5px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums';
+  gn.textContent=hopRatio.toFixed(2);
+  gs.oninput=()=>{ hopRatio=Number(gs.value)/100; applyHopRatio(); savePrefs(); draw(); renderEdgeCtl(); };
+  gr.appendChild(gl); gr.appendChild(gs); gr.appendChild(gn);
+  wrap.appendChild(gr);
+  const gh=document.createElement('div');
+  gh.style.cssText='margin-top:2px;color:var(--faint);font-size:9.5px';
+  gh.textContent='geometric falloff from hop 2';
+  wrap.appendChild(gh);
+
   const foot=document.createElement('div');
   foot.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-top:5px';
   const key=document.createElement('span');
@@ -1447,7 +1478,7 @@ function renderHopLadder(box){
   const rst=document.createElement('button');
   rst.textContent='reset';
   rst.style.cssText='font-size:10px;padding:2px 7px;border-radius:5px;background:var(--surface-3);color:var(--dim);border:1px solid var(--line-2);cursor:pointer';
-  rst.onclick=()=>{ HOP_LADDER=HOP_LADDER_DEFAULT.slice(); HOP_NONE=HOP_NONE_DEFAULT; savePrefs(); draw(); renderEdgeCtl(); };
+  rst.onclick=()=>{ HOP_LADDER=HOP_LADDER_DEFAULT.slice(); HOP_NONE=HOP_NONE_DEFAULT; hopRatio=HOP_RATIO_DEFAULT; savePrefs(); draw(); renderEdgeCtl(); };
   foot.appendChild(key); foot.appendChild(rst);
   wrap.appendChild(foot);
   box.appendChild(wrap);
