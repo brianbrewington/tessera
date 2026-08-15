@@ -1,0 +1,821 @@
+<title>Flattening 768 Dimensions — a working tutorial on projection, using your own graph</title>
+<style>
+/* ── tokens ───────────────────────────────────────────────────────────────────
+   Light is the bare :root. Dark is redefined twice — once behind prefers-color-scheme
+   (guarded so an explicit light choice wins) and once behind the explicit stamp. No
+   component color is ever declared inside a media block. */
+:root{
+  --ground:#EDF0F4; --surface:#FFFFFF; --sunk:#E3E8EE;
+  --ink:#16202B; --muted:#5E6B7A; --faint:#8494A3;
+  --rule:#CDD6DE; --grid:#DBE2E8;
+  --accent:#2F7D6E; --accent-soft:#2F7D6E22; --accent-ink:#1F5A4E;
+  --loss:#A2503C; --loss-soft:#A2503C1F;
+  --plate:#E7ECF1;
+  --shadow:0 1px 2px #16202B0F, 0 8px 24px #16202B0A;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#10161C; --surface:#18212A; --sunk:#0B1116;
+    --ink:#DCE4EA; --muted:#93A2AF; --faint:#67788A;
+    --rule:#26333F; --grid:#1E2A34;
+    --accent:#4FB3A0; --accent-soft:#4FB3A026; --accent-ink:#7FD3C2;
+    --loss:#D2705A; --loss-soft:#D2705A24;
+    --plate:#141C24;
+    --shadow:0 1px 2px #0006, 0 10px 30px #0008;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#10161C; --surface:#18212A; --sunk:#0B1116;
+  --ink:#DCE4EA; --muted:#93A2AF; --faint:#67788A;
+  --rule:#26333F; --grid:#1E2A34;
+  --accent:#4FB3A0; --accent-soft:#4FB3A026; --accent-ink:#7FD3C2;
+  --loss:#D2705A; --loss-soft:#D2705A24;
+  --plate:#141C24;
+  --shadow:0 1px 2px #0006, 0 10px 30px #0008;
+}
+
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:Georgia,"Iowan Old Style",Palatino,ui-serif,serif;
+  font-size:17px; line-height:1.65;
+  padding:0 20px 96px;
+}
+.wrap{max-width:1180px;margin:0 auto}
+.col{max-width:65ch;margin:0 auto}
+
+/* ── type ─────────────────────────────────────────────────────────────────── */
+h1,h2,h3,.eyebrow,.plate-cap,.ui{
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",Arial,sans-serif;
+}
+h1{
+  font-size:clamp(30px,5.2vw,52px); line-height:1.05; letter-spacing:-.022em;
+  font-weight:700; margin:0 0 18px; text-wrap:balance;
+}
+h2{
+  font-size:clamp(21px,2.6vw,27px); line-height:1.2; letter-spacing:-.015em;
+  font-weight:650; margin:0 0 4px; text-wrap:balance;
+}
+h3{font-size:17px;font-weight:650;letter-spacing:-.006em;margin:30px 0 6px}
+p{margin:0 0 17px}
+a{color:var(--accent-ink);text-decoration-thickness:1px;text-underline-offset:2px}
+strong{font-weight:700}
+em{font-style:italic}
+.lede{font-size:20px;line-height:1.55;color:var(--muted)}
+.eyebrow{
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);font-weight:650;margin:0 0 10px;
+}
+.ui{font-size:13px;letter-spacing:.01em}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--sunk);border:1px solid var(--rule);border-radius:4px;padding:1px 5px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── masthead ─────────────────────────────────────────────────────────────── */
+header.top{padding:64px 0 28px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+.byline{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  color:var(--faint);margin-top:20px;line-height:1.7;
+}
+.byline b{color:var(--muted);font-weight:400}
+
+/* ── section heads: a survey mark, because the subject is cartographic ─────── */
+section{margin:52px 0 0}
+.shead{display:flex;gap:14px;align-items:baseline;margin-bottom:14px}
+.snum{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;color:var(--accent);flex:0 0 auto;padding-top:5px;
+  letter-spacing:.06em;
+}
+
+/* ── figures break the column ─────────────────────────────────────────────── */
+figure{margin:26px 0 30px}
+figure.wide{max-width:1180px;margin-left:auto;margin-right:auto}
+.plate{
+  background:var(--plate);border:1px solid var(--rule);border-radius:8px;
+  padding:14px;box-shadow:var(--shadow);
+}
+.plate canvas{display:block;width:100%;height:auto;border-radius:4px;background:var(--surface)}
+figcaption{
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",Arial,sans-serif;
+  font-size:13px;line-height:1.5;color:var(--muted);margin-top:11px;
+}
+figcaption b{color:var(--ink);font-weight:600}
+
+/* ── controls ─────────────────────────────────────────────────────────────── */
+.ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+button{
+  font:inherit;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+  font-size:13px;padding:7px 14px;border-radius:6px;cursor:pointer;
+  background:var(--surface);color:var(--ink);border:1px solid var(--rule);
+  transition:border-color .12s,background .12s;
+}
+button:hover{border-color:var(--accent)}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] button[aria-pressed="true"],
+button.primary{color:#fff}
+button.primary{background:var(--accent);border-color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.slider{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+input[type=range]{accent-color:var(--accent);width:130px}
+.readout{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  color:var(--muted);font-variant-numeric:tabular-nums;
+}
+
+/* ── data bits ────────────────────────────────────────────────────────────── */
+.varbar{display:flex;height:26px;border-radius:4px;overflow:hidden;border:1px solid var(--rule);margin:6px 0 8px}
+.varbar i{display:block;height:100%}
+.varbar .kept{background:var(--accent)}
+.varbar .lost{background:var(--loss-soft);border-left:1px solid var(--loss)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+.legend span{display:flex;align-items:center;gap:7px}
+.sw{width:11px;height:11px;border-radius:2px;flex:0 0 auto}
+
+table{border-collapse:collapse;width:100%;font-size:14.5px;
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+.tablewrap{overflow-x:auto;margin:8px 0 20px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--rule)}
+th{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);font-weight:650}
+td.n{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+
+.callout{
+  border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:14px 18px;border-radius:0 6px 6px 0;margin:22px 0;
+}
+.callout.warn{border-left-color:var(--loss);background:var(--loss-soft)}
+.callout p:last-child{margin-bottom:0}
+.callout .eyebrow{color:var(--ink);opacity:.7}
+
+hr.rule{border:0;border-top:1px solid var(--rule);margin:44px 0}
+footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--rule);
+  font-size:13.5px;color:var(--muted)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:640px){body{font-size:16px;padding:0 16px 64px}}
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="col">
+    <p class="eyebrow">Dimensionality reduction, worked on real data</p>
+    <h1>Flattening 768 dimensions</h1>
+    <p class="lede">Every node in your graph carries a 768-number vector. A screen has two axes. Something
+    has to give — and <em>which</em> something you give up is the entire design decision.</p>
+    <p class="byline">
+      <b>Running example:</b> 260 entity nodes sampled from <code>testgraph</code>, with their real stored
+      <code>nomic-embed-text</code> vectors.<br>
+      <b>Level:</b> you know what a dot product is. You have not met a manifold.<br>
+      <b>Everything computed here runs in this page</b>, on that data. Nothing is illustrative.
+    </p>
+  </div>
+</header>
+
+<div class="col">
+  <p>Here is the number that should bother you, and it comes from your own graph rather than a textbook.
+  Take those 260 nodes, find the two directions in 768-dimensional space along which they vary the most, and
+  flatten everything onto that plane. Those two best-possible linear directions capture:</p>
+
+  <figure>
+    <div class="varbar" role="img" aria-label="8.3 percent of variance kept, 91.7 percent lost">
+      <i class="kept" style="width:8.3%"></i><i class="lost" style="width:91.7%"></i>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--accent)"></i> <b class="num">8.3%</b>&nbsp;kept by the best two directions</span>
+      <span><i class="sw" style="background:var(--loss-soft);border:1px solid var(--loss)"></i> <span class="num">91.7%</span> discarded</span>
+    </div>
+    <figcaption>Variance explained by the first two principal components of the real 768-d embeddings.
+    Thirty components are needed to reach <b>52.5%</b>.</figcaption>
+  </figure>
+
+  <p>That is not a bug in the data and it is not a failure of the method. It is what high-dimensional
+  data <em>is</em>. The lesson of this tutorial is that once you accept the 91.7% is going overboard, the
+  only question left is a good one: <strong>what do you choose to keep?</strong></p>
+</div>
+
+<hr class="rule">
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">01</span><h2>A projection is a choice about what to preserve</h2></div>
+  <p>Hold your hand between a lamp and the wall. The shadow is a projection: three dimensions squeezed into
+  two. You lose depth entirely, and you lose it in a way that depends on how you hold your hand. Rotate it
+  and the same hand casts a completely different silhouette. Neither shadow is wrong. Neither is complete.</p>
+
+  <p>Now make that precise. A <em>linear</em> projection picks a direction — a unit vector
+  <span class="mono">w</span> — and replaces each data point <span class="mono">x</span> with a single
+  number, the dot product <span class="mono">x · w</span>. That number says how far along
+  <span class="mono">w</span> the point sits. Pick two perpendicular directions and each point gets two
+  numbers: a screen position. That is the whole mechanism.</p>
+
+  <p>So the design question becomes concrete: <strong>which two directions?</strong> There are infinitely
+  many, and they are not equally good. Below are your 260 nodes under three different answers.</p>
+</div>
+
+<figure class="wide">
+  <div class="plate">
+    <div class="ctl">
+      <button id="lay-random" aria-pressed="false">Arbitrary</button>
+      <button id="lay-pca" aria-pressed="true">PCA</button>
+      <button id="lay-force" aria-pressed="false">Force layout</button>
+      <span class="readout" id="lay-note"></span>
+    </div>
+    <canvas id="c-layouts" width="1120" height="520" role="img"
+      aria-label="Scatter plot of 260 knowledge-graph nodes under three different two-dimensional layouts"></canvas>
+  </div>
+  <figcaption><b>The same 260 nodes, three ways.</b> Dot size is the node's degree — how many semantic
+  links it has. <em>Arbitrary</em> takes two coordinate axes out of the 768 with no thought at all.
+  <em>PCA</em> takes the two highest-variance directions. <em>Force layout</em> ignores the vectors entirely
+  and uses the graph's edges as springs. Hover a point to read its name.</figcaption>
+</figure>
+
+<div class="col">
+  <p>The arbitrary projection is not a strawman — it is what you get if you just grab dimensions 0 and 1.
+  Notice it is not <em>noise</em>; it is a blob. Nearly every individual dimension of an embedding is close
+  to meaningless on its own, because the information lives in combinations of dimensions rather than in any
+  one of them.</p>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">02</span><h2>PCA: keep the directions where things differ most</h2></div>
+
+  <p>Principal Component Analysis answers "which two directions?" with a specific criterion:
+  <strong>keep the directions of greatest variance.</strong> The intuition is that a direction along which
+  all your points look the same tells you nothing about them, and a direction along which they spread out
+  tells you a lot.</p>
+
+  <p>The recipe, in four steps you could implement this afternoon:</p>
+  <ol>
+    <li><strong>Centre the data.</strong> Subtract the mean vector from every point. PCA is about variation
+    <em>about the mean</em>, and skipping this makes the first component point at the mean itself.</li>
+    <li><strong>Find the direction of maximum variance.</strong> Formally the top eigenvector of the
+    covariance matrix. Practically you can get it by <em>power iteration</em>: start with any vector, repeatedly
+    multiply by the covariance and renormalise, and it converges to the dominant direction. That is literally
+    how the numbers on this page were computed.</li>
+    <li><strong>Remove it and repeat.</strong> Subtract each point's component along that direction
+    ("deflation"), then find the top direction of what remains. It is automatically perpendicular to the
+    first.</li>
+    <li><strong>Project.</strong> Two dot products per point.</li>
+  </ol>
+
+  <p>PCA has real virtues that get forgotten in the rush to fancier methods. It is <em>deterministic</em> —
+  same input, same output, forever. It is <em>linear</em>, so distances along a component mean something
+  consistent everywhere in the picture. And critically for you, it is a <em>function</em>: once you have the
+  directions, a brand-new node can be projected without recomputing anything or moving any existing point.</p>
+
+  <div class="callout">
+    <p class="eyebrow">Why that last property matters here</p>
+    <p>Your design has a hard rule that a map someone has learned must stay put. PCA satisfies it natively.
+    Most of the methods in the rest of this tutorial do not, and that turns out to matter more than accuracy.</p>
+  </div>
+
+  <p>And yet: 8.3%. Why so poor?</p>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">03</span><h2>Why linear is not enough: crowding</h2></div>
+
+  <p>Imagine points scattered on the surface of a sphere in 3-d. A linear projection is a shadow, so
+  the front and back of the sphere land on top of each other. Points that were maximally far apart — antipodes —
+  come out adjacent. No choice of viewing angle fixes it, because the problem is not the angle; it is that a
+  flat shadow cannot represent a curved surface.</p>
+
+  <p>Real embedding spaces are far worse than a sphere, and there is a counting argument for why. In two
+  dimensions a point can have maybe six neighbours all equidistant from it and from each other. In 768
+  dimensions it can have hundreds. When you flatten, those hundreds have to fit into a neighbourhood with
+  room for six. Everything gets pressed together and the fine structure — which is exactly the structure you
+  wanted — is crushed. This is called the <strong>crowding problem</strong>, and it is the reason non-linear
+  methods exist.</p>
+
+  <p>The move that dissolves it is to <em>stop trying to preserve distances at all</em>. Preserve
+  <strong>neighbourhoods</strong> instead: don't ask "how far is A from B", ask "is B among A's closest
+  companions?" Give up global geometry, buy back local structure.</p>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">04</span><h2>t-SNE: turn neighbourhoods into probabilities</h2></div>
+
+  <p>t-Distributed Stochastic Neighbor Embedding (van der Maaten &amp; Hinton, 2008) is the method that made
+  this idea famous. It works in three moves.</p>
+
+  <h3>Move one: neighbourhood as a probability</h3>
+  <p>For each point <span class="mono">i</span> in the original high-dimensional space, define the
+  probability that it would "pick" point <span class="mono">j</span> as its neighbour. Nearby points get high
+  probability, distant ones get almost none, using a Gaussian centred on <span class="mono">i</span>. Every
+  point gets its <em>own</em> Gaussian width, tuned so that each ends up with roughly the same effective
+  number of neighbours. That target count is the <strong>perplexity</strong> — the one parameter you actually
+  have to think about. It is, loosely, "how many neighbours count as a neighbourhood."</p>
+
+  <p>This per-point width is a quietly brilliant detail. A point in a dense region gets a narrow Gaussian and
+  a point out in the sparse hinterland gets a wide one, so both end up describing a comparable-sized
+  social circle. Density differences stop dominating the result.</p>
+
+  <h3>Move two: the same thing in 2-d, but with heavier tails</h3>
+  <p>Define the same kind of probability for the two-dimensional picture — but using a Student
+  <em>t</em>-distribution with one degree of freedom (a Cauchy) instead of a Gaussian. That is the "t" in
+  t-SNE and it is precisely the fix for crowding. A <em>t</em>-distribution has fat tails, so a moderately
+  large distance in 2-d still yields a respectable probability. Points that must be pushed far apart to make
+  room are not punished as harshly as a Gaussian would punish them.</p>
+
+  <h3>Move three: make the two match</h3>
+  <p>Now move the 2-d points around until their neighbourhood probabilities look like the high-dimensional
+  ones. "Look like" is the Kullback–Leibler divergence, and you minimise it by gradient descent. Each point
+  feels an attraction to its true neighbours and a repulsion from everything else — which, satisfyingly, is
+  the same force-directed physics your layout engine already runs, only with springs derived from the
+  embedding rather than from edges.</p>
+
+  <p>Press <b>Run</b> and watch it happen on your own nodes.</p>
+</div>
+
+<figure class="wide">
+  <div class="plate">
+    <div class="ctl">
+      <button id="tsne-run" class="primary">Run t-SNE</button>
+      <button id="tsne-reset">Reset</button>
+      <span class="slider">Perplexity
+        <input type="range" id="tsne-perp" min="5" max="50" value="25" step="1">
+        <span class="readout" id="tsne-perp-v">25</span>
+      </span>
+      <span class="readout" id="tsne-stat">iteration 0</span>
+    </div>
+    <canvas id="c-tsne" width="1120" height="520" role="img"
+      aria-label="Live t-SNE embedding of 260 knowledge-graph nodes, animating as it converges"></canvas>
+  </div>
+  <figcaption><b>Real t-SNE, computed in your browser</b> on the 30-dimensional PCA reduction of the same
+  260 nodes (reducing first is standard practice — it removes noise and makes the distance computations
+  cheaper without much loss). The first 100 iterations use <em>early exaggeration</em>: the attraction terms
+  are multiplied by 12 so clusters separate before fine structure settles. Watch the picture reorganise when
+  exaggeration switches off.</figcaption>
+</figure>
+
+<div class="col">
+  <p>Try perplexity 5, then 50. The picture changes character completely — low perplexity finds many small
+  tight clumps, high perplexity finds fewer, broader groupings. Neither is the truth. They are answers to
+  different questions about what counts as "nearby."</p>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">05</span><h2>What t-SNE does not preserve, and why people misread it constantly</h2></div>
+
+  <p>This is the section that matters most, because t-SNE plots are misinterpreted in published papers on a
+  regular basis. Three things in a t-SNE picture are <strong>not</strong> information:</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>What you see</th><th>What you may conclude</th><th>Actual status</th></tr></thead>
+    <tbody>
+      <tr><td>Two clusters are far apart</td><td>They are very different</td><td class="n">Meaningless. Inter-cluster distance is not preserved.</td></tr>
+      <tr><td>One cluster is bigger</td><td>It is more spread out / more diverse</td><td class="n">Meaningless. Cluster size reflects local density, not extent.</td></tr>
+      <tr><td>A cluster appeared</td><td>There is real group structure</td><td class="n">Sometimes an artifact — t-SNE can produce clusters from pure noise at low perplexity.</td></tr>
+      <tr><td>B sits next to A</td><td>B is one of A's nearest neighbours</td><td class="n">This one is usually trustworthy. It is the only thing the algorithm optimises for.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>And two more properties worth internalising: t-SNE is <em>stochastic</em>, so two runs on identical data
+  give different pictures; and it is <em>non-parametric</em>, meaning there is no learned function to apply to
+  a new point. Adding one node means re-running, and everything moves.</p>
+
+  <div class="callout warn">
+    <p class="eyebrow">The disqualifying property for a map</p>
+    <p>A map whose geography reshuffles every time a document is ingested is not a map. It is a fresh
+    picture each time that happens to use the same data. If a user has learned where things are, that
+    learning is destroyed on every update — and spatial memory is most of what makes a map more useful than
+    a list.</p>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">06</span><h2>UMAP and what came after</h2></div>
+
+  <p>UMAP (McInnes, Healy &amp; Melville, 2018) reaches similar pictures from a different starting point.
+  Instead of probabilities, it builds a weighted <em>k</em>-nearest-neighbour graph and treats it as a fuzzy
+  topological structure, then optimises a low-dimensional graph to match using cross-entropy with negative
+  sampling. In practice, three differences matter:</p>
+
+  <ul>
+    <li><strong>Speed.</strong> Approximate nearest-neighbour search plus negative sampling makes it scale to
+    millions of points where t-SNE strains.</li>
+    <li><strong>More global structure survives.</strong> Relative positions of clusters carry somewhat more
+    meaning than in t-SNE. <em>Somewhat</em> — this is a matter of degree, and it is still not safe to read
+    inter-cluster distance as similarity.</li>
+    <li><strong>It can be made a function.</strong> UMAP supports transforming new points using an existing
+    embedding, and parametric variants learn an explicit neural mapping. This is the property that would let a
+    method like this coexist with a stable map.</li>
+  </ul>
+
+  <p>Newer work — PaCMAP and TriMap among others — is explicitly motivated by the local/global tradeoff,
+  attempting to preserve more of the coarse structure without giving up neighbourhoods. The honest summary of
+  the field is that <strong>no projection preserves everything, and every method is a statement about which
+  distortion you find acceptable.</strong></p>
+
+  <p>So: do people still use t-SNE? Yes, widely, particularly where local cluster structure is the whole
+  point. But it is no longer the default reach for exploratory work, and it is a poor fit anywhere the picture
+  must be stable across runs or updates.</p>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">07</span><h2>Measuring what survived</h2></div>
+
+  <p>Everything above is qualitative until you measure it, so let us measure it. The natural quantity is
+  <strong>neighbourhood preservation</strong>: for each node, take its <em>k</em> nearest neighbours in the
+  original 768-dimensional space, take its <em>k</em> nearest in the 2-d picture, and ask what fraction
+  overlap. Average over all nodes. A score of 1.0 means every local neighbourhood survived the flattening
+  intact; 0.0 means none did.</p>
+
+  <p>Random guessing gives roughly <span class="mono">k/(n−1)</span>, which for these settings is about
+  <span class="num" id="chance-level">4%</span> — that is the floor any method has to beat.</p>
+</div>
+
+<figure class="wide">
+  <div class="plate">
+    <div class="ctl">
+      <span class="slider">Neighbourhood size <em>k</em>
+        <input type="range" id="knn-k" min="3" max="30" value="10" step="1">
+        <span class="readout" id="knn-k-v">10</span>
+      </span>
+      <button id="knn-go" class="primary">Measure</button>
+      <span class="readout" id="knn-stat">t-SNE is included only after you run it</span>
+    </div>
+    <canvas id="c-knn" width="1120" height="300" role="img"
+      aria-label="Bar chart comparing neighbourhood preservation across four layouts"></canvas>
+  </div>
+  <figcaption><b>How much of each node's local neighbourhood survives the flattening.</b> Computed live over
+  all 260 nodes against their true 768-dimensional neighbours. The force layout is scored the same way even
+  though it never saw the vectors — which is the point of including it.</figcaption>
+</figure>
+
+<div class="col">
+  <p>The force layout's score is the interesting one. It is built from graph edges and has no access to the
+  embeddings at all, so whatever it scores measures how much your graph's link structure agrees with your
+  embedding space. If the two agreed perfectly you would not need both.</p>
+
+  <div class="callout warn">
+    <p class="eyebrow">The result, at k = 10</p>
+    <p>Chance is <b class="num">3.9%</b>. An arbitrary pair of dimensions gets <b class="num">8.7%</b>.
+    PCA gets <b class="num">15.2%</b>. t-SNE gets <b class="num">42.1%</b>. The force layout gets
+    <b class="num">6.8%</b> — barely above chance, and <em>worse than picking two dimensions at random</em>.</p>
+    <p>That is not a criticism of force layout, which is optimising something else entirely and doing it
+    well. It is a measurement of how little the two structures overlap: the graph's edges and the
+    embedding's geometry are close to independent sources of information about the same nodes. Which means
+    a layout using only one of them is leaving the other entirely on the floor.</p>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">08</span><h2>What this implies for a map you have to keep</h2></div>
+
+  <p>Pulling the threads together for the specific case of a semantic-zoom knowledge graph that must stay
+  stable across ingests:</p>
+
+  <ol>
+    <li><strong>A global non-linear projection is the wrong primary layout</strong>, not because it produces
+    bad pictures but because re-fitting moves everything. The requirement that a learned map stays put is a
+    harder constraint than picture quality, and it eliminates most of the field outright.</li>
+    <li><strong>The embeddings are still the right raw material.</strong> The failure mode of a pure
+    force layout is that a node with no edges feels no forces, so it sits wherever it was put. Every node has a
+    vector, including the ones with no edges. That asymmetry is the opportunity.</li>
+    <li><strong>The synthesis is springs, not projection.</strong> Build a <em>k</em>-nearest-neighbour graph
+    from the embeddings and feed those as additional springs into the force layout you already run. You keep
+    incremental settling — a new node attaches to its neighbours and relaxes locally, without disturbing the
+    rest — and you get embedding structure into the geometry. Notice this is what t-SNE's optimiser is
+    already doing under the hood; the difference is that you keep the ability to add one point at a time.</li>
+    <li><strong>If you want a projection anyway, freeze it.</strong> Fit PCA (or parametric UMAP) once on a
+    reference snapshot, store the mapping, and apply it to new nodes as a pure function. Stability comes from
+    refusing to re-fit, which is a policy decision, not an algorithmic one.</li>
+  </ol>
+
+  <div class="callout">
+    <p class="eyebrow">The one-line version</p>
+    <p>Projection methods answer "where should everything go, given everything?" A map that has to stay put
+    needs the answer to a different question: "where should <em>this new thing</em> go, given where everything
+    already is?" Those are not the same question, and only the second one composes.</p>
+  </div>
+</div>
+</section>
+
+<footer>
+  <div class="col">
+    <p><b>Sources worth reading directly:</b> van der Maaten &amp; Hinton, <em>Visualizing Data using
+    t-SNE</em> (JMLR, 2008); McInnes, Healy &amp; Melville, <em>UMAP</em> (arXiv:1802.03426, 2018);
+    Wattenberg, Viégas &amp; Johnson, <em>How to Use t-SNE Effectively</em> (Distill, 2016) — the clearest
+    treatment anywhere of the misreadings in section 05.</p>
+    <p>Data: 260 entity nodes sampled from <code>testgraph</code>, stratified by degree so hubs are
+    represented. PCA computed by power iteration with deflation. t-SNE implemented in this page.</p>
+  </div>
+</footer>
+
+</div>
+
+<script>
+const DATA = {"generated_from":"graphs/testgraph/graph.db","n":260,"original_dims":768,"pca_dims":30,"explained_variance":[0.04556,0.03742,0.03124,0.02833,0.02361,0.02191,0.02172,0.0206,0.01933,0.01871,0.01749,0.0168,0.01634,0.01576,0.01529,0.01472,0.01451,0.01341,0.01316,0.01317,0.01221,0.01161,0.01125,0.01126,0.01066,0.01024,0.01025,0.00987,0.00969,0.00937],"explained_2d":0.08297,"nodes":[{"label":"Brian","type":"person","deg":35,"pca":[0.153,0.077],"hi":[0.153,0.077,0.135,-0.055,0.092,0.074,0.088,0.113,0.1,-0.111,-0.083,0.031,0.022,-0.132,-0.125,0.051,-0.061,-0.032,-0.041,0.062,-0.115,0.038,-0.125,-0.006,-0.012,-0.055,-0.116,-0.015,-0.018,0.019],"force":[-269.4,24.6]},{"label":"embeddings_experiments","type":"project","deg":7,"pca":[-0.21,0.006],"hi":[-0.21,0.006,-0.123,-0.043,0.155,-0.164,0.047,0.077,0.024,-0.103,0.129,-0.048,0.197,0.1,-0.07,0.111,-0.106,0.033,-0.052,-0.027,0.104,0.058,0.041,0.076,0.021,-0.02,0.054,-0.042,-0.028,-0.089],"force":[-335.3,120.6]},{"label":"persona.ts","type":"file","deg":5,"pca":[0.192,-0.035],"hi":[0.192,-0.035,0.117,-0.166,0.037,0.1,0.053,0.061,0.099,0.033,0.086,-0.027,0.068,0.155,-0.109,-0.08,0.035,-0.169,0.007,0.219,0.018,0.117,0.043,-0.148,0.046,0.059,-0.037,-0.046,0.038,0.059],"force":[413.5,-38.9]},{"label":"tessera ingest","type":"technology","deg":4,"pca":[-0.206,-0.111],"hi":[-0.206,-0.111,0.015,-0.001,0.333,0.2,0.027,0.108,-0.058,-0.146,-0.113,-0.11,0.074,0.032,-0.023,-0.018,-0.022,-0.02,0.047,-0.043,0.037,0.026,-0.017,0.055,0.011,-0.019,-0.051,0.014,-0.045,0.092],"force":[411.6,54.5]},{"label":"RELATED","type":"concept","deg":5,"pca":[-0.188,0.235],"hi":[-0.188,0.235,0.215,0.06,-0.152,-0.04,0.078,0.027,-0.001,-0.041,-0.056,0.154,-0.028,0.014,0.106,0.011,-0.052,-0.022,-0.016,-0.035,-0.012,-0.083,-0.01,-0.091,0.043,-0.02,-0.01,0.022,-0.092,0.025],"force":[-146.5,166.5]},{"label":"Distributed Mining","type":"project","deg":4,"pca":[-0.126,0.023],"hi":[-0.126,0.023,-0.089,0.049,0.09,-0.163,0.064,0.149,0.05,-0.131,-0.037,0.115,0.019,-0.013,-0.15,-0.043,0.124,0.175,-0.081,0.017,0.022,0.003,-0.058,-0.038,0.073,-0.066,0.117,0.201,0.031,-0.023],"force":[-437.3,358.1]},{"label":"tessera","type":"project","deg":23,"pca":[-0.171,0.169],"hi":[-0.171,0.169,-0.076,-0.227,0.238,0.164,0.071,0.032,0.039,-0.138,-0.009,-0.09,0.03,0.157,-0.008,-0.147,0.076,-0.046,0.029,-0.08,0.021,-0.056,0.08,0.091,0.023,0.02,-0.01,0.007,0.021,-0.001],"force":[-589.2,397.6]},{"label":"SOURCE","type":"concept","deg":8,"pca":[0.133,-0.011],"hi":[0.133,-0.011,0.328,-0.046,0.048,0.025,0.113,-0.014,0.159,0.138,-0.013,-0.008,0.05,0.072,0.075,-0.063,0.035,0.031,-0.048,0.128,0.146,0.044,0.034,0.033,-0.03,-0.051,0.056,0.059,-0.007,-0.043],"force":[89.8,162.2]},{"label":"embeddinggemma","type":"technology","deg":4,"pca":[-0.014,0.086],"hi":[-0.014,0.086,0.089,0.051,0.083,-0.063,-0.008,0.011,0.018,-0.037,0.246,-0.185,0.112,0.178,-0.064,0.062,-0.189,0.097,-0.019,-0.02,-0.064,-0.023,-0.06,-0.129,0.109,0.007,0.043,-0.019,-0.052,-0.014],"force":[-328.6,-581.1]},{"label":"GraphStore","type":"technology","deg":19,"pca":[-0.16,-0.15],"hi":[-0.16,-0.15,0.175,-0.044,-0.041,-0.03,0.135,0.079,0.063,-0.019,-0.1,-0.123,-0.015,-0.026,-0.09,-0.244,0.037,0.003,-0.045,-0.01,0.029,0.015,0.085,0.055,-0.024,0.016,0.026,0.078,-0.017,-0.092],"force":[36.4,-81.4]},{"label":"mutation_log","type":"file","deg":11,"pca":[0.146,-0.176],"hi":[0.146,-0.176,-0.104,0.096,-0.002,0.009,0.209,-0.04,-0.204,-0.048,-0.002,0.064,0.038,-0.013,0.174,-0.069,0.117,-0.131,-0.032,0.046,0.098,0.022,-0.091,-0.065,0.121,0.073,-0.01,-0.107,-0.001,-0.027],"force":[416.6,-456.2]},{"label":"store","type":"technology","deg":6,"pca":[0.157,-0.219],"hi":[0.157,-0.219,-0.01,-0.027,-0.158,-0.049,0.12,0.097,-0.015,-0.04,-0.04,-0.251,-0.087,-0.052,-0.074,-0.118,0.046,0.037,0.073,-0.066,-0.014,0.033,-0.027,0.099,-0.067,-0.057,-0.071,-0.027,0.015,-0.059],"force":[713.1,-502]},{"label":"putNode","type":"other","deg":4,"pca":[-0.11,-0.186],"hi":[-0.11,-0.186,0.037,0.016,-0.094,0.078,0.019,0.265,-0.035,0.025,0.125,-0.108,0.017,-0.05,0.04,0.03,-0.017,0.033,0.194,0.048,-0.053,-0.086,-0.128,-0.018,-0.006,0.076,0.208,-0.108,-0.05,0.002],"force":[367.7,-661.7]},{"label":"viewer/template.html","type":"file","deg":4,"pca":[0.025,-0.295],"hi":[0.025,-0.295,0.097,-0.124,0.016,0.03,-0.268,-0.107,-0.073,0.096,0.136,0.023,0.007,0.1,0.082,0.017,0.007,0.019,-0.094,0.109,-0.027,-0.091,0.003,-0.011,0.023,-0.11,-0.061,0.044,0.003,-0.012],"force":[861.2,-96.5]},{"label":"graphs/big","type":"file","deg":12,"pca":[-0.242,0.035],"hi":[-0.242,0.035,0.037,0.047,0.027,-0.016,-0.001,-0.094,-0.069,-0.102,0.104,0.062,-0.13,-0.056,-0.078,-0.088,0.011,0.062,-0.122,0.061,-0.011,0.008,-0.08,-0.055,-0.032,-0.043,-0.059,0.035,0.019,0],"force":[-569.1,173.7]},{"label":"PUT /scenes","type":"technology","deg":5,"pca":[0.058,-0.304],"hi":[0.058,-0.304,0.039,-0.095,-0.122,0.079,-0.119,0.053,-0.15,0.096,0.153,0.052,0.112,0.103,-0.164,-0.031,-0.057,-0.026,0.127,-0.083,0.004,-0.119,-0.011,-0.047,0.034,-0.031,0.075,-0.054,0.044,0.047],"force":[644.9,81.2]},{"label":"scenes table","type":"technology","deg":5,"pca":[0.021,-0.173],"hi":[0.021,-0.173,0.101,-0.161,-0.151,0.068,-0.047,-0.14,-0.244,0.065,0.164,0.078,-0.059,0.087,-0.1,-0.052,-0.103,-0.045,0.083,-0.153,0.144,-0.021,-0.009,0.015,0.002,-0.126,0.003,0.088,0.019,0.048],"force":[722.8,243.4]},{"label":"proper-lockfile","type":"technology","deg":4,"pca":[0.094,-0.171],"hi":[0.094,-0.171,-0.05,0.05,-0.01,-0.074,-0.003,0.153,-0.159,0.027,-0.056,-0.185,-0.011,-0.009,0.041,-0.085,-0.033,-0.156,-0.131,-0.011,0.139,-0.112,0.004,0.01,0,0.047,-0.045,-0.141,-0.028,0.041],"force":[-604.3,37.1]},{"label":"Ingest","type":"technology","deg":10,"pca":[0.194,-0.145],"hi":[0.194,-0.145,0.101,0.014,0.204,0.075,0.091,0.092,-0.135,-0.076,-0.229,-0.047,0.106,-0.138,-0.082,0.142,-0.057,-0.054,0.069,-0.116,-0.087,0.081,-0.05,-0.014,0.044,0.056,-0.027,0.112,-0.099,0.126],"force":[-417.9,-3]},{"label":"Tessera","type":"technology","deg":16,"pca":[-0.224,0.113],"hi":[-0.224,0.113,-0.183,-0.17,0.223,0.127,0.002,0.053,0.012,-0.058,-0.041,0.016,-0.015,0.134,0.041,-0.1,-0.061,-0.012,-0.013,-0.024,0.034,-0.013,0.046,0.081,-0.02,0.027,0.03,-0.073,0.056,0.03],"force":[532.2,692.5]},{"label":"edge taxonomy","type":"concept","deg":4,"pca":[-0.18,0.188],"hi":[-0.18,0.188,0.112,0.077,-0.082,0.02,-0.007,-0.001,0.064,-0.028,-0.002,0.118,-0.074,0.049,-0.075,0.088,-0.048,-0.054,-0.067,-0.225,-0.051,0.023,-0.029,-0.038,0.087,0.016,0.128,-0.046,0.057,-0.041],"force":[641.9,812.1]},{"label":"readDoc","type":"technology","deg":6,"pca":[0.114,-0.027],"hi":[0.114,-0.027,0.135,-0.101,0.037,-0.082,-0.04,-0.043,0.074,-0.094,-0.124,0.023,-0.003,-0.155,0.209,0.102,-0.088,-0.127,0.064,-0.007,0.096,-0.052,0.014,0.017,0.022,-0.127,0.066,0.123,-0.014,-0.084],"force":[141.1,1029.7]},{"label":"overlap","type":"concept","deg":4,"pca":[-0.038,0.02],"hi":[-0.038,0.02,0.177,0.101,0.243,0.088,-0.027,0.051,0.109,0.094,0.063,0.097,-0.089,0.022,0.089,0.035,-0.013,0.064,-0.045,-0.133,0.021,0.01,-0.031,0.075,-0.029,-0.072,-0.062,-0.048,-0.096,-0.078],"force":[65.7,-424.5]},{"label":"extraction model","type":"technology","deg":4,"pca":[0.085,-0.023],"hi":[0.085,-0.023,0.171,0.025,0.248,-0.146,-0.02,-0.119,0.078,0.056,0.1,0.112,-0.106,-0.047,-0.025,-0.063,0.143,-0.007,0.009,-0.098,0.005,-0.147,-0.01,0.092,-0.087,-0.012,-0.008,-0.065,-0.057,-0.034],"force":[115.9,-444.4]},{"label":"Resonator","type":"technology","deg":13,"pca":[-0.08,0.195],"hi":[-0.08,0.195,-0.122,-0.008,0.061,-0.108,-0.169,0.098,-0.073,0.069,-0.052,0.046,-0.128,-0.078,-0.041,-0.142,-0.003,-0.177,0.115,0.044,-0.047,-0.017,0.075,0.051,0.094,-0.094,0.06,0.051,0.002,-0.125],"force":[-33,22.5]},{"label":"Connector","type":"technology","deg":14,"pca":[-0.094,0.016],"hi":[-0.094,0.016,0.116,0.067,-0.038,-0.098,0.053,0.127,0.045,0.05,-0.032,0.147,0.04,0.101,0.209,-0.001,-0.025,-0.123,-0.067,-0.11,-0.04,-0.063,-0.052,-0.05,-0.023,0.018,-0.057,0.034,-0.097,0.084],"force":[-118.5,-158.2]},{"label":"reason vector","type":"concept","deg":4,"pca":[0.016,0.161],"hi":[0.016,0.161,0.118,0.065,-0.029,-0.122,-0.092,0.004,-0.05,-0.022,0.148,-0.166,0.053,0.06,-0.013,-0.001,-0.226,-0.021,-0.125,-0.021,-0.078,0.04,0.071,-0.084,0.056,-0.042,-0.033,-0.003,-0.097,0.039],"force":[699.1,-126.5]},{"label":"HDBSCAN","type":"technology","deg":5,"pca":[0.002,0.077],"hi":[0.002,0.077,-0.063,0.116,0.11,-0.148,0.035,-0.001,-0.107,0.058,0.015,0.111,-0.077,-0.005,0.002,-0.066,-0.038,0.011,0.024,-0.047,0.064,0.021,-0.058,0.062,0.084,0.009,0.086,0.037,0.127,-0.147],"force":[243.4,-75.3]},{"label":"Prominence","type":"concept","deg":13,"pca":[-0.104,0.262],"hi":[-0.104,0.262,0.094,0.118,-0.098,0.021,-0.007,-0.128,-0.071,0.109,-0.188,0.063,0.004,0.001,-0.013,-0.049,0.042,0.039,0.187,0.167,-0.073,-0.014,-0.067,-0.017,0.018,0.14,0.015,-0.062,0.008,0.147],"force":[-165.1,104.8]},{"label":"Propose→Verify→Label Harness","type":"technology","deg":4,"pca":[0.076,0.013],"hi":[0.076,0.013,-0.058,0.066,0.016,-0.247,-0.012,0.08,0.031,0.005,0.038,0.031,0.167,0.018,-0.021,0.03,-0.081,-0.034,0.075,0.092,0.04,0.024,0.035,0.06,0.089,0.055,-0.037,-0.031,0.149,0.003],"force":[34.9,-219.4]},{"label":"Taxonomy","type":"concept","deg":5,"pca":[0.064,0.194],"hi":[0.064,0.194,0.134,-0.141,-0.003,-0.068,-0.004,-0.044,0.077,-0.148,0.14,0.078,-0.109,0.001,0.012,-0.097,-0.106,0.091,0.076,-0.077,0.011,0.073,-0.127,-0.076,0.047,0.019,0.093,0.007,0.115,-0.017],"force":[-185.6,-459.9]},{"label":"HARNESS","type":"concept","deg":4,"pca":[0.112,0.116],"hi":[0.112,0.116,-0.058,0.079,-0.021,-0.239,-0.071,0.005,0.018,-0.101,0.044,-0.015,0.088,0.058,-0.07,0.016,0.035,0.03,-0.008,0.055,0.069,-0.081,-0.082,0.131,0.102,0.037,-0.062,-0.011,0.066,0.068],"force":[-299.9,-557.3]},{"label":"embedder","type":"technology","deg":4,"pca":[0.002,0.082],"hi":[0.002,0.082,0.089,-0.002,0.102,-0.249,-0.037,0.066,-0.038,-0.103,0.338,-0.105,0.111,0.037,-0.012,0.042,-0.001,-0.03,0.047,-0.011,-0.041,-0.057,-0.069,0.052,0.029,0.105,0.073,0.042,-0.119,-0.047],"force":[-269.7,-510.2]},{"label":"Corpus Ingest","type":"project","deg":6,"pca":[-0.072,-0.001],"hi":[-0.072,-0.001,0.162,-0.093,0.343,0.034,0.034,0.016,-0.052,-0.216,-0.069,0.042,0.08,-0.014,-0.034,0.06,-0.098,0.056,0.042,-0.054,0,0.091,-0.07,0.01,-0.031,0.001,-0.006,0.042,0.009,0.057],"force":[-232.4,-214.9]},{"label":"CHUNK","type":"concept","deg":5,"pca":[0.107,0],"hi":[0.107,0,0.339,0.058,0.219,0.128,0.011,-0.011,0.061,0.05,0.059,0.002,-0.042,0.004,0.055,-0.055,0.077,0.102,-0.03,0.044,0.076,-0.036,0.039,0.098,-0.127,-0.019,-0.024,0.029,-0.006,-0.097],"force":[-21.7,203.6]},{"label":"PERSON","type":"concept","deg":5,"pca":[0.193,0.262],"hi":[0.193,0.262,0.214,-0.084,-0.128,0.191,0.058,0.081,0.087,0.06,0.046,-0.051,0.042,0.099,-0.086,-0.151,0.073,-0.084,-0.121,0.176,-0.036,0.061,-0.006,0.007,-0.067,-0.031,0.027,-0.019,-0.097,0.012],"force":[5.2,90.2]},{"label":"content_hash","type":"file","deg":8,"pca":[0.14,-0.025],"hi":[0.14,-0.025,0.256,0.013,0.051,0.055,-0.012,0.018,-0.039,-0.039,-0.011,-0.117,-0.108,-0.002,-0.009,-0.134,0.038,0.019,-0.091,0.103,0.111,0.016,0.004,0.005,0.077,0.081,0.096,0.041,0.06,0.089],"force":[601.4,-373.8]},{"label":"status","type":"concept","deg":8,"pca":[-0.015,0.004],"hi":[-0.015,0.004,-0.157,0.127,-0.181,-0.012,0.102,-0.136,0.006,-0.011,0.034,-0.016,0.044,0.038,0.057,-0.001,0.033,0.022,0.084,-0.011,-0.071,0.035,-0.098,-0.098,-0.055,0.054,0.13,0.076,0.028,0.057],"force":[163.2,-230.8]},{"label":"v1","type":"other","deg":17,"pca":[0.152,-0.035],"hi":[0.152,-0.035,-0.174,0.002,-0.012,-0.044,-0.007,-0.003,0.167,0.085,-0.088,-0.012,0.098,-0.022,-0.085,-0.006,-0.053,-0.052,-0.006,-0.168,0.09,0.023,-0.051,0.053,-0.052,0.074,0.002,0.138,-0.104,0.027],"force":[252,-394]},{"label":"sources table","type":"technology","deg":4,"pca":[0.138,-0.106],"hi":[0.138,-0.106,0.256,-0.042,0.158,-0.084,0.097,-0.106,-0.07,0.021,-0.037,0.063,-0.096,-0.068,-0.112,0.101,-0.009,-0.039,0.053,0.018,0.159,0.012,-0.001,0.037,-0.015,0.03,-0.015,0.04,0.009,0.056],"force":[-474.2,302.6]},{"label":"tessera","type":"product","deg":27,"pca":[-0.315,0.195],"hi":[-0.315,0.195,-0.068,-0.26,0.197,0.064,-0.039,-0.016,-0.042,0.004,-0.046,-0.09,0.041,0.066,-0.003,-0.013,0.017,0.046,0.019,0.051,0.034,-0.033,0.008,-0.012,-0.073,0.016,0.025,-0.056,0.126,0.009],"force":[-629.5,-184]},{"label":"persona_diversity","type":"project","deg":5,"pca":[0.07,0.23],"hi":[0.07,0.23,-0.079,-0.058,0.05,-0.047,0.08,0.053,0.068,0.108,0.042,0.066,0.057,0.188,-0.101,-0.007,-0.007,-0.049,-0.009,0.003,-0.098,0.079,-0.013,-0.112,0.034,-0.036,-0.07,-0.059,-0.028,-0.021],"force":[-244.3,-173]},{"label":"tessera","type":"organization","deg":6,"pca":[-0.157,0.168],"hi":[-0.157,0.168,-0.119,-0.274,0.078,0.016,-0.016,0.085,0.024,-0.07,-0.129,-0.031,0.034,0.09,0.028,-0.004,0.046,-0.081,-0.054,-0.032,-0.035,-0.008,0.008,0.118,-0.043,0.003,0.054,-0.062,-0.01,0.009],"force":[-458,-80]},{"label":"CLI","type":"technology","deg":4,"pca":[-0.042,-0.22],"hi":[-0.042,-0.22,0.026,0.057,-0.052,0.147,-0.065,0.027,0.178,-0.031,0.085,-0.071,0.045,-0.086,0.082,-0.059,-0.071,-0.106,0.021,-0.002,0.086,-0.037,0.042,-0.018,0.021,0.013,-0.148,0.048,0.095,0.089],"force":[496.3,127.8]},{"label":"seed","type":"technology","deg":4,"pca":[0.055,-0.019],"hi":[0.055,-0.019,-0.121,-0.015,0.088,-0.064,-0.061,0.129,-0.125,-0.062,0.189,-0.059,-0.095,-0.095,-0.053,0.064,-0.068,0.025,-0.043,0.139,-0.068,0.054,0.066,-0.032,-0.086,0.177,-0.06,0.027,-0.001,-0.053],"force":[-64.3,589.9]},{"label":"nodesLackingLayout()","type":"other","deg":4,"pca":[-0.322,-0.143],"hi":[-0.322,-0.143,-0.074,0.199,0.004,0.155,-0.017,0.085,0.016,0.015,0.188,0.059,-0.006,-0.085,0.017,-0.037,0.014,0.064,-0.063,0.083,0.088,0.056,-0.052,0.16,0.047,-0.033,-0.006,0.011,0.045,0.082],"force":[353.8,878.7]},{"label":"SEMANTIC_FLOOR","type":"other","deg":5,"pca":[-0.107,0.082],"hi":[-0.107,0.082,0.148,0.09,-0.102,0.008,-0.057,-0.025,-0.022,-0.021,0.035,-0.078,0.068,-0.075,-0.003,-0.017,-0.042,-0.018,0.134,-0.005,0.118,-0.103,0.055,-0.072,0.052,0.045,-0.051,0.003,0.004,0.037],"force":[-519.4,697.9]},{"label":"scenes table","type":"file","deg":6,"pca":[-0.116,-0.194],"hi":[-0.116,-0.194,0.09,-0.137,-0.14,0.001,0.079,-0.127,-0.124,0.067,0.094,0.07,0,0.036,-0.149,-0.074,-0.026,-0.051,0.119,-0.119,0.11,0.052,-0.003,-0.039,0.021,-0.053,-0.046,0.123,0.077,-0.004],"force":[-18.9,839.7]},{"label":"view.html","type":"file","deg":4,"pca":[0.12,-0.229],"hi":[0.12,-0.229,0.098,-0.139,0.009,0.004,-0.187,-0.141,-0.054,0.077,-0.125,-0.016,0.054,0.166,0.076,0.136,0.049,0.073,-0.076,0.09,-0.085,0.033,-0.062,-0.064,0.016,-0.023,0.011,-0.031,-0.034,-0.012],"force":[204.5,645.2]},{"label":"EventSource","type":"technology","deg":9,"pca":[0.132,-0.109],"hi":[0.132,-0.109,0.042,-0.182,-0.157,-0.071,-0.166,0.095,-0.101,-0.037,-0.106,0.101,0.058,-0.016,0.038,-0.046,0.114,0.054,-0.024,-0.011,0.008,0.005,0.063,0.052,0.028,0.059,0.054,0,-0.019,-0.017],"force":[-172.5,196.4]},{"label":"markExtracted()","type":"code","deg":8,"pca":[0.181,-0.15],"hi":[0.181,-0.15,0.107,0.236,0.238,0.096,0.002,-0.045,0.023,-0.055,0.049,0.038,-0.051,-0.016,0.045,-0.044,0.124,0.016,0.025,-0.048,-0.227,-0.046,0.038,0.061,-0.148,0.059,0.094,0.004,0.093,-0.049],"force":[-258.7,376.1]},{"label":"serve","type":"technology","deg":5,"pca":[0.189,-0.129],"hi":[0.189,-0.129,0.102,-0.185,-0.155,0.035,-0.356,0.062,0.049,-0.088,-0.156,-0.028,0.027,0.056,0.031,-0.02,0.062,0.141,0.092,0.059,-0.038,0.023,-0.055,0.007,0.06,0.002,0.092,0.041,-0.11,-0.007],"force":[255.7,825.1]},{"label":"Provenance","type":"concept","deg":4,"pca":[-0.021,-0.189],"hi":[-0.021,-0.189,0.179,0.096,0.158,0.135,0.128,-0.068,0.033,0.184,0.035,-0.014,0.044,-0.05,0.016,0.108,-0.046,0.072,0.015,0.13,0.043,0.046,0.04,0.08,-0.017,-0.131,-0.106,-0.068,0.033,0.031],"force":[307.5,409.7]},{"label":"newcomer component","type":"concept","deg":5,"pca":[-0.109,0.018],"hi":[-0.109,0.018,-0.041,-0.119,-0.061,-0.025,0.051,0.046,-0.025,0.141,0.088,0.094,-0.094,0,-0.041,0.138,0.047,-0.064,0.054,0.021,0.037,0.01,-0.008,0.123,-0.111,0.15,-0.067,0.108,-0.141,0.035],"force":[-571.4,281.4]},{"label":"scripts/bench/","type":"other","deg":5,"pca":[0.082,-0.108],"hi":[0.082,-0.108,-0.036,0.135,0.066,-0.145,-0.017,-0.011,0.01,-0.047,-0.014,-0.026,-0.104,-0.093,-0.147,0.044,-0.111,0.059,0.1,0.06,0.057,-0.04,-0.006,0.176,0.107,-0.073,-0.003,-0.035,-0.043,0.092],"force":[35.7,-250.8]},{"label":"Mutation_log","type":"technology","deg":5,"pca":[-0.017,-0.169],"hi":[-0.017,-0.169,-0.124,0.123,0.05,-0.008,0.208,-0.023,-0.248,0.004,0.022,0.133,0.084,0.012,0.138,-0.065,0.088,-0.087,-0.099,0.056,0.005,0.042,-0.051,-0.127,0.088,0.086,-0.015,-0.134,-0.04,-0.017],"force":[29,260.2]},{"label":"canvas","type":"technology","deg":4,"pca":[-0.178,0.054],"hi":[-0.178,0.054,0.114,-0.112,-0.02,-0.007,-0.187,-0.165,-0.014,-0.041,0.023,-0.084,0.127,0.048,0.182,0.035,-0.014,0.092,-0.026,0.109,0.035,0.009,-0.15,-0.025,-0.042,0.009,-0.055,-0.005,0.091,-0.021],"force":[248.9,676.8]},{"label":"Graph visualization","type":"technology","deg":4,"pca":[-0.332,0.042],"hi":[-0.332,0.042,0.084,-0.046,-0.134,-0.052,-0.015,-0.137,-0.021,-0.058,0.026,0.202,0.059,-0.012,0.159,-0.003,-0.018,-0.024,-0.079,-0.078,-0.057,0.017,0.02,0.025,0.05,0.041,-0.039,0.086,-0.023,0.013],"force":[324.4,547.4]},{"label":"embeddings_experiment","type":"project","deg":7,"pca":[-0.028,0.03],"hi":[-0.028,0.03,0.03,-0.052,0.081,-0.253,-0.009,-0.035,-0.068,-0.033,0.146,-0.051,0.115,-0.021,-0.024,0.083,-0.137,0.012,0.002,-0.015,-0.036,0.104,0.125,0.113,0.096,0.014,0.055,-0.013,-0.052,-0.11],"force":[-405.9,61.6]},{"label":"sps","type":"project","deg":8,"pca":[0.127,0.074],"hi":[0.127,0.074,-0.242,-0.039,-0.037,-0.013,-0.042,0.062,0.003,-0.096,-0.035,0.004,-0.133,0.081,-0.016,0.082,0.002,-0.168,0.152,0.087,-0.108,0.129,0.096,0.014,0.065,-0.053,0.014,-0.001,0.107,-0.1],"force":[-304.5,-86.6]},{"label":"LLM-verify","type":"technology","deg":6,"pca":[0.029,0.033],"hi":[0.029,0.033,-0.101,0.164,0.077,-0.155,-0.113,-0.021,0.13,0.011,0.077,-0.029,0.102,0.029,-0.098,0.048,0.275,0.11,-0.032,-0.072,0.143,-0.024,0.039,-0.036,0.018,-0.079,0.061,-0.002,0.064,0.144],"force":[-164,-596.7]},{"label":"MindMapper","type":"concept","deg":4,"pca":[0.079,0.235],"hi":[0.079,0.235,-0.051,-0.17,-0.03,-0.047,0.021,0.023,-0.162,-0.017,0.027,-0.078,0.131,-0.051,0.113,-0.045,0.122,-0.072,-0.062,-0.084,-0.099,-0.076,-0.001,0.107,0.041,0.064,0.018,0.058,-0.05,0.059],"force":[-435.6,62.8]},{"label":"Identity Policy Summary","type":"concept","deg":4,"pca":[0.15,0.081],"hi":[0.15,0.081,0.206,-0.1,-0.063,0.111,0.219,0.007,0.203,0.153,0.019,0.035,0.036,0.143,-0.005,-0.006,-0.034,-0.031,-0.018,-0.038,0.093,0.035,0.057,-0.018,0.019,0.087,0.022,0.076,0.001,-0.057],"force":[432.2,671.2]},{"label":"nodes","type":"technology","deg":4,"pca":[-0.165,-0.015],"hi":[-0.165,-0.015,0.226,-0.012,-0.187,0.056,0.142,0.064,-0.057,-0.078,0.074,0.023,-0.202,-0.011,0.01,0.019,-0.007,0.002,0.129,0.012,0.156,0.033,-0.021,0.059,-0.002,-0.073,0.05,0.017,-0.024,0.084],"force":[258.9,-723]},{"label":"backlog.md","type":"file","deg":4,"pca":[-0.077,-0.107],"hi":[-0.077,-0.107,-0.196,-0.094,0.12,0.065,0.13,-0.154,0.036,-0.088,-0.027,-0.073,-0.058,0.046,0.012,-0.083,-0.058,-0.016,-0.071,-0.021,0.052,-0.066,-0.059,0.054,0.034,-0.022,0.138,-0.249,0.064,0.083],"force":[-281.8,417.6]},{"label":"Brian Brewington","type":"person","deg":5,"pca":[-0.041,0.157],"hi":[-0.041,0.157,-0.08,-0.126,-0.038,-0.029,-0.004,0.052,0.035,0.073,-0.096,-0.013,-0.065,-0.065,-0.226,0.043,0.048,-0.004,-0.061,0.097,-0.093,-0.125,-0.173,0.073,0.046,-0.057,-0.18,0.093,-0.091,-0.101],"force":[-71.3,-236.8]},{"label":"Graph Store","type":"technology","deg":27,"pca":[-0.275,-0.238],"hi":[-0.275,-0.238,0.071,0.013,-0.121,-0.066,0.189,-0.031,0.008,-0.069,-0.129,-0.048,0.033,-0.074,-0.06,-0.113,0.091,0.032,0.105,-0.024,-0.071,0,0.021,0.021,-0.07,-0.075,-0.038,0.013,0.026,-0.053],"force":[-126.1,52.8]},{"label":"Dream","type":"technology","deg":4,"pca":[-0.16,0.169],"hi":[-0.16,0.169,0.061,-0.073,-0.075,-0.08,0.05,0.069,-0.211,0.008,-0.07,0.07,0.129,-0.126,0.104,0.099,-0.023,-0.021,-0.106,0.027,0.013,-0.078,-0.068,-0.037,-0.04,-0.016,0.001,-0.005,0.064,0.053],"force":[-153.2,67.9]},{"label":"Web Viewer","type":"technology","deg":7,"pca":[-0.308,0.043],"hi":[-0.308,0.043,0.119,-0.042,-0.083,-0.121,-0.071,-0.173,-0.117,0.046,-0.095,0.09,0.137,-0.141,0.151,0.042,0.024,-0.001,-0.03,0.046,-0.046,-0.124,-0.019,0.002,0.024,0.072,-0.102,0.08,-0.065,-0.005],"force":[-260.2,-55.2]},{"label":"engine","type":"technology","deg":4,"pca":[0.102,-0.228],"hi":[0.102,-0.228,0.055,-0.141,-0.155,-0.123,-0.099,0.142,0.023,0.047,-0.094,0.015,-0.053,-0.105,-0.04,-0.007,0.077,0.011,-0.054,0.079,-0.071,-0.062,-0.03,0.004,-0.05,-0.002,-0.106,-0.031,0.071,-0.011],"force":[-105.4,-80.3]},{"label":"shared types/schema package","type":"technology","deg":7,"pca":[0.045,-0.086],"hi":[0.045,-0.086,0.071,-0.154,-0.085,-0.064,-0.013,0.048,0.189,0.014,0.026,0.001,-0.063,0.124,0.182,0.038,-0.071,-0.018,-0.037,-0.012,0.101,0.12,0.013,-0.124,0.058,-0.032,-0.024,0.105,0.017,-0.036],"force":[-76.5,33.5]},{"label":"GOAL","type":"concept","deg":4,"pca":[-0.081,0.072],"hi":[-0.081,0.072,-0.044,-0.059,-0.111,0.064,0.019,-0.044,0.022,-0.022,0.127,-0.049,0.038,-0.007,-0.006,-0.044,-0.076,-0.005,-0.097,0.007,-0.14,0.073,0.03,-0.11,-0.142,-0.108,-0.034,0.013,0.085,0.119],"force":[-816.4,380]},{"label":"CONCEPT","type":"concept","deg":4,"pca":[0.183,0.278],"hi":[0.183,0.278,-0.073,-0.05,-0.125,-0.01,0.107,-0.088,-0.046,-0.095,0.065,-0.127,-0.032,0.013,0.134,-0.006,-0.012,0.035,0.094,-0.077,-0.097,0.041,0.086,-0.029,-0.082,-0.068,0.047,0.016,0.056,-0.001],"force":[-779.4,518.1]},{"label":"MEMORY","type":"memory","deg":6,"pca":[0.067,0.157],"hi":[0.067,0.157,0.2,-0.05,-0.001,-0.05,0.112,0.014,-0.177,0.006,0.095,-0.179,0.039,-0.024,0.101,-0.035,0.078,0.032,0.044,-0.082,-0.016,-0.05,0.056,0.054,0.035,0.049,-0.053,0.005,-0.029,0.107],"force":[23,343.6]},{"label":"SOURCE","type":"other","deg":4,"pca":[0.158,0.079],"hi":[0.158,0.079,0.165,0.038,0.152,-0.012,0.136,-0.157,-0.107,0.075,-0.135,0.004,0.092,-0.042,-0.137,0.13,-0.056,0.038,0.017,0.083,0.016,0.041,-0.01,0.107,0.016,-0.034,-0.015,-0.047,0.005,-0.005],"force":[-186.1,237.5]},{"label":"PATTERN","type":"concept","deg":4,"pca":[-0.195,0.02],"hi":[-0.195,0.02,-0.001,-0.056,0.067,0.002,0.059,0.052,-0.087,0.113,0.087,0.07,-0.141,0.01,0.004,0.045,-0.013,0.12,0.017,0.112,0.002,-0.028,-0.041,-0.051,0.129,0.061,0.035,-0.037,-0.008,0.024],"force":[-255.7,655.3]},{"label":"τ","type":"concept","deg":6,"pca":[0.175,0.115],"hi":[0.175,0.115,-0.129,0.207,-0.006,0.051,-0.039,-0.096,-0.109,-0.089,0.009,-0.035,-0.209,0.179,0.004,-0.06,0.085,-0.186,0.131,0.093,-0.041,0.079,0.096,-0.02,-0.037,0.075,-0.029,0.08,0.007,0.066],"force":[-717.6,390.6]},{"label":"MEMORY","type":"concept","deg":4,"pca":[0.209,0.133],"hi":[0.209,0.133,-0.079,0.054,-0.014,0.034,0.15,-0.099,-0.251,-0.053,0.001,-0.136,-0.133,0.067,0.122,-0.031,0.141,-0.025,0.078,-0.063,-0.054,0.038,0.023,0.021,0.005,-0.018,0.023,-0.027,-0.032,0.068],"force":[-642,155.6]},{"label":"Connector (analytic)","type":"technology","deg":6,"pca":[-0.132,0.028],"hi":[-0.132,0.028,-0.016,0.123,-0.028,-0.145,-0.142,0.077,0.126,0.047,0.016,0.029,0.07,0.046,0.043,0.139,0.087,-0.117,-0.075,-0.067,0.05,-0.098,0.116,0.002,-0.089,0.001,0.056,0.01,-0.016,0.131],"force":[-409.6,-110.7]},{"label":"Dream-Walker","type":"technology","deg":4,"pca":[-0.035,0.143],"hi":[-0.035,0.143,-0.11,-0.148,-0.007,-0.038,0.014,0.203,-0.187,-0.027,-0.002,0.051,-0.015,-0.137,0.056,0.088,0.145,0.004,-0.092,0.075,0.016,-0.057,0.011,-0.013,-0.096,-0.107,0.057,0.037,0.036,0.009],"force":[-782.9,183.7]},{"label":"Semantic zoom","type":"concept","deg":5,"pca":[-0.183,0.136],"hi":[-0.183,0.136,0.095,-0.065,0.078,-0.027,-0.211,-0.128,-0.002,0.189,-0.031,-0.116,0.015,-0.153,0.048,-0.003,0.054,0.063,0.052,-0.033,0.084,-0.038,-0.033,-0.221,0.022,0.023,-0.046,-0.06,0.057,-0.1],"force":[-9.9,277.1]},{"label":"Vector store","type":"concept","deg":5,"pca":[-0.01,-0.074],"hi":[-0.01,-0.074,0.111,-0.066,-0.107,-0.257,0.047,-0.011,-0.091,0.01,-0.009,-0.26,-0.137,-0.005,0.035,-0.186,-0.131,-0.054,-0.067,-0.107,0.001,0.149,0.075,-0.06,-0.003,-0.098,-0.02,-0.065,-0.077,-0.027],"force":[-621.8,-144.2]},{"label":"SESSION","type":"event","deg":7,"pca":[0.202,0.072],"hi":[0.202,0.072,-0.102,-0.128,-0.09,0.168,0.012,0.119,-0.091,-0.062,0.027,0.125,0.061,0.003,-0.04,0.11,0.158,0.162,0.056,-0.026,0.139,-0.075,0.155,-0.101,-0.046,-0.01,-0.124,-0.103,-0.056,-0.087],"force":[-348.5,563.9]},{"label":"PROPOSAL","type":"concept","deg":4,"pca":[0.095,0.147],"hi":[0.095,0.147,-0.081,-0.013,-0.106,-0.013,0.051,-0.057,-0.04,-0.073,0.085,0.035,0.166,-0.076,0.1,0.096,-0.159,0.096,0.038,0.094,0.096,-0.022,0.048,-0.055,-0.156,-0.05,0.135,0.029,0.02,-0.047],"force":[289.9,-170.5]},{"label":"HYPOTHESIS","type":"concept","deg":4,"pca":[0.106,0.255],"hi":[0.106,0.255,-0.099,0.116,-0.091,-0.005,0.051,-0.02,-0.111,-0.025,0.091,0.017,0.169,-0.068,-0.032,0.126,-0.148,0.085,-0.054,0.079,0.071,-0.041,0.115,0.042,-0.176,-0.049,0.114,0.032,-0.006,-0.045],"force":[212.7,-175.9]},{"label":"checklist","type":"concept","deg":4,"pca":[0.11,0.027],"hi":[0.11,0.027,-0.154,0.058,-0.095,-0.023,0.035,-0.091,0.054,-0.044,0.005,0.017,-0.04,0.026,0.04,0.04,-0.109,0.014,-0.007,-0.087,0.127,-0.04,-0.085,0.077,-0.025,0.074,-0.102,-0.029,0.119,0.123],"force":[521.5,-282.5]},{"label":"Tessera V3","type":"project","deg":4,"pca":[-0.143,-0.02],"hi":[-0.143,-0.02,-0.319,-0.219,0.154,-0.03,0.032,-0.162,0.156,-0.027,-0.088,-0.019,0.026,0.086,-0.07,-0.079,-0.082,-0.068,0.056,-0.024,-0.004,0.004,0.028,0.065,-0.049,0.005,0.115,-0.123,-0.065,0.08],"force":[-54.2,628]},{"label":"promote(id, grounding)","type":"technology","deg":4,"pca":[0.124,0.037],"hi":[0.124,0.037,-0.032,0.115,-0.098,0.012,0.03,0.123,-0.08,0.067,-0.138,-0.082,0.002,0.055,0.053,-0.1,-0.08,0.077,0.069,0.057,-0.113,-0.06,0.028,-0.07,-0.012,-0.062,0.053,0.008,0.158,-0.047],"force":[-59.6,-367]},{"label":"Identity (v1)","type":"project","deg":5,"pca":[-0.012,0.163],"hi":[-0.012,0.163,0.071,-0.221,0.048,-0.006,0.093,0.126,0.029,0.222,0.042,-0.169,0.056,-0.044,-0.022,0.086,0.137,-0.007,-0.092,0.007,-0.005,0.038,0.017,-0.044,-0.037,0.149,-0.025,0.009,0.135,0.072],"force":[-163.4,-94]},{"label":"quarantine index","type":"technology","deg":6,"pca":[0.081,-0.062],"hi":[0.081,-0.062,0.016,0.161,0.003,-0.173,-0.029,0.059,0.01,0.08,-0.063,-0.064,-0.121,0.229,0.181,0.001,-0.141,0.048,-0.02,-0.046,-0.038,-0.101,-0.017,-0.054,-0.159,0.05,0.045,-0.051,0.092,0.035],"force":[-73,-50.5]},{"label":"Shared retrieval index","type":"technology","deg":4,"pca":[0.019,0.072],"hi":[0.019,0.072,0.095,0.08,0.025,-0.215,-0.043,0.047,-0.054,0.172,-0.208,-0.105,-0.125,0.141,0.124,0.018,-0.057,0.058,-0.045,-0.069,-0.062,0.074,0.051,-0.053,0.009,-0.07,0.054,-0.133,0.027,0.016],"force":[56.1,14.1]},{"label":"path-dependence-delta.md","type":"file","deg":7,"pca":[0.076,-0.06],"hi":[0.076,-0.06,-0.101,0.021,-0.08,0.03,0.122,-0.208,0.118,-0.173,-0.043,0.034,-0.155,-0.051,-0.042,0.136,-0.064,-0.022,-0.074,0.031,-0.041,-0.085,0.023,-0.1,0.053,0.068,0.056,0.015,0.039,-0.001],"force":[134.6,250.6]},{"label":"Filter Bubble","type":"concept","deg":4,"pca":[0.126,0.27],"hi":[0.126,0.27,-0.008,0.02,0.058,0.06,-0.195,-0.009,-0.132,0.097,-0.099,-0.036,0.069,-0.092,0.044,-0.053,-0.072,-0.031,-0.072,-0.101,-0.001,-0.052,-0.005,0.106,-0.065,-0.004,-0.006,-0.062,-0.004,-0.097],"force":[11.9,612.5]},{"label":"get_heat(path_context)","type":"other","deg":4,"pca":[-0.06,0],"hi":[-0.06,0,0.02,0.019,0.023,0.018,-0.09,-0.042,-0.008,-0.027,0.019,0.006,-0.08,-0.045,-0.106,0.036,0.012,-0.055,-0.111,0.16,-0.046,-0.118,0.068,-0.082,0.06,0.063,0.019,-0.04,-0.02,0.025],"force":[692.1,522]},{"label":"Contract Surface","type":"concept","deg":7,"pca":[0.007,-0.112],"hi":[0.007,-0.112,-0.038,-0.028,-0.157,0.142,-0.146,0.027,0.152,0.038,-0.082,0.017,0.11,-0.019,0.121,0.029,0.024,-0.076,0.071,-0.118,0.063,0.068,-0.007,-0.037,0.004,0.02,0.01,0.068,0.012,0.015],"force":[654.2,459.9]},{"label":"Fleet","type":"project","deg":12,"pca":[0.186,0.023],"hi":[0.186,0.023,-0.247,-0.094,-0.118,0.093,0.029,-0.001,0.084,-0.065,-0.033,0.004,-0.075,-0.129,0.033,-0.008,-0.015,0.136,-0.053,-0.035,-0.046,0.025,-0.164,-0.022,0.116,-0.06,0.13,-0.005,-0.01,0.028],"force":[413.7,422.4]},{"label":"S_raw pyramid","type":"concept","deg":4,"pca":[0.008,0.218],"hi":[0.008,0.218,-0.042,-0.071,-0.031,0.113,-0.007,-0.081,0.068,-0.176,0.006,0.01,-0.012,-0.082,-0.041,-0.009,-0.094,0.066,-0.101,0.102,-0.112,0.059,0.123,-0.103,0.014,-0.04,0.053,0.057,0.075,0.039],"force":[560.4,520.8]},{"label":"Graph Store core","type":"project","deg":4,"pca":[-0.189,-0.178],"hi":[-0.189,-0.178,0.077,-0.064,-0.195,-0.113,0.133,-0.015,0.082,-0.098,-0.037,-0.056,-0.016,0.006,-0.064,-0.088,0.038,0.109,0.061,-0.067,-0.038,0.091,-0.052,0.026,-0.089,-0.01,-0.15,-0.039,0.062,-0.024],"force":[327.8,-553.8]},{"label":"Edges + traversal","type":"project","deg":4,"pca":[-0.254,-0.122],"hi":[-0.254,-0.122,0.012,0.026,-0.045,0.11,-0.113,0.001,0.13,-0.158,0.005,0.044,-0.015,-0.027,-0.09,0.111,0.101,0.096,-0.096,-0.085,-0.035,0.044,-0.06,-0.062,0.013,0.035,-0.012,-0.076,0.06,-0.024],"force":[454.6,-484.9]},{"label":"SESSION","type":"concept","deg":7,"pca":[0.2,0.105],"hi":[0.2,0.105,-0.042,-0.014,-0.001,0.164,-0.065,0.081,-0.139,-0.077,0.105,0.23,0.009,0.086,0.016,0.01,0.028,0.121,0.051,-0.073,0.082,0.035,0.165,-0.083,-0.033,-0.071,-0.103,-0.033,-0.012,-0.073],"force":[-378.9,-78.5]},{"label":"Qwen3-Coder-Next","type":"technology","deg":5,"pca":[0.075,0.047],"hi":[0.075,0.047,-0.092,-0.123,0.065,-0.197,-0.087,0.075,0.146,-0.014,0.051,0.039,-0.059,-0.068,-0.005,-0.064,0.108,-0.03,0.134,0.014,-0.083,-0.108,-0.128,-0.058,-0.102,-0.072,-0.083,-0.068,-0.009,0.037],"force":[-353.5,15.8]},{"label":"VibeThinker-3B","type":"technology","deg":4,"pca":[0.046,0.164],"hi":[0.046,0.164,-0.134,-0.046,-0.088,-0.127,-0.092,0.088,0.08,0.066,-0.034,-0.025,0.059,-0.2,-0.1,-0.041,0.104,-0.162,-0.026,0.083,-0.019,-0.049,0.117,0.133,0.039,-0.107,0.037,-0.004,-0.037,0.008],"force":[-348.9,-32.4]},{"label":"Zaya1-8B","type":"technology","deg":4,"pca":[0.066,0.054],"hi":[0.066,0.054,-0.258,-0.072,0.094,-0.126,-0.037,-0.116,0.046,0.105,0.017,0.038,-0.036,0.003,-0.231,-0.106,-0.043,-0.062,0.04,0.049,-0.019,-0.024,-0.127,-0.022,-0.098,-0.049,-0.058,-0.092,-0.166,0.096],"force":[-336.9,-72.2]},{"label":"DeepSeek-V4-Flash","type":"technology","deg":4,"pca":[0.034,-0.034],"hi":[0.034,-0.034,-0.128,-0.108,0.074,-0.222,-0.008,-0.007,0.053,0.103,0.023,-0.057,0.001,-0.04,-0.075,-0.118,0.02,0.032,0.033,-0.007,-0.028,-0.115,-0.026,-0.055,-0.086,-0.042,-0.017,-0.083,-0.041,0.055],"force":[-301.5,60.6]},{"label":"edges","type":"technology","deg":6,"pca":[-0.254,0.027],"hi":[-0.254,0.027,0.16,0.076,-0.173,0.101,0.035,0.025,0.067,-0.053,-0.034,0.027,-0.114,0.012,-0.036,0.169,0.064,-0.086,0.009,-0.127,0.064,0.066,0.034,0.036,0.043,-0.045,0.051,-0.089,0.05,0.009],"force":[-101.2,17.1]},{"label":"mutation_log","type":"other","deg":4,"pca":[0.083,-0.141],"hi":[0.083,-0.141,-0.097,0.155,0.054,-0.013,0.153,-0.039,-0.05,0.098,0.027,0.106,0.071,0.03,0.16,-0.043,0.001,-0.091,-0.111,0.104,0.118,0.046,-0.096,-0.136,0.032,0.045,-0.044,-0.11,-0.024,-0.082],"force":[27.5,127.8]},{"label":"docs/durable-map-state-design.md","type":"file","deg":5,"pca":[0.009,-0.036],"hi":[0.009,-0.036,-0.096,-0.038,-0.046,-0.046,0.236,-0.196,0.084,0.032,-0.01,-0.251,-0.149,0.15,0.08,0.162,0.134,0.069,-0.006,0.001,-0.015,-0.128,-0.016,0.049,0.091,-0.083,-0.05,0.176,-0.017,-0.085],"force":[-79.7,-104.6]},{"label":"Scene","type":"concept","deg":4,"pca":[0.087,0.124],"hi":[0.087,0.124,0.115,-0.181,-0.094,0.088,-0.102,-0.176,-0.274,0.073,0.171,0.047,0.037,0.072,-0.117,-0.005,-0.066,0.048,0.019,-0.079,0.087,0.023,0.019,0.099,-0.023,-0.047,0.033,0.059,0.031,0.026],"force":[646.4,142.3]},{"label":"Right-side panel","type":"concept","deg":4,"pca":[-0.193,-0.021],"hi":[-0.193,-0.021,-0.018,0.016,-0.068,0.082,-0.167,-0.107,0.052,0.088,-0.053,0.016,-0.066,-0.1,0.131,0.148,-0.009,-0.137,0.052,-0.008,0.109,0.083,0.05,0.075,-0.021,0.065,-0.028,-0.044,-0.001,-0.024],"force":[46,-701.7]},{"label":"tessera serve <graph>","type":"other","deg":6,"pca":[-0.264,-0.223],"hi":[-0.264,-0.223,-0.012,-0.136,0.086,0.091,-0.215,0.037,0.057,-0.134,-0.107,-0.006,0.111,0.224,0.022,-0.015,-0.02,0.109,0.139,0.074,-0.041,-0.024,0.041,-0.003,0.037,-0.013,-0.042,0.002,-0.071,0.068],"force":[-140.9,-808.8]},{"label":"Sec-Fetch-Site","type":"technology","deg":4,"pca":[0.219,-0.169],"hi":[0.219,-0.169,0.147,0.022,-0.105,-0.08,-0.161,0,0.002,0.043,-0.24,0.048,-0.083,0.123,0.002,-0.016,-0.056,0.107,-0.13,0.033,0.008,-0.042,0.085,0.11,-0.071,0.125,0.052,-0.062,-0.014,-0.022],"force":[-496.1,-897.8]},{"label":"readDoc adapter seam","type":"technology","deg":5,"pca":[-0.059,-0.061],"hi":[-0.059,-0.061,0.015,-0.115,0.249,0.012,-0.042,0.031,0.162,-0.16,-0.11,0.009,-0.003,-0.042,0.11,0.095,-0.063,-0.188,0.066,-0.011,0.096,-0.025,0.032,0.028,-0.011,-0.122,0.051,0.018,-0.018,-0.056],"force":[225,1087.9]},{"label":"session logs","type":"file","deg":6,"pca":[0.153,-0.095],"hi":[0.153,-0.095,-0.055,0.054,-0.081,-0.12,0.061,-0.038,-0.121,-0.139,0.093,0.193,-0.075,0.059,0.044,-0.038,0.117,0.007,0.014,0.016,0.148,0.011,0.046,-0.003,0.021,0.041,-0.077,-0.196,-0.041,0.023],"force":[-35.3,-280.9]},{"label":"ACCEPTED-RISK","type":"concept","deg":4,"pca":[0.244,-0.009],"hi":[0.244,-0.009,-0.116,0.059,-0.084,0.017,-0.06,-0.065,0.05,-0.064,-0.083,-0.054,0.085,-0.012,-0.054,0.068,-0.029,0.057,-0.038,-0.038,0.148,-0.029,-0.086,-0.077,-0.082,0.148,0.033,0.162,0.002,-0.023],"force":[-575.1,50.4]},{"label":"Identity","type":"project","deg":5,"pca":[-0.006,0.185],"hi":[-0.006,0.185,0.064,-0.235,0.014,0.022,0.122,0.166,-0.009,0.165,0.032,-0.158,0.038,-0.028,-0.008,0.075,0.157,-0.015,-0.099,0.028,-0.023,0.04,0.02,0.029,-0.041,0.122,-0.015,0.01,0.151,0.095],"force":[-340.1,31.4]},{"label":"Graph Store","type":"product","deg":9,"pca":[-0.313,-0.116],"hi":[-0.313,-0.116,0.116,-0.007,-0.134,-0.062,0.168,-0.019,-0.016,-0.072,-0.142,-0.057,0.094,-0.065,-0.01,-0.107,0.073,0.023,0.122,-0.018,-0.039,-0.057,0.005,-0.006,-0.065,-0.05,-0.069,0.019,0.001,-0.026],"force":[-78.9,120.7]},{"label":"Interactions (rebuilt clean)","type":"project","deg":7,"pca":[-0.026,-0.041],"hi":[-0.026,-0.041,-0.035,-0.125,0.011,0.031,-0.055,0,0.004,0.219,-0.047,0.15,0.005,-0.117,0.041,0.031,0.037,-0.107,0.018,-0.218,-0.153,0.045,-0.039,0.091,0.132,0.016,-0.028,-0.028,-0.026,0.054],"force":[-1109.4,74]},{"label":"Grandmother","type":"person","deg":3,"pca":[0.14,0.191],"hi":[0.14,0.191,0.084,-0.078,0.018,0.174,0.125,-0.006,0.034,0.074,0.054,-0.001,0.027,0.07,0.077,-0.087,0.016,-0.042,-0.112,0.107,0.062,0.1,-0.156,-0.035,0.008,-0.094,0.096,-0.101,-0.144,0.015],"force":[460.9,-784.2]},{"label":"mapper's content-addressed scheme","type":"concept","deg":2,"pca":[0.096,0.034],"hi":[0.096,0.034,0.162,-0.182,0.025,0.039,0.166,0.102,0.18,0.104,-0.009,-0.047,0.031,0.072,-0.014,-0.088,0.072,0.002,-0.074,-0.024,-0.008,0.007,0.064,0.034,0.116,0.179,-0.001,0.09,0.01,0.066],"force":[452.2,22.1]},{"label":"annotations sidecar","type":"product","deg":1,"pca":[0.021,-0.16],"hi":[0.021,-0.16,0.073,-0.019,-0.035,-0.037,0.116,-0.087,0.104,0.108,0.03,0.017,0.034,-0.124,-0.111,0.044,-0.092,-0.188,0.022,-0.048,-0.064,-0.15,0.017,-0.019,-0.017,0.04,0.016,-0.162,0.015,-0.144],"force":[-1173.6,-5.5]},{"label":"normalizeText","type":"technology","deg":2,"pca":[0.077,-0.004],"hi":[0.077,-0.004,0.056,0.115,0.181,0.024,-0.129,0.051,0.078,0.117,0.067,-0.091,0.053,-0.095,-0.007,-0.214,0.006,-0.064,-0.001,0.008,0.06,0.021,0.05,-0.122,0.046,-0.04,0.038,0.136,0,-0.031],"force":[-487.1,-324.4]},{"label":"markExtracted()","type":"other","deg":1,"pca":[-0.005,-0.241],"hi":[-0.005,-0.241,0.118,0.206,0.192,0.075,0.093,-0.06,-0.032,-0.093,0.052,0.113,0.002,-0.047,0.072,-0.152,0.11,-0.074,-0.061,0.004,-0.18,-0.028,0.092,-0.001,-0.177,0.03,0.07,-0.026,0.067,-0.12],"force":[824.4,-472.2]},{"label":"GET /scenes","type":"technology","deg":2,"pca":[0.06,-0.251],"hi":[0.06,-0.251,0.079,-0.174,-0.07,0.036,-0.206,-0.094,-0.222,0.085,0.121,0.171,-0.007,0.153,-0.229,-0.027,-0.067,-0.041,-0.027,-0.081,-0.053,-0.136,0.043,0.036,-0.012,-0.065,0.045,0.002,0.077,0.098],"force":[889.1,171.2]},{"label":"unlink","type":"code","deg":1,"pca":[0.045,-0.044],"hi":[0.045,-0.044,-0.029,0.157,-0.005,-0.011,0.013,0.14,0.045,0.076,0.047,0.068,-0.031,0.023,0.131,-0.014,-0.033,-0.097,-0.051,-0.156,-0.13,-0.038,-0.051,0.075,0.017,-0.031,-0.077,-0.05,-0.018,0.051],"force":[166.4,-384.7]},{"label":"isExtracted","type":"concept","deg":1,"pca":[0.194,-0.079],"hi":[0.194,-0.079,0.134,0.225,0.145,0.124,-0.042,-0.07,0.04,-0.08,0.116,0.061,-0.047,0.013,0.033,-0.017,0.071,0.084,-0.004,-0.066,-0.19,-0.079,0.113,0.048,-0.189,0.008,0.101,0.011,0.018,-0.02],"force":[119.6,475.6]},{"label":"semantic zoom","type":"other","deg":2,"pca":[-0.217,0.162],"hi":[-0.217,0.162,0.062,-0.158,0.149,0.111,-0.183,-0.111,0.007,0.074,-0.034,-0.121,0,-0.045,0.063,-0.017,0.01,0.028,0.063,-0.06,0.086,-0.08,-0.02,-0.16,-0.004,0.038,-0.006,-0.072,0.008,-0.051],"force":[589.2,816]},{"label":"chunk size","type":"concept","deg":2,"pca":[0.072,0.084],"hi":[0.072,0.084,0.176,0.07,0.242,0.025,-0.084,-0.039,0.027,-0.006,0.183,0.03,-0.106,-0.067,0.054,-0.095,0.128,0.043,0.08,-0.118,0.032,-0.017,-0.066,0.033,-0.119,0.049,-0.122,-0.051,-0.098,-0.134],"force":[212.2,-372.7]},{"label":"Connector hardening","type":"technology","deg":1,"pca":[-0.052,-0.073],"hi":[-0.052,-0.073,-0.122,0.296,0.005,-0.105,0.007,0.157,0.125,0.036,-0.068,0.087,-0.019,0.13,0.043,0.08,0.06,-0.074,0.013,0.052,0.06,0.004,-0.019,0.095,0.019,-0.052,-0.009,0.034,-0.08,0.144],"force":[21.9,-971.2]},{"label":"graphStore.putEdge","type":"technology","deg":0,"pca":[-0.279,-0.166],"hi":[-0.279,-0.166,0.01,0.113,-0.148,-0.067,-0.011,0.023,-0.073,-0.045,-0.008,-0.136,0.122,-0.008,-0.156,-0.065,0.052,-0.034,-0.001,-0.066,0.006,0.13,0.066,-0.005,-0.105,0.049,0.077,-0.055,-0.054,-0.078],"force":[-421.8,-541.5]},{"label":"vec_node_quarantine","type":"code","deg":1,"pca":[-0.067,-0.044],"hi":[-0.067,-0.044,0.005,0.147,-0.036,-0.022,0.006,0.21,-0.041,-0.003,-0.025,0.103,-0.082,0.164,0.105,0.067,-0.09,0.023,0.015,-0.007,0.075,-0.096,-0.104,-0.041,-0.196,-0.022,0.048,0.002,-0.013,0.066],"force":[199.4,708]},{"label":"unrelated pair","type":"concept","deg":1,"pca":[0.1,0.231],"hi":[0.1,0.231,0.061,0.07,-0.199,0.166,-0.027,0.07,0.01,-0.083,0.079,0.014,0.063,-0.025,0,-0.034,-0.154,-0.042,-0.202,-0.035,-0.041,0.029,-0.003,-0.048,-0.071,-0.187,-0.013,-0.015,-0.099,0.024],"force":[622.9,-33.8]},{"label":"Leiden","type":"technology","deg":2,"pca":[-0.18,0.078],"hi":[-0.18,0.078,0.005,0.055,0.084,-0.037,0.027,0.079,-0.062,0.05,-0.063,0.131,-0.056,0.07,-0.101,0.004,0.029,0.084,-0.12,0.001,0.021,0.019,-0.066,0.029,0.005,0.026,0.035,0.031,-0.023,-0.032],"force":[-750.1,124.9]},{"label":"Continent Tier","type":"other","deg":1,"pca":[-0.066,0.232],"hi":[-0.066,0.232,-0.031,-0.012,0.044,0.027,0.022,-0.079,0.016,0.089,-0.113,0.107,-0.154,0.106,-0.08,-0.04,-0.043,0.095,0.164,0.109,-0.057,0.035,0.011,-0.035,0.021,0.062,-0.022,0.037,-0.093,-0.04],"force":[-117.4,1030.2]},{"label":"NAME","type":"concept","deg":1,"pca":[0.067,0.102],"hi":[0.067,0.102,0.073,0.083,-0.01,-0.047,0.101,0.119,0.019,-0.035,-0.062,0.011,-0.03,-0.03,-0.074,-0.145,0.066,0.008,-0.003,0.089,0.102,0.007,-0.116,0.025,0.018,0.069,0.145,0.016,0.069,0.055],"force":[-119.9,901.6]},{"label":"shuffled-label control","type":"concept","deg":0,"pca":[-0.027,0.089],"hi":[-0.027,0.089,-0.064,0.085,0.109,0.063,0.008,0.093,0.028,0.023,0.029,0.049,0.012,-0.142,0.082,-0.098,0.004,0.016,-0.009,-0.1,0.079,0.105,-0.005,-0.083,0.104,-0.024,-0.004,0.072,-0.023,-0.158],"force":[-657.2,-498.4]},{"label":"Second mode","type":"event","deg":2,"pca":[-0.094,0.168],"hi":[-0.094,0.168,0.048,0.012,0.092,-0.064,0.098,0.125,0.006,0.135,-0.037,0.188,-0.047,0.088,-0.051,0.015,0.015,0.097,-0.008,-0.044,0.095,-0.015,0.027,-0.02,0.078,0.095,0.044,-0.121,-0.02,-0.061],"force":[-406.6,340.8]},{"label":"Direction","type":"concept","deg":0,"pca":[-0.137,0.033],"hi":[-0.137,0.033,0.03,0.092,-0.057,0.193,0.078,-0.117,0.127,0.017,0.061,0.077,0.032,0.015,-0.083,0.116,-0.11,-0.103,-0.061,-0.088,-0.126,-0.02,0.034,-0.136,0.098,-0.006,-0.016,-0.052,0.032,0.044],"force":[954.2,381.3]},{"label":"Fable","type":"organization","deg":1,"pca":[0.206,0.044],"hi":[0.206,0.044,0.078,-0.088,0.143,-0.089,0.132,-0.029,0.028,-0.062,-0.141,0.146,0.07,-0.09,-0.096,0.13,-0.138,0.063,0.064,-0.028,-0.04,0.17,-0.127,-0.023,-0.163,-0.045,-0.043,-0.062,0.015,-0.058],"force":[-298.6,-348]},{"label":"PERSON source-qualification","type":"concept","deg":1,"pca":[0.279,0.108],"hi":[0.279,0.108,0.135,-0.014,-0.034,-0.023,0.04,0.061,0.176,0.129,0.044,0.085,0.046,0.123,-0.099,-0.068,0.044,-0.066,-0.077,0.104,-0.015,0.037,-0.07,-0.027,-0.041,-0.059,-0.044,-0.064,-0.06,-0.047],"force":[524.5,-707.6]},{"label":"path...","type":"file","deg":1,"pca":[-0.051,-0.088],"hi":[-0.051,-0.088,0.084,-0.095,-0.018,0.09,0.148,-0.04,0.008,-0.172,-0.022,0.021,-0.215,-0.091,-0.114,0.042,-0.088,0.018,-0.192,0.062,0.049,-0.047,0.043,-0.077,0.073,-0.005,-0.028,-0.101,-0.049,-0.018],"force":[813.5,1104.2]},{"label":"FD5","type":"other","deg":0,"pca":[0.186,-0.043],"hi":[0.186,-0.043,0.003,-0.091,-0.055,0.025,0.019,-0.099,0.138,-0.134,-0.036,-0.061,-0.179,-0.118,-0.079,0.064,-0.13,0.004,0.037,-0.071,0.03,-0.109,-0.016,-0.07,0.064,0.052,0.075,-0.049,0.025,-0.055],"force":[-26.5,660.9]},{"label":"Mark-and-sweep correctness","type":"concept","deg":1,"pca":[0.171,0.11],"hi":[0.171,0.11,-0.046,0.168,0.068,0.059,0.023,-0.098,0.039,0.099,0.019,-0.053,0.082,-0.118,0.035,-0.188,0.035,0.061,-0.026,-0.108,-0.036,0.087,-0.044,0.153,0.131,0.01,0.041,-0.039,0.053,0.1],"force":[1165.7,-185.8]},{"label":"In-db `sources` manifest","type":"file","deg":2,"pca":[0.159,-0.109],"hi":[0.159,-0.109,0.207,-0.065,0.015,-0.034,0.14,-0.09,-0.081,-0.014,-0.1,0.025,0.01,-0.108,-0.032,0.083,-0.064,-0.015,-0.004,0.166,0.052,0.011,-0.058,0.031,0.049,-0.058,0.033,-0.007,0.088,0.027],"force":[-160.8,-214.9]},{"label":"reinforce log","type":"concept","deg":1,"pca":[0.109,-0.146],"hi":[0.109,-0.146,-0.103,0.178,-0.097,-0.055,0.112,-0.104,-0.178,-0.11,0.005,0.055,0.052,0.062,0.1,-0.01,0.112,-0.037,0.096,0.05,-0.017,-0.061,-0.069,-0.01,0.136,-0.068,0.029,-0.05,-0.068,-0.025],"force":[-172.2,293.6]},{"label":"tessera common","type":"other","deg":0,"pca":[-0.295,0.061],"hi":[-0.295,0.061,-0.01,-0.05,0.142,0.096,0.027,-0.012,0.057,-0.128,-0.073,-0.039,0.084,0.164,-0.003,-0.059,-0.08,-0.069,-0.061,-0.013,0.115,-0.089,0.035,-0.018,0.06,-0.006,-0.054,-0.002,-0.065,0.07],"force":[942.4,-83.4]},{"label":"D4","type":"product","deg":2,"pca":[0.06,-0.159],"hi":[0.06,-0.159,-0.129,-0.113,0.096,0.03,0.032,-0.055,0.058,0.147,0.1,0.104,0.059,-0.048,-0.125,-0.054,0.023,-0.074,0.173,-0.11,0.021,-0.002,0.095,-0.196,-0.019,-0.116,0.038,0.113,-0.006,0.012],"force":[478.7,-125.4]},{"label":"Manifest location","type":"concept","deg":2,"pca":[0.008,-0.085],"hi":[0.008,-0.085,0.053,-0.089,-0.114,-0.021,0.226,-0.01,-0.021,0.089,-0.052,-0.103,0.037,-0.094,-0.067,0.017,-0.092,0.03,-0.027,0.121,0.086,0.021,0.071,-0.015,0.035,-0.049,0.032,-0.081,0.052,0],"force":[-22.1,325]},{"label":"Adapter","type":"technology","deg":2,"pca":[0.168,-0.15],"hi":[0.168,-0.15,0.141,-0.061,0.198,-0.097,0.002,0.019,-0.001,-0.152,-0.06,-0.044,-0.105,-0.153,0.128,0.096,-0.092,-0.196,0.003,0.06,-0.003,0.032,0.035,-0.033,0.083,-0.025,-0.008,0.11,-0.018,0.018],"force":[-147.1,568.3]},{"label":"Edge","type":"concept","deg":1,"pca":[-0.041,0.007],"hi":[-0.041,0.007,0.137,0.124,-0.12,0.1,-0.004,0.014,0.067,-0.043,0.001,-0.053,0.105,0.042,-0.111,0.121,0.149,-0.05,0.002,-0.131,0.001,0.049,0.049,0.098,0.026,0.091,0.042,-0.096,0.11,-0.01],"force":[366.5,544.8]},{"label":"Klipgat Farm","type":"place","deg":3,"pca":[-0.195,0.031],"hi":[-0.195,0.031,0.044,0.014,-0.091,0.033,0.092,0.001,-0.129,-0.116,-0.046,0.033,-0.072,0.063,-0.108,-0.009,-0.068,0.118,-0.07,0.138,0.018,0.096,-0.099,-0.022,-0.062,0.064,-0.069,0.078,-0.075,0.016],"force":[117.2,-734.2]},{"label":"Extraction-first","type":"other","deg":1,"pca":[0.022,-0.032],"hi":[0.022,-0.032,-0.015,0.198,0.172,0.103,0.072,0.089,-0.091,0.026,-0.164,0.116,-0.058,0.035,-0.079,0.114,-0.066,0.046,0.102,-0.027,-0.123,-0.17,0,0.026,-0.093,0,0.061,0.009,0.043,-0.005],"force":[-352.3,783.4]},{"label":"small local llm","type":"technology","deg":1,"pca":[-0.137,-0.003],"hi":[-0.137,-0.003,-0.088,-0.062,0.086,-0.184,-0.091,0.108,0.041,-0.075,0.137,0.06,0.006,-0.018,-0.078,-0.025,0.194,0.081,-0.036,0.024,0.032,-0.073,-0.011,-0.15,-0.04,-0.088,-0.018,0.06,-0.055,0.051],"force":[-553.4,505.4]},{"label":"Worker","type":"other","deg":2,"pca":[0.129,-0.032],"hi":[0.129,-0.032,-0.02,-0.131,-0.111,0.205,0.129,0.171,0.139,0.059,0.019,0.07,0.177,-0.002,0.052,-0.066,0.062,-0.156,-0.017,0.098,-0.103,0.008,-0.127,-0.058,-0.006,0.014,0.017,0.121,0.069,0.005],"force":[429.2,466]},{"label":"buzzword enforcement","type":"concept","deg":1,"pca":[0.078,0.128],"hi":[0.078,0.128,0.05,0.216,-0.024,0.029,-0.045,-0.032,0.032,-0.02,-0.091,0.001,0.11,-0.058,-0.067,-0.217,-0.027,0.004,-0.004,-0.035,0.031,-0.146,-0.108,0.003,0.017,-0.03,0.025,0.075,0.065,0.015],"force":[920.8,-176.8]},{"label":"resonator/prominence layer","type":"concept","deg":0,"pca":[-0.164,0.321],"hi":[-0.164,0.321,0.056,0.062,-0.126,-0.074,-0.01,-0.07,-0.033,0.055,-0.15,0.133,0.044,0.009,-0.006,-0.072,-0.035,-0.041,0.209,0.12,-0.043,-0.064,0.049,0.017,0.123,0.022,0,-0.021,0,0.044],"force":[608.1,-703.6]},{"label":"edge evidence-verification","type":"project","deg":1,"pca":[-0.209,0.013],"hi":[-0.209,0.013,-0.055,0.157,0.019,-0.1,0.025,-0.058,0.037,-0.02,0.045,0.071,0.203,0.02,-0.154,0.099,0.171,0.076,-0.09,-0.02,0.105,0.104,0.019,0.084,-0.004,0.021,0.068,-0.032,0.034,-0.023],"force":[586.2,572.3]},{"label":"putLayout","type":"other","deg":2,"pca":[-0.308,-0.241],"hi":[-0.308,-0.241,-0.063,0.036,-0.107,0.096,-0.1,0.17,0.029,0.056,0.078,-0.032,0.047,-0.068,0.002,-0.092,-0.049,-0.04,0.149,0.135,-0.009,0.029,0.016,0.067,0.033,0.006,0.087,-0.052,-0.04,-0.094],"force":[168.5,231.1]},{"label":"alpha(it)","type":"technology","deg":0,"pca":[0.17,0.158],"hi":[0.17,0.158,-0.141,0.103,0.01,0.052,-0.123,-0.044,-0.14,-0.056,-0.024,-0.016,-0.088,-0.052,-0.005,-0.012,0.038,-0.094,0.056,0.066,-0.075,0.081,0.053,-0.079,-0.1,0.194,-0.022,0.063,0.011,-0.127],"force":[16.3,1005.6]},{"label":"GRAPH ANCHOR","type":"concept","deg":0,"pca":[-0.314,-0.026],"hi":[-0.314,-0.026,0.054,0.149,-0.018,0.044,-0.044,0.042,-0.031,-0.018,0.021,0.009,-0.006,0.078,-0.015,0.029,-0.056,0.066,-0.068,0.032,-0.059,-0.031,0.054,0.096,-0.036,0.074,-0.022,0.002,0.018,0.038],"force":[-514.6,807.6]},{"label":"seedPoint","type":"concept","deg":1,"pca":[-0.082,-0.009],"hi":[-0.082,-0.009,-0.012,0.023,-0.086,0.171,-0.026,0.043,0.016,0.023,0.123,-0.157,-0.118,-0.067,0.025,-0.015,-0.151,0.127,0.037,0.064,-0.036,0.006,0.088,0.092,-0.064,0.068,-0.036,0.017,-0.094,0.024],"force":[604.6,706.4]},{"label":"N","type":"concept","deg":1,"pca":[-0.248,-0.072],"hi":[-0.248,-0.072,-0.139,0.071,0,0.153,0.111,0.165,-0.051,0.056,0.087,0.013,-0.167,-0.092,0.043,0.118,0.02,0.02,0.063,0.033,0.017,-0.028,-0.01,-0.045,0.052,-0.038,-0.011,0.012,-0.111,-0.032],"force":[-19.3,599.1]},{"label":"putNode","type":"code","deg":1,"pca":[-0.259,-0.263],"hi":[-0.259,-0.263,0.083,0.024,-0.144,-0.035,0.057,0.182,-0.029,-0.093,0.129,-0.166,0.121,-0.004,-0.034,-0.018,-0.088,0.033,0.131,0.022,-0.037,-0.005,-0.083,-0.04,-0.063,0.074,0.106,-0.016,-0.101,-0.101],"force":[883.5,-875.8]},{"label":"scripts/export-viewer.ts:35","type":"file","deg":1,"pca":[-0.115,-0.276],"hi":[-0.115,-0.276,0.044,-0.025,0.01,-0.075,-0.014,-0.305,-0.016,-0.076,0.057,0.136,-0.009,-0.005,-0.019,-0.004,0.005,-0.144,-0.13,0.092,-0.169,0.006,0.025,-0.016,-0.02,0.043,-0.038,0.092,0.047,0.013],"force":[-236,-428.1]},{"label":"K = 12","type":"concept","deg":1,"pca":[-0.105,0.13],"hi":[-0.105,0.13,-0.077,0.137,0.014,0.011,0.021,0.04,-0.072,-0.073,0.017,-0.033,-0.209,0.032,-0.011,-0.021,0.037,-0.021,0.061,0.062,0.05,0.036,-0.076,-0.099,-0.102,0.061,-0.06,0.089,-0.076,0.048],"force":[-53.5,231.7]},{"label":"serve","type":"product","deg":1,"pca":[0.186,-0.186],"hi":[0.186,-0.186,0.082,-0.15,-0.056,0.118,-0.235,-0.04,-0.071,0.128,-0.082,-0.024,0.031,0.03,0.029,-0.037,-0.031,0.008,0.113,-0.086,-0.019,0.024,-0.077,-0.081,0.01,-0.016,0.086,-0.002,-0.028,0.037],"force":[501.9,316]},{"label":"settle()","type":"technology","deg":0,"pca":[0.035,-0.133],"hi":[0.035,-0.133,-0.181,0.111,0.037,0.156,-0.123,0.071,-0.031,0.097,0.109,-0.146,0.039,-0.096,0.11,-0.033,-0.038,0.091,-0.042,0.155,-0.088,-0.031,0.068,-0.057,0.049,-0.01,-0.063,0.017,-0.065,0.016],"force":[870.9,544.5]},{"label":"IngestResult","type":"other","deg":0,"pca":[0.203,-0.118],"hi":[0.203,-0.118,0.17,0.02,0.209,0.053,0.021,-0.01,-0.224,-0.105,-0.088,-0.176,-0.015,-0.102,-0.003,0.085,-0.089,-0.001,0.028,-0.033,-0.079,0.154,-0.07,-0.05,0.045,0.045,-0.027,0.048,0.002,0.101],"force":[-373.6,-244.1]},{"label":"advisory lock file","type":"file","deg":0,"pca":[-0.106,-0.165],"hi":[-0.106,-0.165,-0.094,0.104,-0.097,-0.001,0.078,-0.02,-0.044,-0.189,-0.148,-0.028,-0.028,0.011,0.01,-0.054,-0.072,-0.1,-0.081,-0.047,0.139,-0.115,-0.056,-0.093,-0.035,0.05,-0.082,-0.072,0.03,-0.036],"force":[-719.8,-20.2]},{"label":"layoutPass","type":"other","deg":1,"pca":[-0.087,-0.118],"hi":[-0.087,-0.118,-0.15,0.075,0.095,0.12,-0.081,0.044,0.003,0.136,0.03,-0.04,-0.046,-0.077,0.142,-0.06,-0.064,0.11,-0.035,0.063,-0.113,-0.002,0.196,-0.002,0.002,0.036,-0.132,-0.009,0.012,0.095],"force":[815,-180.8]},{"label":"localStorage payload","type":"other","deg":1,"pca":[0.105,-0.226],"hi":[0.105,-0.226,0.039,-0.008,0.063,-0.094,-0.09,0.064,-0.051,0.108,0.089,0.024,-0.085,0.022,-0.157,0.021,-0.014,-0.017,-0.098,0.014,-0.051,0.04,-0.033,-0.056,0.135,0.068,0.035,0.119,0.021,0.013],"force":[-752.4,166.1]},{"label":"nodesLackingLayout","type":"concept","deg":2,"pca":[-0.31,-0.044],"hi":[-0.31,-0.044,-0.045,0.062,-0.047,0.215,-0.026,0.122,0.007,0.028,0.204,0.026,-0.042,-0.166,0.066,-0.03,-0.061,0.075,-0.018,0.072,0.08,0.07,-0.033,0.149,0.004,-0.064,0.078,0.007,0.056,0.05],"force":[427.5,331.9]},{"label":"layout-reaches-the-bundle test","type":"other","deg":1,"pca":[-0.037,-0.168],"hi":[-0.037,-0.168,-0.099,0.074,0.036,-0.003,-0.06,-0.01,0.126,0.165,0.098,0.014,-0.056,-0.051,0.156,0.042,-0.112,0.087,0.035,0.076,0.047,0.085,0.131,0.092,0.047,0.041,-0.087,-0.003,0.014,0.023],"force":[-299.6,110]},{"label":"Stale cameras","type":"concept","deg":1,"pca":[0.159,-0.079],"hi":[0.159,-0.079,-0.174,-0.057,-0.028,0.084,-0.002,-0.147,-0.232,0.232,0.088,0.036,-0.027,0.081,-0.135,-0.044,0.01,-0.024,-0.065,-0.111,-0.02,0.047,-0.197,0.085,0.013,-0.183,0.077,0.088,-0.099,0.016],"force":[-708,-641.5]},{"label":"Visual Bandwidth","type":"concept","deg":1,"pca":[0.002,0.103],"hi":[0.002,0.103,0.042,-0.021,-0.021,0.022,-0.202,-0.12,-0.102,0.082,-0.048,-0.069,-0.106,-0.099,0.087,-0.044,0.032,0.066,0.006,-0.095,0.072,0.005,-0.084,0.067,-0.008,-0.059,-0.057,0.028,0.044,-0.02],"force":[2005.6,592.4]},{"label":"resonance/conflict rose","type":"concept","deg":0,"pca":[-0.107,0.126],"hi":[-0.107,0.126,-0.061,0.045,0.038,0.066,-0.023,0.063,-0.083,0.126,-0.057,0.026,-0.063,0.08,0.035,0.042,-0.042,-0.102,-0.032,0.001,-0.027,0.121,0.029,-0.009,0.063,-0.072,0.06,-0.08,-0.076,0.067],"force":[871.8,256]},{"label":"States","type":"concept","deg":0,"pca":[-0.106,-0.108],"hi":[-0.106,-0.108,-0.097,-0.026,-0.046,0.093,-0.094,-0.079,0.061,0.196,-0.027,-0.113,-0.021,0.027,-0.131,0.2,0.154,-0.017,0.002,-0.078,0.021,0.014,-0.026,0.034,0.023,0.022,0.041,-0.041,0.026,-0.207],"force":[1011.2,102.3]},{"label":"memory-agent","type":"technology","deg":1,"pca":[-0.015,0.204],"hi":[-0.015,0.204,-0.051,-0.216,0.075,0.112,0.034,0.019,-0.096,-0.139,-0.011,-0.174,0.048,0.09,0.067,-0.056,0.13,-0.032,0.038,-0.068,-0.019,-0.032,0.015,0.106,-0.003,-0.052,-0.013,-0.004,-0.043,0],"force":[-584.3,533.7]},{"label":"Semantic Weight","type":"concept","deg":0,"pca":[-0.131,0.254],"hi":[-0.131,0.254,0.163,0.231,-0.126,-0.063,-0.125,-0.123,-0.001,-0.088,-0.065,-0.043,-0.034,-0.099,0.01,0.041,0.075,0.005,0.066,0.024,0.065,0.091,-0.019,-0.124,0.005,-0.052,0.018,0.03,-0.069,0.11],"force":[443,-635.6]},{"label":"Hebbian wiring","type":"concept","deg":1,"pca":[-0.02,0.154],"hi":[-0.02,0.154,-0.166,0.116,-0.078,0.107,-0.069,0.165,-0.027,-0.052,-0.04,0.041,-0.141,0.114,0.048,0.106,-0.037,-0.161,0.12,0.103,-0.037,0.032,-0.011,0.088,0.07,-0.141,-0.047,0.009,0.02,-0.042],"force":[-284.6,-221.1]},{"label":"Edge reason must name BOTH endpoints","type":"wisdom","deg":0,"pca":[-0.044,0.097],"hi":[-0.044,0.097,0.105,0.11,-0.132,0.063,0.001,-0.025,0.116,0.062,-0.078,-0.024,0.011,0.028,-0.138,0.112,-0.056,-0.037,-0.052,-0.172,-0.117,-0.016,0.186,-0.004,0.036,-0.017,0.016,-0.144,-0.038,0.057],"force":[784.2,-518.2]},{"label":"Deep-Sleep protocol","type":"technology","deg":1,"pca":[0.125,0.026],"hi":[0.125,0.026,-0.126,-0.07,0.049,-0.048,0.107,0.139,-0.155,-0.018,-0.001,0.015,-0.006,-0.06,0.083,0.033,0.107,0.083,-0.022,0.022,0.076,-0.158,0.1,-0.083,-0.025,-0.155,0.119,0.038,0.125,0.107],"force":[546.4,-488.9]},{"label":"RationaleEngine","type":"technology","deg":0,"pca":[-0.031,0.198],"hi":[-0.031,0.198,0.019,0.04,-0.053,-0.143,-0.05,0.123,0.014,-0.031,0.04,0.072,0.029,-0.126,-0.001,-0.001,-0.015,-0.027,-0.017,0.002,-0.064,-0.042,0.019,0.039,0.049,-0.034,-0.01,0.066,-0.029,0.016],"force":[992.3,-54.6]},{"label":"Glow-sprite nodes","type":"technology","deg":0,"pca":[-0.197,0.038],"hi":[-0.197,0.038,-0.081,-0.064,0.02,0.045,0.044,0.035,-0.067,0.154,-0.017,0.04,-0.139,-0.052,-0.085,0.151,0.01,-0.136,0.127,0.131,0.061,0.104,-0.025,0.101,-0.078,0.064,0.095,0.052,0.101,-0.005],"force":[-282.4,-469.4]},{"label":"Winter Code","type":"project","deg":1,"pca":[0.168,0.011],"hi":[0.168,0.011,-0.163,-0.034,-0.076,-0.065,-0.076,0,0.065,-0.153,0.064,-0.06,-0.057,-0.017,0.005,-0.017,-0.048,0.074,-0.085,-0.027,-0.064,0.073,-0.105,0.01,-0.069,0.071,0.031,-0.065,0.081,-0.02],"force":[351.7,-620]},{"label":"jest","type":"technology","deg":1,"pca":[0.203,0.007],"hi":[0.203,0.007,-0.147,0.031,0.053,-0.164,-0.059,0.062,0.076,0.092,-0.093,0.053,0.097,-0.013,-0.004,-0.061,-0.104,0.074,0.044,0.067,0.021,0.167,0.095,0.015,-0.066,-0.106,-0.125,0.053,-0.012,-0.051],"force":[-196.5,-230.9]},{"label":"Systems-Pathology-as-Curriculum","type":"concept","deg":1,"pca":[0.133,0.149],"hi":[0.133,0.149,-0.14,-0.029,-0.048,0.067,0.025,-0.025,-0.076,-0.153,0.053,0.128,0.056,0.107,0.015,-0.008,-0.08,0.122,0.015,-0.011,-0.074,-0.024,0.129,0.014,0.196,0.038,-0.112,0.046,0.084,-0.11],"force":[686.9,428]},{"label":"Hub entity","type":"other","deg":1,"pca":[-0.031,0.009],"hi":[-0.031,0.009,0.209,-0.19,-0.117,0.039,0.054,0.2,0.083,0.093,0.025,0.083,-0.152,0.009,0.051,0.08,-0.056,0.038,0.094,0.032,0.018,0.047,-0.073,0.07,-0.103,0.015,0.006,0.032,0.022,-0.004],"force":[92.2,-41.9]},{"label":"Provenance Chain","type":"concept","deg":1,"pca":[0.108,0.078],"hi":[0.108,0.078,0.202,0.095,0,-0.022,0.092,-0.154,0.005,-0.023,0.035,0.007,0.049,0.049,0.045,-0.055,0.051,0.077,-0.075,0.1,0.128,-0.001,0.132,0.056,0.054,-0.083,0.014,-0.073,-0.058,0.061],"force":[391.9,746.5]},{"label":"hub entities","type":"concept","deg":1,"pca":[0.099,0.082],"hi":[0.099,0.082,0.195,-0.021,-0.042,0.052,0.122,0.158,0.072,0.092,0.018,0.11,-0.18,0.049,-0.007,-0.022,-0.029,0.112,0.067,-0.05,-0.012,-0.052,-0.052,0.04,-0.069,0.063,-0.089,0.023,0.002,-0.034],"force":[4946.5,1667.6]},{"label":"Codex","type":"person","deg":2,"pca":[0.047,0.095],"hi":[0.047,0.095,0.005,-0.119,0.002,-0.041,0.008,-0.045,0.19,-0.123,-0.049,0.016,0.031,0.032,0.025,0.077,0.056,-0.049,0.01,0.096,-0.037,0.015,-0.135,0.036,-0.084,-0.118,-0.092,-0.055,-0.015,-0.032],"force":[134.9,535.5]},{"label":"Embedder","type":"project","deg":2,"pca":[-0.214,0],"hi":[-0.214,0,0.171,-0.013,0.012,-0.136,0.068,0.085,0.005,-0.159,0.137,-0.067,0.212,0.007,0.091,0.049,-0.034,0.022,0.048,0.042,-0.062,-0.152,-0.095,-0.073,0.079,0.089,0.017,0.047,-0.085,-0.011],"force":[-43.2,-68.3]},{"label":"Durable","type":"concept","deg":3,"pca":[-0.034,0.034],"hi":[-0.034,0.034,-0.007,0.203,-0.055,0.006,0.055,-0.063,0.051,0.013,-0.038,-0.142,-0.081,0.187,0.028,0.149,0.147,0.009,0.036,0.024,-0.084,0.048,-0.037,0.053,0.03,-0.11,0.066,0.033,-0.003,-0.04],"force":[-199.8,437.2]},{"label":"QUOTE","type":"memory","deg":1,"pca":[0.245,0.11],"hi":[0.245,0.11,0.142,0.036,-0.142,0.087,0.056,-0.202,0.067,-0.107,-0.009,0.009,0.129,0.082,-0.032,-0.073,0.063,-0.064,0.057,0.092,-0.043,-0.063,0.004,0.112,-0.042,-0.068,-0.091,0.007,-0.031,-0.051],"force":[-187.9,377.7]},{"label":"Constraint Rule","type":"concept","deg":0,"pca":[0.101,0.036],"hi":[0.101,0.036,-0.051,0.033,-0.068,0.108,0.033,0.093,-0.016,-0.115,0.067,-0.219,-0.01,0.02,-0.018,0.072,0.006,-0.039,0.082,-0.134,0.045,-0.118,0.04,-0.02,0.009,0.009,-0.223,-0.031,-0.008,-0.042],"force":[-729,-586.1]},{"label":"Graph viewer prototype","type":"product","deg":1,"pca":[-0.273,-0.054],"hi":[-0.273,-0.054,-0.124,-0.112,-0.083,-0.1,0.056,-0.195,-0.033,0.051,0.011,0.125,0.086,-0.059,0.091,0.036,-0.001,0.01,-0.125,0.046,-0.118,0.101,0.021,0.07,-0.063,0.044,-0.07,0.068,-0.115,0.028],"force":[-129.4,534.5]},{"label":"Qdrant","type":"product","deg":1,"pca":[-0.035,0.084],"hi":[-0.035,0.084,0.01,-0.024,0.042,-0.286,-0.118,0.068,-0.021,0.103,-0.067,-0.094,-0.177,0.003,-0.005,-0.087,-0.063,0.007,-0.11,0.014,-0.013,0.101,0.061,-0.108,-0.022,-0.106,-0.003,-0.081,-0.085,0.056],"force":[-523.7,-84]},{"label":"Python engine","type":"technology","deg":2,"pca":[0.083,0.071],"hi":[0.083,0.071,0.028,-0.08,0.036,-0.282,-0.126,0.056,-0.039,-0.129,0.131,-0.036,-0.016,-0.098,-0.055,0.075,0.127,-0.014,-0.007,-0.009,-0.037,-0.038,-0.09,-0.009,0.055,0.007,-0.03,-0.022,0.003,0.001],"force":[-134.6,-512.7]},{"label":"Durable status","type":"other","deg":1,"pca":[-0.186,0.015],"hi":[-0.186,0.015,0.002,0.198,-0.071,-0.03,0.106,-0.074,0.002,0.051,-0.05,-0.116,-0.051,0.163,0.005,0.104,0.096,0.054,0.086,0.081,-0.155,0.046,-0.026,0.021,0.035,-0.062,0.067,-0.001,0.012,0.007],"force":[311.7,-460.1]},{"label":"DEPENDS_ON","type":"concept","deg":2,"pca":[0.14,0.1],"hi":[0.14,0.1,0.095,0.184,-0.055,0.085,-0.113,-0.125,0.108,-0.003,0.007,0.003,0.096,0.06,0.096,0.138,-0.018,-0.032,0.08,0.037,0.044,-0.038,-0.018,-0.013,-0.05,0.028,0.005,0.008,-0.064,-0.057],"force":[326.6,-86.9]},{"label":"Clusterer","type":"technology","deg":2,"pca":[-0.074,0.206],"hi":[-0.074,0.206,0.04,-0.055,-0.016,-0.137,-0.062,0.116,-0.003,-0.063,0.039,0.078,-0.053,-0.069,0.118,-0.064,-0.004,-0.045,-0.04,-0.055,-0.031,-0.007,0.007,0.11,0.048,0.008,0.081,0.006,-0.036,-0.074],"force":[2.4,-335.6]},{"label":"Build process (clean-room, anti-morass)","type":"project","deg":1,"pca":[0.138,-0.001],"hi":[0.138,-0.001,-0.152,-0.096,-0.035,0.049,-0.019,0.083,0.131,-0.159,0.009,-0.005,-0.093,-0.148,-0.008,-0.072,-0.005,0.124,-0.029,-0.119,-0.084,0.017,0.022,0.032,0.056,-0.045,0.012,-0.02,0.09,0.06],"force":[365.3,36.2]},{"label":"Plan V1","type":"project","deg":1,"pca":[-0.148,0.052],"hi":[-0.148,0.052,-0.36,-0.189,0.119,0.068,0.135,-0.087,0.102,-0.024,-0.084,0.029,-0.03,0.054,0.036,-0.029,-0.083,0.041,0.03,0.002,0.057,-0.028,0.101,0.022,-0.103,0.106,0.045,0.065,-0.116,0.065],"force":[-26.4,479.6]},{"label":"Prominence-Gated Semantic Zoom","type":"concept","deg":2,"pca":[-0.131,0.216],"hi":[-0.131,0.216,0.041,-0.103,0.015,0.034,-0.053,-0.032,-0.012,0.282,-0.046,-0.119,-0.015,-0.06,-0.04,0.055,0.039,0.088,0.092,0.043,0.031,-0.086,-0.076,-0.137,-0.071,0.092,-0.042,-0.07,0.132,-0.066],"force":[-326.2,-398]},{"label":"circuit-breaker","type":"concept","deg":2,"pca":[-0.106,-0.007],"hi":[-0.106,-0.007,-0.163,0.147,-0.052,-0.106,0.086,0.046,-0.149,0.114,-0.053,-0.011,0.039,0.078,0.032,-0.132,-0.059,-0.048,0.061,-0.05,0.01,0.022,0.022,-0.028,-0.044,-0.031,-0.119,0.059,0.177,0.002],"force":[-62,187.3]},{"label":"RAG","type":"technology","deg":1,"pca":[0.158,0.057],"hi":[0.158,0.057,0.081,-0.03,0.082,-0.059,-0.057,0.04,-0.053,0.029,-0.131,0,-0.086,-0.01,0.158,-0.019,-0.027,0.148,-0.036,-0.058,-0.048,0.051,-0.026,-0.022,0.081,-0.032,0.045,-0.117,0.025,-0.07],"force":[-899.3,126.3]},{"label":"SEMANTIC_WEIGHT","type":"concept","deg":1,"pca":[-0.002,0.195],"hi":[-0.002,0.195,0.174,0.214,-0.058,0.02,-0.199,-0.193,0.045,-0.041,-0.029,-0.123,-0.005,-0.131,-0.01,0.104,0.125,-0.023,0.072,-0.004,0.115,0.097,0.023,-0.081,0,-0.005,0.09,-0.034,-0.023,0.067],"force":[74.3,-308.1]},{"label":"rank-normalization per tile","type":"other","deg":1,"pca":[-0.132,0.131],"hi":[-0.132,0.131,-0.036,0.132,0.135,-0.062,-0.116,-0.086,-0.009,0.018,0.06,0.008,-0.136,0.031,-0.085,-0.184,-0.03,-0.001,0.125,-0.038,0.042,0.028,0.073,-0.122,0.125,0.052,-0.02,0.087,-0.028,-0.027],"force":[104.8,1.9]},{"label":"Dream","type":"product","deg":1,"pca":[0.034,0.013],"hi":[0.034,0.013,-0.234,-0.135,0.037,-0.066,0.101,0.096,-0.166,0.086,-0.051,0.015,0.023,-0.061,0.078,0.141,0.092,-0.123,-0.069,-0.009,0.045,-0.075,0.018,-0.005,-0.062,-0.055,-0.016,0.023,0.13,0.017],"force":[295.2,-239]},{"label":"Audit","type":"concept","deg":1,"pca":[0.232,0.021],"hi":[0.232,0.021,-0.161,0.107,0.024,0.038,0.1,-0.085,0.109,0.091,-0.014,0.012,0.143,-0.081,-0.044,-0.063,0.109,0.135,-0.035,0.028,-0.014,0.09,0.104,0.057,0.16,-0.035,-0.03,-0.019,-0.003,0.049],"force":[-458,236.8]},{"label":"Net","type":"concept","deg":2,"pca":[0.016,0.149],"hi":[0.016,0.149,0.055,-0.04,-0.198,0.013,-0.023,0.06,-0.007,-0.149,-0.057,0.033,-0.029,0.045,0.083,-0.072,0.002,0.107,-0.021,-0.054,0.017,0.088,0.012,0.15,0.035,0.012,0.028,0.07,0.09,0.033],"force":[600.6,383.3]},{"label":"JSON Schema / Zod-TypeBox","type":"technology","deg":1,"pca":[0.086,-0.074],"hi":[0.086,-0.074,-0.036,-0.049,-0.025,-0.162,-0.01,0.053,0.136,0.035,0.029,-0.044,-0.007,0.047,-0.069,0.064,-0.048,-0.056,0.001,0.025,0.068,-0.079,0.1,0.035,0.072,0.022,-0.104,0.061,0.107,0.07],"force":[-708.1,-370.4]},{"label":"bare nudge","type":"concept","deg":1,"pca":[0.131,0.062],"hi":[0.131,0.062,-0.05,0.207,-0.099,0.199,-0.149,-0.02,-0.087,0.034,0.004,-0.01,0.149,-0.093,-0.107,-0.02,-0.072,-0.117,-0.089,0.085,0.038,-0.104,-0.012,0.158,-0.169,-0.059,0.107,0.073,-0.069,-0.007],"force":[-442.1,-462.9]},{"label":"EXP-006","type":"code","deg":1,"pca":[0.099,-0.069],"hi":[0.099,-0.069,-0.025,0.015,0.096,-0.184,-0.015,0.04,0.004,-0.137,0.19,-0.038,0.026,0.071,-0.027,0.121,-0.112,-0.02,-0.001,0.029,-0.07,0.099,-0.011,0.081,-0.046,0.11,0.049,0.018,-0.042,-0.087],"force":[-399.9,104]},{"label":"bridge dedup","type":"other","deg":1,"pca":[-0.012,-0.062],"hi":[-0.012,-0.062,-0.101,0.184,-0.044,0.065,-0.035,0.093,0.09,0.025,0.067,0.014,-0.015,0.136,0.044,-0.031,-0.015,-0.005,-0.176,-0.12,-0.024,-0.148,-0.063,-0.098,-0.052,-0.056,-0.004,0.107,-0.019,0.076],"force":[489.6,361]},{"label":"Zod decode path","type":"concept","deg":0,"pca":[0.067,0],"hi":[0.067,0,-0.073,0.057,-0.061,0.066,-0.007,0.031,0.035,-0.132,0.014,-0.092,-0.131,-0.09,-0.044,0.004,-0.064,-0.027,-0.101,0.052,-0.031,-0.155,-0.003,0.06,0.076,-0.016,-0.035,0.049,0.022,-0.038],"force":[-681.8,-97.9]},{"label":"PLAN-V1.MD","type":"file","deg":2,"pca":[0.13,-0.124],"hi":[0.13,-0.124,-0.311,-0.091,-0.014,0,0.206,-0.178,0.122,0.098,-0.025,0.061,0.016,-0.112,0.138,0.021,-0.01,0.114,-0.047,-0.073,0.052,-0.04,0.074,-0.063,-0.076,0.106,0.05,0.076,-0.191,0.066],"force":[-495.9,14.4]},{"label":"memory-viewer","type":"project","deg":2,"pca":[-0.205,-0.062],"hi":[-0.205,-0.062,0.017,-0.062,0.065,-0.102,0.026,-0.075,-0.073,0.05,-0.002,-0.044,0.046,-0.073,0.071,0.046,0.11,0.008,-0.035,-0.076,-0.11,0.034,-0.013,0.015,0.12,0.044,-0.047,-0.035,0.02,-0.026],"force":[130.7,-12.6]},{"label":"ε chaos-factor","type":"concept","deg":2,"pca":[-0.128,0.186],"hi":[-0.128,0.186,-0.183,0.042,0.156,0.154,-0.037,-0.049,-0.123,-0.083,-0.027,-0.06,-0.032,0.124,-0.121,-0.021,-0.084,-0.11,-0.055,0.034,0.094,-0.078,0.002,0.01,-0.024,0.025,-0.08,-0.021,0.022,-0.136],"force":[145,576.4]},{"label":"timestamp","type":"technology","deg":1,"pca":[0.154,-0.079],"hi":[0.154,-0.079,0.001,-0.078,-0.046,0.004,0.094,-0.065,-0.135,0.015,0.069,0.01,0.035,0.006,0.067,-0.126,0.033,-0.036,0.028,-0.015,-0.004,0.044,0.096,0.131,-0.03,0.222,0.061,0.005,-0.111,0.072],"force":[-979.7,-168.3]},{"label":"shared","type":"other","deg":1,"pca":[0.169,-0.088],"hi":[0.169,-0.088,-0.079,0.045,0.002,-0.074,0.046,0.079,-0.006,0.092,-0.084,-0.113,0.127,0.272,0.095,0.109,-0.017,0.101,0.035,-0.013,-0.034,-0.035,-0.005,-0.024,-0.062,0.006,0.091,0.054,0.013,-0.098],"force":[-865,28.2]},{"label":"Extractor output","type":"other","deg":0,"pca":[0.077,-0.023],"hi":[0.077,-0.023,0.23,-0.039,0.033,-0.075,0.004,-0.07,0.074,-0.039,0.17,0.166,-0.14,0.094,0.083,0.028,0.018,-0.181,0.023,-0.043,-0.116,-0.077,0.061,0.057,0.057,0.034,0.012,0.054,0.129,0.054],"force":[-377.5,-769.9]},{"label":"Assertion idempotency on re-ingest","type":"lesson","deg":1,"pca":[0.044,0.075],"hi":[0.044,0.075,0.037,0.158,0.142,0.089,0.199,0.117,-0.092,0.097,-0.187,0.017,0.241,-0.045,-0.025,0.031,-0.079,0.045,0.074,-0.066,-0.096,-0.101,0.053,-0.079,0.047,0.024,-0.112,0.082,-0.048,0.007],"force":[468.2,-222.8]},{"label":"random-walk edge weight","type":"concept","deg":0,"pca":[-0.108,0.108],"hi":[-0.108,0.108,-0.096,0.246,0.026,0.098,-0.142,-0.083,-0.075,-0.08,-0.006,-0.116,-0.044,-0.018,-0.167,0.107,0.2,-0.111,-0.146,-0.012,0.1,0.157,0.066,-0.087,-0.064,0.021,0.027,0.012,-0.059,-0.01],"force":[-840.9,337.9]},{"label":"round-1 review","type":"event","deg":2,"pca":[0.198,-0.006],"hi":[0.198,-0.006,-0.26,0.006,-0.044,-0.075,0.031,-0.099,0.102,0,0.02,0.068,-0.065,-0.14,-0.019,-0.002,-0.06,0.124,0.064,-0.093,-0.019,0.049,-0.101,0.077,-0.087,0.105,-0.025,-0.101,-0.039,0.08],"force":[-543.2,-8.9]},{"label":"Welding defect","type":"concept","deg":1,"pca":[0.126,-0.117],"hi":[0.126,-0.117,-0.18,0.166,0.099,-0.012,-0.009,0.001,0.045,0.039,0.09,-0.005,0.035,0.036,0.12,0.036,-0.061,-0.053,-0.075,0.102,0.069,0.105,-0.265,0.044,0.013,-0.084,-0.081,-0.081,0.079,-0.037],"force":[-215.4,-269.2]},{"label":"prominencePass","type":"code","deg":0,"pca":[-0.04,0.034],"hi":[-0.04,0.034,-0.113,0.158,-0.011,0.005,-0.117,-0.091,0.067,0.037,-0.062,0.1,0.001,-0.015,-0.037,-0.219,-0.009,0.095,0.034,0.083,-0.122,0.036,-0.072,-0.039,0.014,0.096,-0.062,-0.018,0.123,0.135],"force":[94.1,786.2]},{"label":"Parallel-edge Credit-splitting","type":"concept","deg":1,"pca":[-0.118,0.087],"hi":[-0.118,0.087,-0.036,0.215,0.065,0.008,-0.059,0.004,0.023,-0.065,-0.103,0.083,0.049,-0.012,-0.031,-0.054,0.062,0.061,-0.065,-0.139,0.011,0.224,0.035,-0.055,-0.03,-0.006,-0.05,0.072,0.035,-0.094],"force":[408.9,-199.7]},{"label":"docs/reviews/durable-map-state-r5.md","type":"file","deg":1,"pca":[0.026,-0.067],"hi":[0.026,-0.067,-0.188,-0.001,-0.036,-0.094,0.219,-0.235,0.111,0.097,-0.031,-0.213,-0.145,0.131,0.008,0.149,0.121,0.082,-0.016,-0.027,-0.019,-0.097,0.002,0.003,0.041,-0.08,0.022,0.167,-0.1,-0.094],"force":[5.2,-28.4]},{"label":"A4","type":"other","deg":0,"pca":[-0.042,-0.022],"hi":[-0.042,-0.022,0.03,0.021,0.169,0.047,0.03,0.114,0.157,-0.016,0.145,0.042,-0.068,-0.126,-0.028,-0.062,0.069,0.028,0.093,-0.01,-0.051,0.01,-0.036,-0.093,-0.039,-0.028,0.014,0.008,0.034,0.072],"force":[-496.9,-3463.2]},{"label":"D3","type":"project","deg":0,"pca":[0.097,-0.12],"hi":[0.097,-0.12,-0.135,-0.124,0.059,-0.013,0.185,-0.105,0.106,0.037,0.023,0.073,0.046,-0.064,-0.031,-0.035,-0.038,0.008,0.077,0.025,-0.028,-0.033,0.053,-0.101,0.047,0.034,0.189,-0.028,-0.051,0.014],"force":[368.9,75.8]},{"label":"F1","type":"other","deg":0,"pca":[0.062,0.057],"hi":[0.062,0.057,-0.226,-0.063,-0.114,0.087,-0.116,-0.036,0.016,0.111,-0.034,-0.057,0.088,-0.122,0.002,0.02,-0.18,0.021,-0.035,-0.029,-0.028,0.037,0.019,-0.001,-0.019,0.055,0.029,-0.073,0.017,-0.034],"force":[-568.6,-547.6]},{"label":"html canvas","type":"technology","deg":1,"pca":[-0.252,-0.047],"hi":[-0.252,-0.047,-0.078,-0.18,0.111,-0.039,-0.184,-0.225,0.011,-0.019,-0.058,-0.008,0.106,0.068,0.129,-0.011,0.013,0.044,-0.078,0.089,0.007,0.054,-0.082,0.108,-0.046,-0.023,-0.026,-0.019,0.076,-0.05],"force":[-815.9,-376]},{"label":"Google Maps saved lists","type":"product","deg":1,"pca":[-0.144,-0.065],"hi":[-0.144,-0.065,0.014,-0.156,-0.064,0.049,0.075,-0.061,-0.133,0.139,0.003,-0.047,-0.17,-0.039,-0.03,-0.042,-0.022,0.094,-0.145,-0.05,-0.023,-0.042,-0.025,0.046,-0.01,-0.039,0.003,0.052,-0.126,-0.042],"force":[821.3,-102.9]},{"label":"file:// export","type":"technology","deg":2,"pca":[-0.083,-0.149],"hi":[-0.083,-0.149,0.012,-0.076,0.13,-0.026,-0.035,-0.181,0.022,0.05,0.049,-0.069,-0.068,0.056,-0.034,0.067,0.083,-0.076,-0.188,0.07,-0.097,0.008,0.065,-0.085,-0.026,0.007,0.019,0.113,0.143,-0.039],"force":[762.4,208.2]},{"label":"rebuild()","type":"code","deg":1,"pca":[-0.177,-0.134],"hi":[-0.177,-0.134,-0.109,0.028,0.057,0.216,0,0.128,0.088,0.13,0.068,-0.041,-0.018,-0.089,0.097,0.104,0.06,0.04,0.019,-0.015,-0.08,0.082,-0.047,0.015,0.127,-0.076,-0.036,0.017,-0.005,0.003],"force":[228,381.9]},{"label":"`graphStore.ts`","type":"file","deg":1,"pca":[-0.264,-0.304],"hi":[-0.264,-0.304,0.006,0.026,-0.148,-0.047,0.147,-0.027,-0.028,-0.082,-0.101,0.02,0.065,-0.081,-0.052,-0.153,0.09,-0.057,-0.02,-0.032,-0.033,0.109,0.04,-0.038,-0.056,0.006,-0.014,-0.048,-0.027,-0.159],"force":[-546,-589.6]},{"label":"Ingest","type":"event","deg":2,"pca":[0.2,-0.138],"hi":[0.2,-0.138,0.104,0.011,0.19,0.135,-0.01,0.015,-0.311,-0.016,-0.103,-0.017,0.074,-0.028,-0.079,0.134,-0.051,0.005,-0.023,-0.133,-0.004,0.091,-0.064,-0.023,0.011,0.003,-0.084,0.034,-0.022,0.072],"force":[-195.5,539]},{"label":"Deny-by-default Policy","type":"other","deg":2,"pca":[0.086,-0.061],"hi":[0.086,-0.061,-0.09,0.142,-0.092,0.1,-0.057,0.068,0.065,0.018,-0.134,-0.056,0.027,0.059,-0.148,-0.076,-0.044,0.037,-0.108,-0.032,0.161,-0.059,-0.077,0.025,0.092,0.077,-0.026,0.106,0.062,-0.062],"force":[-477.9,718.5]},{"label":"GET /","type":"technology","deg":2,"pca":[0.041,-0.099],"hi":[0.041,-0.099,0.094,-0.022,-0.093,0.1,-0.143,-0.079,0.046,-0.023,-0.134,-0.047,-0.164,-0.091,-0.053,0.037,-0.052,0.051,-0.207,0.131,-0.063,-0.196,0.05,0.085,0.057,0.075,0.037,-0.066,-0.02,0.024],"force":[-421.7,-898.7]},{"label":"SSE","type":"technology","deg":0,"pca":[0.202,-0.189],"hi":[0.202,-0.189,0.011,-0.069,-0.099,-0.078,-0.168,0.168,-0.051,-0.031,-0.162,0.109,0.041,0.061,0.019,0.032,0.131,0.03,-0.051,0.012,-0.003,0.052,0.042,-0.026,0.012,0.08,0.054,0.012,0.01,-0.067],"force":[1009.2,-207.7]},{"label":"Error State","type":"event","deg":1,"pca":[0.129,-0.168],"hi":[0.129,-0.168,-0.159,0.069,-0.048,0.062,0.006,-0.023,-0.001,0.027,0.146,-0.187,0.075,0.032,0.065,0.048,0.007,0.072,0.091,-0.046,-0.048,0.008,-0.076,0.062,0.075,-0.093,-0.103,-0.033,0.071,-0.058],"force":[-627,738.5]},{"label":"D7","type":"file","deg":2,"pca":[0.078,-0.022],"hi":[0.078,-0.022,0.058,0.077,-0.028,-0.082,-0.089,-0.137,0.128,0.064,0.087,0.075,-0.059,-0.04,0.098,-0.031,-0.035,0.003,0.052,0.042,0.087,-0.012,-0.03,0.016,0.007,0.059,-0.01,0.029,-0.079,-0.02],"force":[-28.6,-1657.1]},{"label":"POST /ingest","type":"technology","deg":0,"pca":[0.092,-0.182],"hi":[0.092,-0.182,0.068,0.051,0.081,-0.062,-0.038,0.201,-0.016,-0.06,-0.16,0.036,0.005,-0.066,-0.08,0.174,0.002,0.118,0.001,-0.048,-0.032,0.047,0.149,-0.092,-0.023,-0.076,-0.024,0.035,-0.04,0.16],"force":[-472,-171]},{"label":"D10","type":"product","deg":0,"pca":[0.07,0.02],"hi":[0.07,0.02,-0.226,-0.019,-0.007,0.007,-0.003,-0.025,0.018,0.08,-0.079,-0.002,-0.02,-0.12,0.036,-0.038,-0.06,-0.097,0.048,0.015,0.08,-0.032,0.035,-0.078,-0.044,0.066,0.118,0.081,-0.086,-0.023],"force":[274,-285.7]},{"label":"write-up","type":"file","deg":2,"pca":[0.144,-0.074],"hi":[0.144,-0.074,-0.007,-0.056,0,0.078,0.076,-0.195,0.084,-0.083,0.105,0.034,0.073,-0.151,0.128,-0.025,0.147,0.09,0.08,-0.028,-0.008,0.017,0.001,-0.006,-0.008,-0.074,0.081,-0.038,0.041,0.079],"force":[-285,-779.8]},{"label":"DNS Rebinding Attack","type":"concept","deg":1,"pca":[0.11,-0.15],"hi":[0.11,-0.15,-0.019,0.192,0.014,0.093,-0.096,0.154,0.033,-0.004,-0.188,0.005,0.032,0.014,0.011,-0.114,0.007,-0.007,-0.167,-0.053,0.064,-0.058,-0.048,-0.012,0.098,0.024,0.111,0.04,-0.038,-0.143],"force":[-268.9,-1053.2]},{"label":"docx (pandoc/textutil)","type":"technology","deg":1,"pca":[-0.016,-0.076],"hi":[-0.016,-0.076,0.041,-0.192,0.128,0.034,-0.052,-0.09,0.101,-0.15,-0.065,0.037,-0.007,-0.024,0.115,-0.061,-0.039,-0.142,0.063,0.054,0.106,-0.06,0.04,-0.006,-0.021,-0.08,0.116,-0.025,0.061,-0.03],"force":[316.5,1075.9]},{"label":"Citation Grounding","type":"concept","deg":0,"pca":[-0.108,0.055],"hi":[-0.108,0.055,0.117,0.246,-0.038,-0.039,0.055,-0.154,0.08,0.037,-0.045,-0.035,0.172,-0.051,-0.077,-0.01,0.02,0.012,0.127,0.073,-0.028,-0.139,0.046,-0.006,-0.014,-0.101,-0.139,-0.064,-0.017,0.016],"force":[71,-969.7]},{"label":"Readings","type":"concept","deg":0,"pca":[0.05,0.076],"hi":[0.05,0.076,0.102,0.19,0.086,-0.093,0.075,0.038,0.061,0.107,0.025,0.027,0.108,-0.019,-0.091,-0.002,-0.184,0.033,0.085,0.016,-0.069,-0.11,0.075,0.039,0.073,-0.023,0.063,-0.074,0.059,-0.083],"force":[-1061.6,-240.8]},{"label":"Session Runner","type":"concept","deg":1,"pca":[0.21,-0.049],"hi":[0.21,-0.049,-0.098,-0.093,-0.118,0.147,-0.085,0.108,-0.043,-0.129,0.012,0.156,-0.041,-0.024,-0.052,0.059,0.208,0.125,0.029,0.061,0.044,-0.08,0.126,-0.062,0.105,0.002,-0.07,-0.139,-0.132,-0.091],"force":[-630.3,827.6]},{"label":"GENERATOR","type":"concept","deg":1,"pca":[0.143,0.066],"hi":[0.143,0.066,-0.047,-0.086,-0.012,0.12,0.095,-0.006,-0.107,-0.016,0.04,0.102,-0.008,0.021,0.01,-0.036,-0.035,-0.003,-0.003,-0.015,0.049,-0.06,-0.011,-0.02,0.047,0.055,-0.117,0.031,0.125,-0.138],"force":[-862.8,-67.2]},{"label":"`HEBBIAN_ASSOC`","type":"concept","deg":1,"pca":[-0.144,0.049],"hi":[-0.144,0.049,-0.027,-0.021,-0.077,0.039,-0.018,0.038,-0.022,-0.015,0.032,0.09,0.059,-0.002,-0.073,0.029,-0.002,-0.143,-0.033,-0.012,-0.089,0.051,-0.078,-0.08,-0.146,-0.093,0.003,-0.052,0.142,0.001],"force":[486.2,279.8]},{"label":"serve-server.test.ts","type":"file","deg":1,"pca":[0.177,-0.319],"hi":[0.177,-0.319,-0.065,-0.046,-0.001,-0.095,-0.138,0.041,0.013,-0.044,0.027,0.104,0.061,0.074,0,0.021,0.02,0.012,0.093,0.191,0.028,0.152,0.11,0.031,-0.022,-0.005,-0.029,-0.014,0.012,0.014],"force":[-331.3,1057.9]},{"label":"serve","type":"other","deg":1,"pca":[-0.105,-0.203],"hi":[-0.105,-0.203,-0.02,-0.118,0.12,0.121,-0.211,-0.031,0.003,-0.18,-0.17,0.036,0.057,0.194,-0.048,-0.084,0.043,0.054,0.105,0.013,-0.036,-0.01,-0.076,-0.003,0.056,-0.016,0.013,0.012,-0.077,0.09],"force":[539.6,-70]},{"label":"Multi-Graph Dashboards","type":"concept","deg":0,"pca":[-0.285,0.018],"hi":[-0.285,0.018,-0.038,-0.128,-0.135,-0.039,0.066,-0.051,0.03,0.067,-0.05,0.204,0.044,0.002,0.058,-0.028,-0.148,0.153,-0.034,-0.086,-0.055,0.044,0.035,0.039,0.042,0.001,-0.001,0.036,0.016,-0.068],"force":[-705.1,-686.7]},{"label":"SQLite sqlite-vec","type":"technology","deg":1,"pca":[-0.12,-0.174],"hi":[-0.12,-0.174,0.127,-0.029,-0.104,-0.19,0.053,0.056,0.016,0.017,-0.118,-0.053,-0.066,0,0.015,-0.152,-0.017,-0.053,-0.039,-0.054,0.022,0.097,0.174,-0.017,-0.125,-0.103,-0.035,-0.005,-0.029,0.007],"force":[-95.9,296.7]},{"label":"PROJECT","type":"concept","deg":2,"pca":[0.147,0.03],"hi":[0.147,0.03,-0.022,-0.21,-0.111,-0.012,0.058,0.082,0.042,-0.089,0.099,0.067,-0.01,0.014,0.011,0.101,0.064,0.067,0.02,-0.066,0.043,0.031,0.115,-0.086,-0.038,-0.025,-0.066,-0.128,-0.002,0.057],"force":[-885.1,492.7]},{"label":"user","type":"other","deg":0,"pca":[0.191,0.184],"hi":[0.191,0.184,0.064,-0.173,-0.174,0.103,-0.08,0.013,0.069,-0.143,0.025,-0.005,0.085,-0.014,0.021,-0.017,0.038,-0.118,0.01,0.007,-0.149,0.056,-0.078,0.086,0.052,0.057,-0.09,-0.029,-0.111,-0.079],"force":[-691.8,366.3]},{"label":"CI-gate","type":"concept","deg":2,"pca":[0.155,0.01],"hi":[0.155,0.01,-0.124,0.088,-0.065,-0.081,-0.072,-0.014,0.13,-0.094,0.007,-0.044,-0.031,0.069,-0.012,-0.013,-0.082,-0.043,-0.006,-0.118,0.179,0.018,-0.052,0.075,-0.073,0.119,-0.219,0.016,0.091,0.061],"force":[-205.3,-704.7]},{"label":"REFERENCES kind enum","type":"concept","deg":0,"pca":[0.059,-0.025],"hi":[0.059,-0.025,0.063,0.033,-0.068,0.031,-0.1,0.047,0.078,0.042,0.079,-0.048,0.007,-0.028,-0.024,0.09,0.041,-0.159,0.057,-0.135,-0.01,0.114,-0.076,-0.065,-0.012,0.135,0.048,-0.106,-0.055,0.068],"force":[434.4,-1021.6]}]};
+const N = DATA.nodes.length;
+const HI = DATA.nodes.map(d => d.hi);          // 30-d PCA coordinates — the honest input for t-SNE
+const DEG = DATA.nodes.map(d => d.deg);
+const LABEL = DATA.nodes.map(d => d.label);
+const maxDeg = Math.max(1, ...DEG);
+
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ── shared plotting ──────────────────────────────────────────────────────── */
+function fit(pts, w, h, pad){
+  const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const sx=(w-2*pad)/((x1-x0)||1), sy=(h-2*pad)/((y1-y0)||1), s=Math.min(sx,sy);
+  const ox=(w-(x1-x0)*s)/2 - x0*s, oy=(h-(y1-y0)*s)/2 - y0*s;
+  return pts.map(p=>[p[0]*s+ox, p[1]*s+oy]);
+}
+function plot(cv, pts, opts){
+  const o = opts||{};
+  const ctx = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = css('--surface'); ctx.fillRect(0,0,w,h);
+  // faint grid — a survey plate, and it also gives the eye a scale reference
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+  for(let x=0;x<w;x+=56){ctx.beginPath();ctx.moveTo(x+.5,0);ctx.lineTo(x+.5,h);ctx.stroke();}
+  for(let y=0;y<h;y+=56){ctx.beginPath();ctx.moveTo(0,y+.5);ctx.lineTo(w,y+.5);ctx.stroke();}
+  const P = fit(pts, w, h, 34);
+  const acc = css('--accent');
+  for(let i=0;i<P.length;i++){
+    const r = 2.6 + 7*Math.sqrt(DEG[i]/maxDeg);
+    ctx.globalAlpha = 0.30 + 0.55*Math.sqrt(DEG[i]/maxDeg);
+    ctx.fillStyle = acc;
+    ctx.beginPath(); ctx.arc(P[i][0], P[i][1], r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if(o.hover != null && P[o.hover]){
+    const [x,y] = P[o.hover];
+    ctx.strokeStyle = css('--ink'); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x,y,11,0,7); ctx.stroke();
+    const txt = LABEL[o.hover] + '  ·  degree ' + DEG[o.hover];
+    ctx.font = '13px -apple-system, Helvetica Neue, Arial, sans-serif';
+    const tw = ctx.measureText(txt).width;
+    let bx = x+15, by = y-11;
+    if(bx+tw+14 > w) bx = x-15-tw-14;
+    if(by < 4) by = 4;
+    ctx.fillStyle = css('--ink'); ctx.globalAlpha=.92;
+    ctx.beginPath(); ctx.roundRect(bx, by, tw+14, 24, 5); ctx.fill();
+    ctx.globalAlpha=1; ctx.fillStyle = css('--surface');
+    ctx.fillText(txt, bx+7, by+16);
+  }
+  return P;
+}
+function hoverable(cv, getPts){
+  let last = null;
+  cv.addEventListener('mousemove', e=>{
+    const r = cv.getBoundingClientRect();
+    const mx = (e.clientX-r.left)*cv.width/r.width, my = (e.clientY-r.top)*cv.height/r.height;
+    const P = getPts(); if(!P) return;
+    let best=null, bd=400;
+    for(let i=0;i<P.length;i++){ const d=(P[i][0]-mx)**2+(P[i][1]-my)**2; if(d<bd){bd=d;best=i;} }
+    if(best!==last){ last=best; cv.__hover = best; cv.__redraw && cv.__redraw(); }
+  });
+  cv.addEventListener('mouseleave', ()=>{ last=null; cv.__hover=null; cv.__redraw && cv.__redraw(); });
+}
+
+/* ── plate 1: three layouts ───────────────────────────────────────────────── */
+const cLay = document.getElementById('c-layouts');
+const LAYOUTS = {
+  random: DATA.nodes.map(d => [d.hi[7], d.hi[19]]),   // two arbitrary directions, not curated
+  pca:    DATA.nodes.map(d => d.pca),
+  force:  DATA.nodes.map(d => d.force),
+};
+const NOTE = {
+  random:'two arbitrary directions — structure is present but scrambled',
+  pca:'the two highest-variance directions — 8.3% of the total',
+  force:'graph edges as springs; the vectors are never consulted',
+};
+let curLay = 'pca', layPts = null;
+function drawLay(){
+  layPts = plot(cLay, LAYOUTS[curLay], {hover: cLay.__hover});
+  document.getElementById('lay-note').textContent = NOTE[curLay];
+}
+cLay.__redraw = drawLay;
+hoverable(cLay, ()=>layPts);
+for(const k of ['random','pca','force']){
+  document.getElementById('lay-'+k).addEventListener('click', ()=>{
+    curLay = k;
+    for(const j of ['random','pca','force'])
+      document.getElementById('lay-'+j).setAttribute('aria-pressed', String(j===k));
+    drawLay();
+  });
+}
+
+/* ── t-SNE, implemented here ──────────────────────────────────────────────── */
+function pairwiseSq(X){
+  const n=X.length, D=new Float64Array(n*n);
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+    let s=0; const a=X[i], b=X[j];
+    for(let d=0;d<a.length;d++){ const t=a[d]-b[d]; s+=t*t; }
+    D[i*n+j]=s; D[j*n+i]=s;
+  }
+  return D;
+}
+// Per-point Gaussian width, binary-searched so each point has the SAME effective neighbour count.
+// This is the step that stops dense regions from dominating.
+function conditionalP(D, n, perp){
+  const P = new Float64Array(n*n), logU = Math.log(perp);
+  for(let i=0;i<n;i++){
+    let beta=1, lo=-Infinity, hi=Infinity;
+    for(let t=0;t<60;t++){
+      let sum=0, H=0;
+      for(let j=0;j<n;j++){ if(i===j){continue;} const p=Math.exp(-D[i*n+j]*beta); P[i*n+j]=p; sum+=p; }
+      sum = sum||1e-12;
+      for(let j=0;j<n;j++){ if(i===j) continue; H += D[i*n+j]*P[i*n+j]; }
+      H = Math.log(sum) + beta*H/sum;                       // Shannon entropy of the row
+      if(Math.abs(H-logU) < 1e-5) break;
+      if(H > logU){ lo=beta; beta = hi===Infinity ? beta*2 : (beta+hi)/2; }
+      else        { hi=beta; beta = lo===-Infinity ? beta/2 : (beta+lo)/2; }
+    }
+    let sum=0; for(let j=0;j<n;j++) if(i!==j) sum+=P[i*n+j];
+    sum = sum||1e-12;
+    for(let j=0;j<n;j++) if(i!==j) P[i*n+j] /= sum;
+  }
+  return P;
+}
+function symmetrize(P, n){
+  const Q = new Float64Array(n*n);
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) Q[i*n+j] = (P[i*n+j]+P[j*n+i])/(2*n);
+  return Q;
+}
+class TSNE{
+  constructor(X, perp){
+    this.n = X.length;
+    this.P = symmetrize(conditionalP(pairwiseSq(X), this.n, perp), this.n);
+    this.Y = []; this.gains=[]; this.vel=[];
+    for(let i=0;i<this.n;i++){                                // deterministic init: reproducible runs
+      this.Y.push([Math.sin(i*12.9898)*1e-2, Math.cos(i*78.233)*1e-2]);
+      this.gains.push([1,1]); this.vel.push([0,0]);
+    }
+    this.iter = 0;
+  }
+  step(){
+    const n=this.n, Y=this.Y;
+    // low-D affinities under a Student-t with 1 dof — the fat tails that fix crowding
+    const num = new Float64Array(n*n); let Z=0;
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+      const dx=Y[i][0]-Y[j][0], dy=Y[i][1]-Y[j][1];
+      const q = 1/(1+dx*dx+dy*dy);
+      num[i*n+j]=q; num[j*n+i]=q; Z += 2*q;
+    }
+    Z = Z||1e-12;
+    const exag = this.iter < 100 ? 12 : 1;                    // early exaggeration
+    const grad = [];
+    for(let i=0;i<n;i++){
+      let gx=0, gy=0;
+      for(let j=0;j<n;j++){
+        if(i===j) continue;
+        const p = this.P[i*n+j]*exag, q = num[i*n+j]/Z;
+        const m = 4*(p-q)*num[i*n+j];
+        gx += m*(Y[i][0]-Y[j][0]); gy += m*(Y[i][1]-Y[j][1]);
+      }
+      grad.push([gx,gy]);
+    }
+    const mom = this.iter < 250 ? 0.5 : 0.8, eta = 200;
+    for(let i=0;i<n;i++) for(let d=0;d<2;d++){
+      const g = grad[i][d], v = this.vel[i][d];
+      this.gains[i][d] = Math.max(0.01, (Math.sign(g)===Math.sign(v)) ? this.gains[i][d]*0.8 : this.gains[i][d]+0.2);
+      this.vel[i][d] = mom*v - eta*this.gains[i][d]*g;
+      this.Y[i][d] += this.vel[i][d];
+    }
+    // recentre so the picture does not drift off the plate
+    let mx=0,my=0; for(let i=0;i<n;i++){mx+=Y[i][0];my+=Y[i][1];}
+    mx/=n; my/=n; for(let i=0;i<n;i++){Y[i][0]-=mx;Y[i][1]-=my;}
+    this.iter++;
+  }
+}
+const cTsne = document.getElementById('c-tsne');
+let tsne=null, tsnePts=null, running=false, raf=null;
+function drawTsne(){
+  tsnePts = plot(cTsne, tsne ? tsne.Y : HI.map(v=>[v[0],v[1]]), {hover: cTsne.__hover});
+  document.getElementById('tsne-stat').textContent =
+    tsne ? ('iteration ' + tsne.iter + (tsne.iter<100 ? '  ·  early exaggeration on' : '')) : 'iteration 0';
+}
+cTsne.__redraw = drawTsne;
+hoverable(cTsne, ()=>tsnePts);
+function newTsne(){
+  tsne = new TSNE(HI, Number(document.getElementById('tsne-perp').value));
+  drawTsne();
+}
+function loop(){
+  if(!running) return;
+  const budget = reduced ? 12 : 4;             // reduced-motion: fewer frames, same result
+  for(let i=0;i<budget;i++) tsne.step();
+  drawTsne();
+  if(tsne.iter >= 600){ running=false; document.getElementById('tsne-run').textContent='Run t-SNE'; measure(); return; }
+  raf = requestAnimationFrame(loop);
+}
+document.getElementById('tsne-run').addEventListener('click', ()=>{
+  if(!tsne) newTsne();
+  running = !running;
+  document.getElementById('tsne-run').textContent = running ? 'Pause' : 'Run t-SNE';
+  if(running) loop();
+});
+document.getElementById('tsne-reset').addEventListener('click', ()=>{
+  running=false; cancelAnimationFrame(raf);
+  document.getElementById('tsne-run').textContent='Run t-SNE';
+  newTsne();
+});
+document.getElementById('tsne-perp').addEventListener('input', e=>{
+  document.getElementById('tsne-perp-v').textContent = e.target.value;
+  running=false; cancelAnimationFrame(raf);
+  document.getElementById('tsne-run').textContent='Run t-SNE';
+  newTsne();
+});
+
+/* ── neighbourhood preservation ───────────────────────────────────────────── */
+function knnOf(pts, k){
+  const n=pts.length, out=[];
+  for(let i=0;i<n;i++){
+    const d=[];
+    for(let j=0;j<n;j++){ if(i===j) continue;
+      let s=0; const a=pts[i], b=pts[j];
+      for(let t=0;t<a.length;t++){ const q=a[t]-b[t]; s+=q*q; }
+      d.push([s,j]);
+    }
+    d.sort((p,q)=>p[0]-q[0]);
+    out.push(new Set(d.slice(0,k).map(p=>p[1])));
+  }
+  return out;
+}
+function preservation(pts, truth, k){
+  const got = knnOf(pts, k);
+  let tot=0;
+  for(let i=0;i<got.length;i++){ let c=0; for(const j of got[i]) if(truth[i].has(j)) c++; tot += c/k; }
+  return tot/got.length;
+}
+const cKnn = document.getElementById('c-knn');
+let knnResults = null;
+function measure(){
+  const k = Number(document.getElementById('knn-k').value);
+  const truth = knnOf(HI, k);                     // "truth" = neighbours in the 30-d PCA space
+  const rows = [
+    ['Arbitrary 2 dims', preservation(LAYOUTS.random, truth, k)],
+    ['PCA', preservation(LAYOUTS.pca, truth, k)],
+    ['Force layout (edges only)', preservation(LAYOUTS.force, truth, k)],
+  ];
+  if(tsne) rows.push(['t-SNE', preservation(tsne.Y, truth, k)]);
+  rows.push(['Chance', k/(N-1)]);
+  knnResults = rows;
+  drawKnn();
+  document.getElementById('knn-stat').textContent =
+    'k = ' + k + (tsne ? '' : '  ·  run t-SNE above to include it');
+}
+function drawKnn(){
+  const ctx = cKnn.getContext('2d'), w=cKnn.width, h=cKnn.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle=css('--surface'); ctx.fillRect(0,0,w,h);
+  if(!knnResults) return;
+  const rows = knnResults, padL=250, padR=90, top=26, bh=30, gap=14;
+  const max = Math.max(0.05, ...rows.map(r=>r[1]));
+  ctx.font='14px -apple-system, Helvetica Neue, Arial, sans-serif';
+  rows.forEach((r,i)=>{
+    const y = top + i*(bh+gap);
+    ctx.fillStyle=css('--muted'); ctx.textAlign='right';
+    ctx.fillText(r[0], padL-14, y+bh/2+5);
+    const bw = Math.max(2, (w-padL-padR) * r[1]/max);
+    ctx.fillStyle = r[0]==='Chance' ? css('--loss') : css('--accent');
+    ctx.globalAlpha = r[0]==='Chance' ? .5 : 1;
+    ctx.beginPath(); ctx.roundRect(padL, y, bw, bh, 3); ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.fillStyle=css('--ink'); ctx.textAlign='left';
+    ctx.font='600 14px ui-monospace, Menlo, monospace';
+    ctx.fillText((100*r[1]).toFixed(1)+'%', padL+bw+10, y+bh/2+5);
+    ctx.font='14px -apple-system, Helvetica Neue, Arial, sans-serif';
+  });
+}
+document.getElementById('knn-k').addEventListener('input', e=>{
+  document.getElementById('knn-k-v').textContent = e.target.value;
+  document.getElementById('chance-level').textContent =
+    (100*Number(e.target.value)/(N-1)).toFixed(0)+'%';
+});
+document.getElementById('knn-go').addEventListener('click', measure);
+
+/* ── boot + theme reactivity ──────────────────────────────────────────────── */
+document.getElementById('chance-level').textContent = (100*10/(N-1)).toFixed(0)+'%';
+drawLay(); drawTsne(); measure();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{ drawLay(); drawTsne(); drawKnn(); });
+new MutationObserver(()=>{ drawLay(); drawTsne(); drawKnn(); })
+  .observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+</script>
