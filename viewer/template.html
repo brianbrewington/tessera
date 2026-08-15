@@ -805,15 +805,27 @@ function tightestSpacing(pts){
   const grid=new Map();
   pts.forEach((p,i)=>{ const k=Math.floor(p[0]/cell)+','+Math.floor(p[1]/cell);
     if(!grid.has(k)) grid.set(k,[]); grid.get(k).push(i); });
+  // EXPANDING RING SEARCH, not a fixed 3x3. Found by review: cells are span/max(8,sqrt(n)) wide, so on a
+  // small or globally-sparse set the true nearest neighbour is several cells away, a 3x3 scan finds nothing,
+  // the function returns null, and the zoom ceiling collapses to 8x — precisely after you have zoomed into a
+  // clump and hidden everything else. Growing the ring until something is found makes this match its spec
+  // rather than merely agree with brute force on dense clouds, which is the only case the first test covered.
+  const span2=Math.max(1, Math.ceil(span/cell));
   const nn=[];
   pts.forEach((p,i)=>{
     let best=Infinity; const gx=Math.floor(p[0]/cell), gy=Math.floor(p[1]/cell);
-    for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++)
-      for(const j of (grid.get((gx+dx)+','+(gy+dy))||[])){
-        if(i===j) continue;
-        const d=Math.hypot(p[0]-pts[j][0], p[1]-pts[j][1]);
-        if(d>1e-3 && d<best) best=d;          // >1e-3 skips coincident pairs, which zoom cannot help
+    for(let r=1; r<=span2+1; r++){
+      for(let dx=-r;dx<=r;dx++) for(let dy=-r;dy<=r;dy++){
+        if(r>1 && Math.max(Math.abs(dx),Math.abs(dy))!==r) continue;   // only the new ring
+        for(const j of (grid.get((gx+dx)+','+(gy+dy))||[])){
+          if(i===j) continue;
+          const d=Math.hypot(p[0]-pts[j][0], p[1]-pts[j][1]);
+          if(d>1e-3 && d<best) best=d;        // >1e-3 skips coincident pairs, which zoom cannot help
+        }
       }
+      // A hit inside ring r can still be beaten by one in ring r+1, so take one more ring before stopping.
+      if(Number.isFinite(best) && best <= r*cell) break;
+    }
     if(Number.isFinite(best)) nn.push(best);
   });
   if(!nn.length) return null;
@@ -1363,8 +1375,8 @@ function acceptLayout(){
   appliedIds = pending.ids.slice();
   pending=null;
   recomputeZoomCeiling();          // a new layout means new spacing, and t-SNE's is far tighter
-  draw();
-  fitAll();                       // the optimiser normalises to its own radius; bring the camera with it
+  fitAll();                        // move the camera BEFORE painting, or the first frame shows the old view
+  draw();                       // the optimiser normalises to its own radius; bring the camera with it
 }
 function discardLayout(){
   if(layoutRun){ layoutRun.stop=true; layoutRun=null; }
@@ -1606,10 +1618,16 @@ function renderLayoutCtl(box){
 
   // Persisting is its OWN act, available only once a layout is actually on screen and only when served.
   // A control that writes geometry as a side effect of being dragged would be the wrong contract entirely.
+  // Coverage is judged against EVERY node, not merely the embeddable ones, because Save writes the whole
+  // coordinate field and a partial write is the tear. But a mute disabled button is its own defect — found by
+  // review — so when nodes lack vectors the control says so instead of just refusing.
+  const noVec = nodes.filter(n=>!EMB[n.id]).length;
   const fullCover = layoutCoversAll(appliedIds, nodes.map(n=>n.id));
   if(SERVED && appliedIds && !pending){
     const sb=document.createElement('button');
-    sb.textContent = fullCover ? 'Save this layout to the graph' : 'Cannot save — layout covered only part of the graph';
+    sb.textContent = fullCover ? 'Save this layout to the graph'
+      : noVec ? ('Cannot save — '+noVec+' node(s) have no vector to lay out')
+      : 'Cannot save — layout covered only part of the graph';
     sb.disabled = !fullCover;
     sb.style.cssText='width:100%;margin-top:6px;font-size:11px;padding:5px 6px;border-radius:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);cursor:'+(fullCover?'pointer':'default')+(fullCover?'':';opacity:.5');
     if(fullCover) sb.onclick=async ()=>{

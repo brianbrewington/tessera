@@ -417,3 +417,58 @@ describe("the geometric falloff generator (Matthew's shape)", () => {
     }
   });
 });
+
+describe("tightestSpacing on SPARSE and SMALL visible sets (found by Grok)", () => {
+  const tightest = new Function(
+    `${TPL.match(/function tightestSpacing\(pts\)\{[\s\S]*?\n\}/)![0]}; return tightestSpacing;`,
+  )() as (pts: number[][]) => number | null;
+
+  // The grid sizes cells as span / max(8, sqrt(n)), then searches only the 3x3 Moore neighbourhood. For a
+  // small or globally-sparse set the true nearest neighbour is more than one cell away, so nothing is found
+  // and the function returns null — collapsing the zoom ceiling back to 8x precisely when you have zoomed
+  // into a clump and hidden everything else. My earlier brute-force cross-check passed only because I chose
+  // a dense distribution; that is the test being decorative about its own coverage.
+
+  it("finds the neighbour in a TWO-point graph", () => {
+    expect(tightest([[0, 0], [10, 0]])).toBeCloseTo(10, 6);
+  });
+
+  it("finds it in a small equilateral triangle", () => {
+    const h = Math.sqrt(3) / 2;
+    const s = tightest([[0, 0], [1, 0], [0.5, h]]);
+    expect(s).not.toBeNull();
+    expect(s!).toBeCloseTo(1, 6);
+  });
+
+  it("finds it in a sparse handful — the state after hiding provenance mid-zoom", () => {
+    const pts = [[0, 0], [400, 10], [-380, 260], [120, -500], [700, 640]];
+    const s = tightest(pts);
+    expect(s).not.toBeNull();
+    // brute force, so the assertion is the answer rather than a guess
+    let best = Infinity;
+    for (let i = 0; i < pts.length; i++)
+      for (let j = 0; j < pts.length; j++) {
+        if (i === j) continue;
+        const d = Math.hypot(pts[i]![0]! - pts[j]![0]!, pts[i]![1]! - pts[j]![1]!);
+        if (d > 1e-3 && d < best) best = d;
+      }
+    expect(s!).toBeCloseTo([...Array(pts.length)].length ? best : 0, 4);
+  });
+
+  it("agrees with brute force on a SPARSE random set too, not just a dense one", () => {
+    const pts: number[][] = [];
+    for (let i = 0; i < 40; i++) pts.push([Math.sin(i * 2.1) * 9000, Math.cos(i * 5.7) * 9000]);
+    const nn: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      let best = Infinity;
+      for (let j = 0; j < pts.length; j++) {
+        if (i === j) continue;
+        const d = Math.hypot(pts[i]![0]! - pts[j]![0]!, pts[i]![1]! - pts[j]![1]!);
+        if (d > 1e-3 && d < best) best = d;
+      }
+      if (Number.isFinite(best)) nn.push(best);
+    }
+    nn.sort((a, b) => a - b);
+    expect(tightest(pts)).toBeCloseTo(nn[Math.floor(0.02 * (nn.length - 1))]!, 4);
+  });
+});
