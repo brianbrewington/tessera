@@ -807,10 +807,18 @@ diagnosis was register homogeneity: one model, one voice, one system, one regist
 constant rides on every description and swamps what distinguishes them. Separation between true duplicates
 and confusable non-duplicates collapses from 0.516 to 0.197.
 
-Brian's idea is a direct attack on that constant. **If several different models describe the same node, their
-shared component is no longer a single model's voice.** Whatever survives across a qwen description, a gemma
-description and a phi4 description is more likely to be the thing itself. The shared-voice vector partially
-cancels; the referent does not.
+**CORRECTION (2026-08-15), because this paragraph was wrong and it was mine.** I originally wrote: *"If
+several different models describe the same node, their shared component is no longer a single model's voice.
+The shared-voice vector partially cancels; the referent does not."* That does not follow, and the variance
+decomposition shows why. Write each model's embedding as *signal + shared-register component +
+model-specific noise*. Averaging across models cancels the **model-specific** term — that is the entire
+mechanism by which ensembles help. But the register component is **not model-specific noise; it is in the
+input text**. Every model reads the same description, every model encodes the same stylistic regularity, and
+every model's embedding contains it with the same sign. Averaging preserves it exactly, and ensembling more
+decorrelated models makes it *relatively more* dominant by removing the only term that was diluting it.
+
+So multi-model description does not attack the register constant. It may still be worth doing for the
+agreement-as-evidence reason below, but not for this one.
 
 That also connects to the `analogy_maker` instance's batching hypothesis (`docs/notes/`): our extractor emits
 8-20 entities per call, so every description in the corpus is batch-generated, and they measured causally that

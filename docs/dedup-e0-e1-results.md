@@ -444,3 +444,51 @@ exactly as instructed. But the model redistributed rather than shrank: fewer cha
 **14% more entities**. The output budget moved sideways. Worth carrying as the general form: when you
 constrain one dimension of generated output, check what expanded, not just whether the constrained thing
 shrank.
+
+---
+
+# E5 — All-but-the-Top does not recover the missing recall (2026-08-15)
+
+**Tested because a literature survey said it should.** E1 found name+description recovers 0.169 of known
+duplicates at a zero-false-positive floor against name-only's 0.846, and diagnosed *register homogeneity*: one
+model, one voice, one register, so a large shared component rides on every description. That diagnosis has a
+named, cheap, well-evidenced fix — Mu &amp; Viswanath's **All-but-the-Top** (ICLR 2018): subtract the common
+mean and the top few dominating directions. Ethayarajh (EMNLP 2019) established these spaces are anisotropic;
+Su et al. (arXiv:2103.15316) show whitening helps retrieval.
+
+Run directly on the stored vectors against E0's frozen label sets:
+
+| dominating directions removed | zero-FP floor | P-variant recall @ FP=0 |
+|---|---|---|
+| 0 (common mean removed only) | 0.7767 | **0.185** |
+| 1 | 0.7772 | 0.177 |
+| 3 | 0.7780 | 0.162 |
+| 5 | 0.7726 | 0.138 |
+| 12 | 0.7495 | 0.154 |
+
+**It does not work.** Removing the common mean buys +0.016 over E1's raw 0.169. Removing dominating
+directions beyond that makes things *worse*, monotonically at first. Nothing here closes a gap of 0.68.
+
+*Note on the baseline:* the k=0 row already has the common mean subtracted, so 0.185 is mean-removed rather
+than raw. The raw number remains E1's 0.169.
+
+### What the negative result implies
+
+Anisotropy is a real property of these spaces and All-but-the-Top is a real fix for it. That it fails here
+says the problem **is not a low-rank nuisance direction**, which in turn says the register diagnosis was
+right about the cause and wrong about the shape.
+
+The likelier mechanism, and it is simpler: **a description is roughly an order of magnitude more text than a
+name.** The name contributes a small share of the tokens, so the vector is mostly *about the description*.
+That is not a few directions to subtract; it is a mixing ratio. No amount of direction-removal recovers a
+signal that was diluted by volume.
+
+Which predicts the fix that does work, and it is already measured. Entity-resolution practice
+(Ditto, PVLDB 2020; DeepMatcher, SIGMOD 2018) does **not** fuse fields into one vector and take a cosine — it
+scores fields as **separate channels** and combines the scores. E1's own table is that experiment: name as its
+own channel recovers 0.846. So the standing recommendation stands and is now better founded: a second,
+cheap, name-only index for identity candidates, with the description kept for the job it is actually good at
+(topical neighbourhood, which is what layout and the Connector want).
+
+**Disposition: the register hypothesis is RETAINED as a description of the cause and REFUTED as a low-rank
+phenomenon. All-but-the-Top is DISMISSED for this use with the numbers above.**
