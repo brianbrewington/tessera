@@ -402,6 +402,54 @@ function toWorld(px,py){ return [(px-ox)/scale, (py-oy)/scale]; }
 // --- interaction state (no node dragging) ---
 let hoverNode=null, hoverEdge=null, selected=null, panning=false, lastX=0, lastY=0, downX=0, downY=0;
 
+// --- FOCUS: what is under consideration when a node is selected ------------------------------------------
+// The direct neighbourhood, used both for drawing and — importantly — for INTERACTION. Once a node is
+// selected the rest of the map becomes inert: unrelated edges stop responding to the pointer, so studying a
+// neighbourhood no longer means fighting hover targets that belong to something else. You leave by clicking
+// empty space, which is a deliberate act rather than an accident of where the mouse drifted.
+function computeFocus(){
+  return selected ? new Set([selected.id, ...EDGES.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
+}
+const edgeIsFocused = e => selected && (e.a===selected || e.b===selected);
+
+// --- HOP DISTANCE (Matthew's idea): let the GRAPH give the opacity ---------------------------------------
+// BFS from the selected node, so a node's dimming is its distance in the structure rather than a flat
+// in/out. Recomputed only when the selection changes, not per frame.
+let hopMap = null, hopFor = null;
+function computeHops(){
+  hopFor = selected; hopMap = null;
+  if(!selected) return;
+  const adj = new Map();
+  for(const e of EDGES){
+    if(!adj.has(e.a.id)) adj.set(e.a.id, []);
+    if(!adj.has(e.b.id)) adj.set(e.b.id, []);
+    adj.get(e.a.id).push(e.b.id); adj.get(e.b.id).push(e.a.id);
+  }
+  const d = new Map([[selected.id, 0]]);
+  let frontier = [selected.id];
+  // "skipping nodes in BFS that are already set" — Matthew's note, and it is what makes BFS give the
+  // SHORTEST hop count rather than whichever path happened to arrive.
+  while(frontier.length){
+    const next = [];
+    for(const id of frontier) for(const nb of (adj.get(id)||[]))
+      if(!d.has(nb)){ d.set(nb, d.get(id)+1); next.push(nb); }
+    frontier = next;
+  }
+  hopMap = d;
+}
+// Opacity per hop. Brian's refinement of Matthew's idea, and the perceptual evidence is why: a multiplicative
+// per-hop decay (1.0, 0.5, 0.25, …) spends its first and largest step entirely inside the dead band, where
+// Harrison et al. and Aboelsaadat & Balakrishnan both found the interference curve is flat — so hop 1 would
+// LOOK dimmed and read as undimmed. Instead the hop index shifts a parameter, and that parameter is mapped
+// through a function whose range is the band that actually carries signal.
+function hopAlpha(h){
+  if(h===undefined || h===null) return BG_LO;     // unreachable: the floor, still present, still clickable
+  if(h <= 1) return 1;                            // the node and what it touches stay fully present
+  const t = Math.min(1, (h-2)/3);                 // hop 2 -> 0.20, hop 5+ -> 0.10, all inside the usable band
+  return BG_HI - (BG_HI-BG_LO)*t;
+}
+let focusMode = 'neighbours';                     // 'neighbours' = flat dim (original) | 'hops' = structural
+
 // --- semantic zoom: typography as altitude. The tier (from camera zoom) sets which nodes label AND how the type
 // reads — tracking is the altimeter (shrinks as you descend), family marks the register (serif=land, sans=
 // settlement, mono=evidence), ink contrast rises as you go lower. Continent cluster-labels are DEFERRED (no
@@ -469,13 +517,22 @@ function draw(){
     for(let x=x0;x<W;x+=step){ ctx.moveTo(x,0); ctx.lineTo(x,H); }
     for(let y=y0;y<H;y+=step){ ctx.moveTo(0,y); ctx.lineTo(W,y); } ctx.stroke();
   }
-  const focusSet = selected ? new Set([selected.id, ...EDGES.filter(e=>e.a===selected||e.b===selected).flatMap(e=>[e.a.id,e.b.id])]) : null;
+  const focusSet = computeFocus();
+  // Lazy, and keyed on the selection itself rather than on a change event — so no assignment site can forget
+  // to invalidate it. computeHops() was written before this line existed and would have left hopMap null,
+  // silently rendering every node at the floor while looking deliberate.
+  if(hopFor !== selected) computeHops();
   // Interim edge treatment: fade + thin when zoomed OUT (edges overlap into a hairball at moderate zoom), firm
   // up as you zoom in. The richer language (rank/weight/kind, bundling) is going to Claude Design.
   const edgeAlpha = Math.max(0.045, Math.min(0.30, 0.16*scale));
   for(const e of EDGES){
     const [ax,ay]=toScreen(e.a.x,e.a.y), [bx,by]=toScreen(e.b.x,e.b.y);
-    const on = e===hoverEdge || (focusSet && (e.a===selected||e.b===selected));
+    const on = e===hoverEdge || edgeIsFocused(e);
+    // In hop mode an edge inherits the dimmer of its two endpoints, so the neighbourhood fades outward as a
+    // connected structure rather than as a ring of lit nodes joined by uniformly grey lines.
+    const hopA = (focusSet && focusMode==='hops' && !on)
+      ? Math.min(hopAlpha(hopMap ? hopMap.get(e.a.id) : undefined), hopAlpha(hopMap ? hopMap.get(e.b.id) : undefined))
+      : null;
     const reson = e.kind==='RESONATES_WITH';
     // Prominence drives BOTH width and opacity — the attention budget made visible, not merely filterable.
     const p = (e.prom===undefined ? 0.5 : e.prom);
@@ -488,7 +545,9 @@ function draw(){
       : (focusSet ? (reson ? 'rgba(58,42,68,'+(0.45+0.55*p).toFixed(3)+')' : 'rgba(26,33,48,'+(0.45+0.55*p).toFixed(3)+')')
       : (reson ? 'rgba(247,118,142,'+Math.min(0.5,pa*1.6)+')' : 'rgba(120,140,180,'+Math.min(0.6,pa)+')'));
     ctx.lineWidth = on ? (1.10 + 1.70*p) : (reson ? 1.1 : (0.35 + 1.45*p));
+    if(hopA !== null){ ctx.globalAlpha = hopA; }
     ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    ctx.globalAlpha = 1;
   }
   for(const n of NODES){
     const [x,y]=toScreen(n.x,n.y), rr=radius(n);
@@ -499,8 +558,16 @@ function draw(){
     // The altitude fade applies ONLY when nothing is focused. Focus already has its own dimming (0.18), and
     // compounding the two drove background context to ~0.009 — the map went black around whatever you clicked,
     // which is worse than the problem being fixed. One dimming system at a time.
-    const a = dim ? 1 : ((n===selected||n===hoverNode||(focusSet&&focusSet.has(n.id))) ? 1 : nodeAlpha(n, tier));
-    const base = dim ? 0.18 : 1;
+    let a, base;
+    if(focusSet && focusMode==='hops'){
+      // Structure gives the opacity directly: one dimming system, driven by hop distance, so there is no
+      // second flat multiplier to compound with (the mistake caught earlier, which drove context to ~0.009).
+      a = (n===selected||n===hoverNode) ? 1 : hopAlpha(hopMap ? hopMap.get(n.id) : undefined);
+      base = 1;
+    } else {
+      a = dim ? 1 : ((n===selected||n===hoverNode||(focusSet&&focusSet.has(n.id))) ? 1 : nodeAlpha(n, tier));
+      base = dim ? 0.18 : 1;
+    }
     // The halo fades QUADRATICALLY while the core fades linearly. The halo is 2.4x the radius and it ADDS
     // across overlapping neighbours, so on a crowded map it — not the core — is what turns 1714 nodes into a
     // uniform grey wash. Killing it early on weak nodes buys most of the clarity at no cost to legibility.
@@ -561,6 +628,13 @@ cv.addEventListener('mousemove', ev=>{
   if(mmDrag){ tip.style.display='none'; hoverNode=hoverEdge=null; return; } // don't hover-flicker while dragging the minimap
   if(panning){ ox+=px-lastX; oy+=py-lastY; lastX=px; lastY=py; return; }
   hoverNode=nodeAt(px,py); hoverEdge=hoverNode?null:edgeAt(px,py);
+  // With a node selected, everything outside its neighbourhood goes INERT. Without this, studying a focused
+  // node means constantly snagging unrelated edges that light up and steal the tooltip.
+  if(selected){
+    const f = computeFocus();
+    if(hoverNode && !f.has(hoverNode.id)) hoverNode = null;
+    if(hoverEdge && !edgeIsFocused(hoverEdge)) hoverEdge = null;
+  }
   if(hoverEdge){ tip.style.display='block'; tip.style.left=(px+12)+'px'; tip.style.top=(py+12)+'px';
     // the reason IS the insight — don't prefix "A ↔ B" (formulaic; the endpoints are already the two nodes it
     // joins). A mono kind+weight line sits above it. Fall back to endpoint names only when there's no reason.
@@ -573,7 +647,22 @@ cv.addEventListener('mousemove', ev=>{
 cv.addEventListener('mousedown', ev=>{ if(ev.button!==0) return; camAnim=null; panning=true; cv.classList.add('dragging'); lastX=downX=ev.clientX; lastY=downY=ev.clientY; });
 addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   const moved = Math.hypot(ev.clientX-downX, ev.clientY-downY) >= 4; // click vs. drag
-  if(panning && !moved){ const n=nodeAt(ev.clientX,ev.clientY); if(n){ walk=[]; openNode(n,false); } else { const e=edgeAt(ev.clientX,ev.clientY); e?openEdge(e):showIdle(); } }
+  if(panning && !moved){
+    const n=nodeAt(ev.clientX,ev.clientY);
+    const e=n?null:edgeAt(ev.clientX,ev.clientY);
+    if(selected){
+      // Locked: only the focused neighbourhood answers a click. Anything else — including an unrelated edge
+      // lying under the pointer — means "I am done here", and releases the selection instead of jumping the
+      // panel somewhere you did not intend to go.
+      const f = computeFocus();
+      if(n && f.has(n.id)) { walk=[]; openNode(n,false); }
+      else if(e && edgeIsFocused(e)) openEdge(e);
+      else showIdle();
+    }
+    else if(n){ walk=[]; openNode(n,false); }
+    else if(e){ openEdge(e); }
+    else showIdle();
+  }
   panning=false; cv.classList.remove('dragging'); });
 // right-click = deep inspect (node or edge)
 cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
@@ -974,6 +1063,21 @@ function renderEdgeCtl(){
   fs.style.cssText='width:100%;margin-top:3px';
   fs.oninput=()=>{ fadeStrength=Number(fs.value)/100; draw(); renderEdgeCtl(); };
   box.appendChild(fs);
+
+  // --- focus dimming: what happens to the REST of the map when you select something.
+  const dl=document.createElement('div'); dl.style.cssText='margin-top:11px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)';
+  dl.textContent='focus dimming'; box.appendChild(dl);
+  const ds=document.createElement('select');
+  ds.style.cssText='width:100%;margin:5px 0 0;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
+  for(const [v,label] of [['neighbours','neighbours only'],['hops','by hop distance']]){
+    const o=document.createElement('option'); o.value=v; o.textContent=label; if(v===focusMode) o.selected=true; ds.appendChild(o);
+  }
+  ds.onchange=()=>{ focusMode=ds.value; draw(); renderEdgeCtl(); };
+  box.appendChild(ds);
+  const dn=document.createElement('div');
+  dn.style.cssText='margin-top:4px;color:var(--faint);font-size:10px;line-height:1.35';
+  dn.textContent = focusMode==='hops' ? 'opacity comes from distance in the graph' : 'one step: neighbours stay, the rest dims';
+  box.appendChild(dn);
 }
 
 // --- DROP TARGET (slice 3). Only active when the page is SERVED — a file:// bundle has no server to post
