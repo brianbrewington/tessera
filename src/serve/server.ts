@@ -42,6 +42,38 @@ export interface ServeStatus {
 }
 
 /** Everything the server needs, injected so tests never need a real graph, LLM, or embedder. */
+/**
+ * Validate a layout payload. EXPORTED so tests can drive the shipped function rather than a copy of it — the
+ * first version of these tests reimplemented this logic inline, which is the decoration the review called out:
+ * it would have kept passing while the real handler drifted.
+ */
+export function validateLayoutPayload(
+  payload: unknown,
+  knownIds?: ReadonlySet<string>,
+): { ok: true; entries: { nodeId: string; x: number; y: number }[] } | { ok: false; error: string } {
+  const p = payload as { positions?: Record<string, [number, number]> } | null;
+  if (!p || typeof p !== "object" || !p.positions || typeof p.positions !== "object" || Array.isArray(p.positions)) {
+    return { ok: false, error: "expected { positions: { id: [x, y] } }" };
+  }
+  const entries = Object.entries(p.positions).map(([nodeId, xy]) => ({
+    nodeId,
+    x: Number((xy as number[] | undefined)?.[0]),
+    y: Number((xy as number[] | undefined)?.[1]),
+  }));
+  if (!entries.length) return { ok: false, error: "no positions" };
+  const bad = entries.find((e) => !Number.isFinite(e.x) || !Number.isFinite(e.y));
+  if (bad) return { ok: false, error: `non-finite position for ${bad.nodeId}` };
+  // Coordinates outside any plausible world are refused too. Finite is not the same as sane: 1e308 passes
+  // Number.isFinite, writes cleanly to SQLite, and renders as a map with one node and 2054 invisible ones.
+  const wild = entries.find((e) => Math.abs(e.x) > 1e7 || Math.abs(e.y) > 1e7);
+  if (wild) return { ok: false, error: `position out of range for ${wild.nodeId}` };
+  if (knownIds) {
+    const unknown = entries.find((e) => !knownIds.has(e.nodeId));
+    if (unknown) return { ok: false, error: `no such node ${unknown.nodeId}` };
+  }
+  return { ok: true, entries };
+}
+
 export interface ServeDeps {
   /** Persist a layout the user explored and accepted. Explicit act; never a side effect of a control. */
   writeLayout: (payload: unknown) => { ok: boolean; written?: number; error?: string };

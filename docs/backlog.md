@@ -1109,3 +1109,47 @@ model does not, and it is the same quantity the surprise map above wants for its
 **Disposition: PARKED as a research thread, with the method identified.** Not a tessera feature. The
 playable version lives in the sequel tutorial as a teaching device, and the honest framing there is
 Shannon's guessing game rather than "be a transformer".
+
+---
+
+## Cross-agent review of the layout work (Grok + Composer, 2026-08-15) — dispositions
+
+Both reviewers led with the same **structural objection**, and it deserves recording rather than burying:
+*the viewer should not be a layout engine.* Their argument: it turns a display surface that must also run as
+`file://` into a geometry editor, and that single choice produces the 700KB payload, the O(n²) main-thread
+optimiser, the per-request projection, and a PUT that can overwrite the only stored positions. Their proposed
+cut: layout stays a CLI/server job writing **named** layouts; the viewer switches between stored ones.
+
+**Disposition: ACCEPTED IN PRINCIPLE, DEFERRED IN PRACTICE, with the reason stated.** They are right that
+named layouts is the better end state, and "there is no disk undo" is the sharpest version of the argument.
+What the current shape buys is the thing Brian actually asked for — turning a knob and *seeing* the result —
+and a CLI round-trip does not deliver that. So the guards below make the destructive path safe, and named
+layouts is recorded as the next move rather than pretended away. **Revisit when** a second layout is worth
+keeping at the same time as the first; that is the moment overwrite stops being tolerable.
+
+### Fixed, each with a test that failed first
+
+| # | Finding | Fix |
+|---|---|---|
+| G1 | **Save could tear the map.** Layout ran over visible+embedded nodes; save wrote *every* node. Hide provenance, compute, apply, save, and the graph is permanently half t-SNE and half CLI coordinates. No malice, no divergence — the happy path with `h` pressed. | Layout now runs over **all** nodes with vectors; `layoutCoversAll` compares id **sets** (not counts) and Save is refused and relabelled unless coverage is total. |
+| G2 | **Undo after save was a lie.** Undo is in-memory; save is a PUT. Apply → Save → Undo left the screen showing one thing and the database another. | A successful save clears the undo stack and says so. Nothing offers to undo a write it cannot reach. |
+| G3/C3 | **Hop distances went stale** when the edge budget or `h` changed `EDGES` under a held selection, while the interaction lock followed the new edges. Bright-but-inert nodes. | `edgeEpoch` bumped in `rebuild()`; hop cache keyed on `(selected, edgeEpoch)`. *Found independently before the reviews came back.* |
+| G6/C2 | **NaN could reach the canvas.** `STEP_MAX` bounds a step, not a NaN (`NaN > STEP_MAX` is false), and `writeBack` turns a NaN radius into NaN coordinates. | `layoutIsFinite` gates Apply, and also refuses a collapsed result, which is finite and equally useless. |
+| C1 | **`writeLayout` never validated ids** though its comment claimed it did. Unknown ids deferred to `putLayoutBatch`: opaque failure, or a partial write reported as success. | Validation extracted to an exported `validateLayoutPayload`, checked against the graph's real id set, plus an out-of-range check because `Number.isFinite(1e308)` is `true`. |
+| G5/C1 | **The tests cloned the validator** instead of calling it — decoration that would keep passing as the handler drifted. | `test/serve-layout.test.ts` drives the shipped function. |
+| C4 | **Right-click bypassed the interaction lock.** Left-click was gated, `contextmenu` was not, so deep-inspect could jump outside the focused neighbourhood. | Gated identically. |
+| G7 | **Apply did not move the camera**, so a computed layout could land off-screen and read as "Compute failed". | `fitAll()` frames the result. |
+| G8 | **Sliders stayed live after Compute**, so they described a run that Apply would not perform. | Params freeze while a computed layout awaits a decision. |
+| G9 | `FRAME_MS = 24` exceeded a 16ms frame while claiming responsiveness. | 10ms. |
+| G10/C6 | A comment still said there was no layout endpoint and nothing wrote the database, in the same file that added both. | Rewritten. |
+| G/C | **Projection recomputed on every page load** (~63M multiply-adds per reload, before anyone touches layout). | Memoised on the node-id set, so an ingest correctly invalidates it. |
+
+### Not fixed, with reasons
+
+- **Worker-based optimiser.** Real, and the right answer at scale. Deferred: `file://` has no server to fall
+  back on, and a Blob worker is a second code path for a feature whose value is still unproven. **Revisit if**
+  the main-thread hitch is actually felt at 2000 nodes with `FRAME_MS = 10`.
+- **Named layouts instead of overwrite.** The structural fix above.
+- **Fade floor now exceeds the perception evidence at the top of the slider.** Deliberate, documented at the
+  constant: the measured band (0.10-0.20) answers "backgrounded but legible", and past 70% this control is
+  answering "remove it". Brian asked for the unlinked mass to go nearly black; at 100% it renders at 0.030.

@@ -1,6 +1,7 @@
 // Export a graph db to a single self-contained HTML viewer (the quine-bundle pattern — portable, offline,
 // no server). Reusable as exportViewer(db, out); also runnable directly: npx tsx scripts/export-viewer.ts [db] [out]
 import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GraphStore } from "../src/store/graphStore.js";
@@ -10,6 +11,9 @@ import { FAILING_ATTEMPTS } from "../src/ingest/extract-pending.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TPL = `${here}/../viewer/template.html`;
+
+/** Reduced vectors, memoised on the node-id set. See the note at its use site. */
+const EMBED_CACHE = new Map<string, Record<string, number[]>>();
 
 export function exportViewer(db: string, out: string, name = "graph"): number {
   // Read-only export; the embedder only satisfies the ctor (dim must match the db's vec tables → 768).
@@ -68,6 +72,9 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   // projection is one pass, deterministic under a fixed seed, and preserves pairwise distances well enough
   // for a neighbour-embedding to run on (Johnson-Lindenstrauss) — which is exactly and only what t-SNE needs
   // from its input. The viewer computes its own PCA for INITIALISATION from these 48 dims, which is cheap.
+  // MEMOISED across calls. serve re-exports on EVERY page request, so without this a reload pays ~63M
+  // multiply-adds (1714 x 768 x 48) plus the vector reads, before anyone touches the layout controls. Both
+  // reviewers flagged it. Keyed on the node-id set, so an ingest that adds nodes correctly invalidates it.
   const EDIM = 48;
   const proj: Float32Array[] = [];
   {
@@ -75,13 +82,19 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
     const rnd = (): number => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296 - 0.5; };
     for (let k = 0; k < EDIM; k++) { const v = new Float32Array(768); for (let i = 0; i < 768; i++) v[i] = rnd(); proj.push(v); }
   }
-  const embed: Record<string, number[]> = {};
-  for (const n of nodes) {
-    const v = vecCache.get(n.id);
-    if (!v) continue;
-    const out = new Array<number>(EDIM);
-    for (let k = 0; k < EDIM; k++) { let s2 = 0; const pk = proj[k]!; for (let i = 0; i < v.length; i++) s2 += v[i]! * pk[i]!; out[k] = Number(s2.toFixed(3)); }
-    embed[n.id] = out;
+  const embedKey = createHash("sha256").update(nodes.map((n) => n.id).sort().join("")).digest("hex").slice(0, 16);
+  let embed = EMBED_CACHE.get(embedKey);
+  if (!embed) {
+    embed = {};
+    for (const n of nodes) {
+      const v = vecCache.get(n.id);
+      if (!v) continue;
+      const out = new Array<number>(EDIM);
+      for (let k = 0; k < EDIM; k++) { let s2 = 0; const pk = proj[k]!; for (let i = 0; i < v.length; i++) s2 += v[i]! * pk[i]!; out[k] = Number(s2.toFixed(3)); }
+      embed[n.id] = out;
+    }
+    EMBED_CACHE.clear();          // one graph per process; keep exactly the current one
+    EMBED_CACHE.set(embedKey, embed);
   }
 
   const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty, embed }).replace(/</g, "\\u003c"); // so any '</script>' can't break out

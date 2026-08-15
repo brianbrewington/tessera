@@ -13,6 +13,7 @@ import { extractPending, FAILING_ATTEMPTS } from "../src/ingest/extract-pending.
 import { PROMPT_VERSION } from "../src/extract/extractor.js";
 import { isSupported } from "../src/ingest/adapters.js";
 import { layoutPass } from "../src/layout/pass.js";
+import { validateLayoutPayload } from "../src/serve/server.js";
 import { prominencePass } from "../src/graph/prominence-pass.js";
 import { exportViewer } from "./export-viewer.js";
 import { contentKey } from "../src/scenes/scene.js";
@@ -168,19 +169,16 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
        * enforces both again inside one transaction so a partial apply is impossible.
        */
       writeLayout: (payload: unknown): { ok: boolean; written?: number; error?: string } => {
-        const p = payload as { positions?: Record<string, [number, number]> } | null;
-        if (!p || typeof p !== "object" || !p.positions || typeof p.positions !== "object") {
-          return { ok: false, error: "expected { positions: { id: [x, y] } }" };
-        }
-        const entries = Object.entries(p.positions).map(([nodeId, xy]) => ({ nodeId, x: Number(xy?.[0]), y: Number(xy?.[1]) }));
-        if (!entries.length) return { ok: false, error: "no positions" };
-        const bad = entries.find((e) => !Number.isFinite(e.x) || !Number.isFinite(e.y));
-        if (bad) return { ok: false, error: `non-finite position for ${bad.nodeId}` };
         try {
           const g = Graph.open(opts.name);
           try {
-            const r = g.store.putLayoutBatch(entries, { actor: "serve", cause: `layout accepted from viewer (${opts.name})` });
-            return { ok: true, written: typeof r === "number" ? r : entries.length };
+            // Ids are validated against the graph HERE rather than left to putLayoutBatch, so an unknown id is
+            // a clean 400 naming the offender instead of an opaque throw after the user already applied.
+            const known = new Set(g.store.allNodes().map((n) => n.id));
+            const v = validateLayoutPayload(payload, known);
+            if (!v.ok) return { ok: false, error: v.error };
+            const r = g.store.putLayoutBatch(v.entries, { actor: "serve", cause: `layout accepted from viewer (${opts.name})` });
+            return { ok: true, written: typeof r === "number" ? r : v.entries.length };
           } finally { g.close(); }
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : String(e) };

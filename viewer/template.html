@@ -252,6 +252,7 @@ const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) }
 const isProv = n => n.type==='SOURCE' && (n.group==='chunk' || n.group==='document');
 let showProv = false;
 let NODES=[], EDGES=[], maxDeg=1;
+let edgeEpoch=0;   // bumped by rebuild(); anything caching over EDGES keys on it
 function rebuild(reposition){
   if(reposition===undefined) reposition=true;
   const vis = new Set(nodes.filter(n=>showProv||!isProv(n)));
@@ -284,6 +285,7 @@ function rebuild(reposition){
       i=j+1;
     }
   } else { for(const e of EDGES) e.prom = 0.5; }
+  edgeEpoch++;                     // EDGES has just been replaced — invalidate anything derived from it
   for(const n of NODES) n.deg=0;
   for(const e of EDGES){ e.a.deg++; e.b.deg++; }   // degree over VISIBLE edges → size = semantic connectivity
   maxDeg = Math.max(1, ...NODES.map(n=>n.deg));
@@ -352,6 +354,12 @@ function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Mat
 // This viewer draws discrete marks, so that failure mode does not apply here — but it would if a zoom level
 // ever rendered filled regions.
 const BG_LO = 0.10, BG_HI = 0.20;   // ordering stays legible inside the band; 5/10/20 are distinguishable
+// The evidence band (0.10-0.20) is for "backgrounded but still present". Brian's ask is different — he wants
+// the unlinked mass effectively GONE at altitude, not politely quiet. Those are two intents and the slider
+// should reach both, so its last third pushes the floor BELOW the band, down to 0.03. That is deliberately
+// outside what Harrison et al. and Bartram & Stone measured, and it is outside for a stated reason: their
+// question was legibility of a backgrounded item, and past 70% this control is answering "remove it".
+const BG_MIN = 0.03;
 const KNEE  = 0.7;                  // where the crossing to "present" begins
 
 // HOW HARD to apply the fade, 0..1, user-adjustable like the edge budget. The right aggressiveness is a
@@ -370,8 +378,10 @@ function nodeAlpha(n, tier){
   // still fade faster than the strong, which is the behaviour this was built for) without sitting in the
   // interference peak. Above the knee it CROSSES to present quickly rather than lingering in the 0.25-1.0
   // band where extra resolution is perceptually wasted.
+  // Below 70% the floor is the evidence-backed 0.10; the last third drives it to 0.03.
+  const lo = BG_LO - (BG_LO - BG_MIN) * Math.max(0, (fadeStrength - 0.7) / 0.3);
   const a = belong < KNEE
-    ? BG_LO + (BG_HI - BG_LO) * Math.pow(belong / KNEE, 0.7)
+    ? lo + (BG_HI - lo) * Math.pow(belong / KNEE, 0.7)
     : BG_HI + (1 - BG_HI) * ((belong - KNEE) / (1 - KNEE));
   return 1 - fadeStrength*(1-a);                              // lerp toward "no fade at all"
 }
@@ -427,9 +437,14 @@ const edgeIsFocused = e => selected && (e.a===selected || e.b===selected);
 // --- HOP DISTANCE (Matthew's idea): let the GRAPH give the opacity ---------------------------------------
 // BFS from the selected node, so a node's dimming is its distance in the structure rather than a flat
 // in/out. Recomputed only when the selection changes, not per frame.
-let hopMap = null, hopFor = null;
+// Keyed on the SELECTION AND the edge set. Keying on the selection alone was a bug: rebuild() replaces EDGES
+// whenever the edge-budget slider moves or `h` toggles provenance, and with a node still selected the cached
+// distances then described a structure no longer on screen. That is worse than not dimming, because a wrong
+// dimming still looks authoritative.
+let hopMap = null, hopFor = null, hopEpoch = -1;
+function hopsStale(){ return hopFor !== selected || hopEpoch !== edgeEpoch; }
 function computeHops(){
-  hopFor = selected; hopMap = null;
+  hopFor = selected; hopEpoch = edgeEpoch; hopMap = null;
   if(!selected) return;
   const adj = new Map();
   for(const e of EDGES){
@@ -479,12 +494,13 @@ const TIERS=[
 ];
 function tierFor(s){ for(const t of TIERS) if(s<=t.zmax) return t; return TIERS[TIERS.length-1]; }
 const titleCase=s=>String(s||'').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
-(function(){ const rail=$('altrail'); TIERS.forEach((t,i)=>{ const r=document.createElement('div'); r.className='r'; r.id='alt'+i;
-  const nm=document.createElement('span'); nm.textContent=t.name; nm.style.cssText='font-family:'+t.fam+';font-size:11px;color:'+t.ink;
-  const sb=document.createElement('span'); sb.className='sb'; sb.textContent=t.sub; r.appendChild(nm); r.appendChild(sb); rail.appendChild(r); }); })();
+// The #altrail zoom-tier rail was removed (the top breadcrumb #zcrumb carries the same information), so the
+// code that BUILT it is gone too. Leaving the builder behind is what blanked the page: `$('altrail')` returned
+// null and `rail.appendChild` threw during initial script execution, which aborts the whole module — every
+// later definition, including draw(), never runs. Removing markup means removing everything that reaches for
+// it; a null-check here would merely have hidden a dead feature.
 let lastTi=-1;
-function updateChrome(ti){ for(let i=0;i<TIERS.length;i++) $('alt'+i).classList.toggle('on', i===ti);
-  const rows=$('altrail').querySelectorAll('.r'); if(rows[ti]) $('altdot').style.top=(rows[ti].offsetTop+rows[ti].offsetHeight/2-4)+'px';
+function updateChrome(ti){
   $('zcrumb').textContent = TIERS.slice(0, ti+1).map(t=>t.name).join('  ›  ');
 }
 
@@ -533,7 +549,7 @@ function draw(){
   // Lazy, and keyed on the selection itself rather than on a change event — so no assignment site can forget
   // to invalidate it. computeHops() was written before this line existed and would have left hopMap null,
   // silently rendering every node at the floor while looking deliberate.
-  if(hopFor !== selected) computeHops();
+  if(hopsStale()) computeHops();
   // Interim edge treatment: fade + thin when zoomed OUT (edges overlap into a hairball at moderate zoom), firm
   // up as you zoom in. The richer language (rank/weight/kind, bundling) is going to Claude Design.
   const edgeAlpha = Math.max(0.045, Math.min(0.30, 0.16*scale));
@@ -677,8 +693,14 @@ addEventListener('mouseup', ev=>{ if(ev.button!==0) return;
   }
   panning=false; cv.classList.remove('dragging'); });
 // right-click = deep inspect (node or edge)
-cv.addEventListener('contextmenu', ev=>{ ev.preventDefault(); const n=nodeAt(ev.clientX,ev.clientY);
-  if(n){ walk=[]; openNode(n,true); return; } const e=edgeAt(ev.clientX,ev.clientY); if(e) openEdge(e); });
+cv.addEventListener('contextmenu', ev=>{ ev.preventDefault();
+  // The lock applies here too. Found by review: left-click was gated and right-click was not, so a deep
+  // inspect could still jump to a node outside the focused neighbourhood — the lock was not actually global.
+  const f = selected ? computeFocus() : null;
+  const n=nodeAt(ev.clientX,ev.clientY);
+  if(n){ if(f && !f.has(n.id)) return; walk=[]; openNode(n,true); return; }
+  const e=edgeAt(ev.clientX,ev.clientY);
+  if(e && (!f || edgeIsFocused(e))) openEdge(e); });
 cv.addEventListener('wheel', ev=>{ ev.preventDefault(); camAnim=null; const [wx,wy]=toWorld(ev.clientX,ev.clientY);
   scale*=ev.deltaY<0?1.1:0.9; scale=Math.max(0.12,Math.min(8,scale)); ox=ev.clientX-wx*scale; oy=ev.clientY-wy*scale; }, {passive:false});
 
@@ -696,6 +718,19 @@ function provChunks(n){ return edges.filter(e=>e.a===n && e.kind==='APPEARED_IN'
 function sourcesOf(n){ return [...new Set(provChunks(n).map(l=>{ const m=l.match(/^chunk \d+ of (.+)$/); return m?m[1]:l; }))]; }
 const initialOf=s=>((String(s||'?').trim()[0])||'?').toUpperCase();
 function centerOn(n){ ox=W/2-n.x*scale; oy=H/2-n.y*scale; }
+/**
+ * Frame every visible node. Needed after applying a computed layout: writeBack normalises the optimiser's
+ * output to its own world radius, which has no relation to where the camera was looking at the CLI layout.
+ * Found by review — without this, Apply can drop the whole graph off-screen and read as "Compute failed".
+ */
+function fitAll(){
+  if(!NODES.length) return;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const n of NODES){ if(n.x<x0)x0=n.x; if(n.x>x1)x1=n.x; if(n.y<y0)y0=n.y; if(n.y>y1)y1=n.y; }
+  const w=Math.max(1,x1-x0), h=Math.max(1,y1-y0);
+  scale=Math.max(0.12,Math.min(8, 0.86*Math.min(W/w, H/h)));
+  ox=W/2-((x0+x1)/2)*scale; oy=H/2-((y0+y1)/2)*scale;
+}
 
 function setCrumb(n){ crumb.innerHTML='';
   const prev = walk.length>1 ? byId.get(walk[walk.length-2]) : null;
@@ -1037,9 +1072,9 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML='';
 // The bundle now carries a 48-d random projection of every node's stored vector (see export-viewer.ts), so
 // the viewer can COMPUTE a layout instead of only displaying the one the CLI wrote.
 //
-// SESSION-SCOPED ON PURPOSE. Nothing here writes to the database. There is no layout endpoint on the server,
-// and inventing one to let a slider overwrite stored geometry would be the wrong order of operations: try
-// layouts freely here, and if one earns it, make persisting it a deliberate separate act.
+// COMPUTING AND APPLYING ARE SESSION-SCOPED; PERSISTING IS A SEPARATE, EXPLICIT ACT. Nothing here writes to
+// the database except the Save button, which posts to PUT /layout, is only offered when serving, and is
+// refused unless the applied layout covered every node. Try layouts freely; committing one is a decision.
 const EMB = GRAPH.embed || {};
 let layoutRun = null;                       // the running optimiser, or null
 const undoStack = [];                       // snapshots of {id -> [x,y]}, most recent last
@@ -1149,10 +1184,12 @@ function writeBack(ids, Y){
 // visible map does not move until you say so. The optimiser runs in requestAnimationFrame slices with a frame
 // budget, which keeps panning and hovering responsive while it works.
 let pending = null;    // {ids, t, total, done} — a computed layout awaiting a decision
-const FRAME_MS = 24;   // work budget per frame; the rest of the frame belongs to the UI
+const FRAME_MS = 10;   // under one 16ms frame, so panning stays smooth while the optimiser runs
 
 function startLayout(perp, initMode, onTick){
-  const ids=NODES.filter(n=>EMB[n.id]).map(n=>n.id);
+  // ALL nodes with vectors, not just the visible ones. Laying out only what is on screen is what made a
+  // subset save tear the map, and the stored layout covers every node anyway.
+  const ids=nodes.filter(n=>EMB[n.id]).map(n=>n.id);
   if(ids.length<8) return null;
   const init = initMode==='pca' ? pcaInit(ids) : ids.map(id=>{ const n=nodes.find(x=>x.id===id); return [n.x,n.y]; });
   const t=makeTsne(ids, perp, init);
@@ -1170,11 +1207,42 @@ function startLayout(perp, initMode, onTick){
   requestAnimationFrame(loop);
   return t;
 }
+/**
+ * Did the applied layout cover EVERY node? Found by review: startLayout laid out only visible nodes that have
+ * vectors, while the save handler wrote every node — so hiding provenance and then saving committed a map
+ * half in t-SNE coordinates and half in CLI coordinates, permanently. Compared as SETS, because equal counts
+ * with different ids is exactly how a tear slips through.
+ */
+function layoutCoversAll(applied, all){
+  if(!applied) return false;
+  const a=new Set(applied);
+  if(a.size !== new Set(all).size) return false;
+  for(const id of all) if(!a.has(id)) return false;
+  return true;
+}
+/**
+ * Is a computed layout safe to put on screen? STEP_MAX bounds a step, not a NaN — `NaN > STEP_MAX` is false,
+ * so a NaN gradient still lands in Y, and writeBack then turns it into NaN world coordinates. The server
+ * rejects those on save, but rendering garbage and relying on a later endpoint to object is the wrong order.
+ * A fully collapsed result is finite and equally useless, so it is refused too.
+ */
+function layoutIsFinite(Y){
+  if(!Y || !Y.length) return false;
+  let mx=0,my=0;
+  for(const p of Y){ if(!Number.isFinite(p[0])||!Number.isFinite(p[1])) return false; mx+=p[0]/Y.length; my+=p[1]/Y.length; }
+  let r=0; for(const p of Y) r=Math.max(r, Math.hypot(p[0]-mx,p[1]-my));
+  return Number.isFinite(r) && r > 1e-6;
+}
+let appliedIds = null;      // the id set the last APPLIED layout actually moved
+
 function acceptLayout(){
   if(!pending) return;
+  if(!layoutIsFinite(pending.t.Y)){ layoutStatus='refused: the run produced unusable coordinates'; pending=null; renderEdgeCtl(); return; }
   pushUndo('before t-SNE (perplexity '+pending.perp+', '+pending.initMode+' init)');
   writeBack(pending.ids, pending.t.Y);
+  appliedIds = pending.ids.slice();
   pending=null; draw();
+  fitAll();                       // the optimiser normalises to its own radius; bring the camera with it
 }
 function discardLayout(){
   if(layoutRun){ layoutRun.stop=true; layoutRun=null; }
@@ -1262,13 +1330,13 @@ function renderLayoutCtl(box){
 
   line('<div style="display:flex;justify-content:space-between"><span>perplexity</span><span style="color:var(--faint)">'+layoutPerp+'</span></div>');
   const ps=document.createElement('input'); ps.type='range'; ps.min='5'; ps.max='50'; ps.value=String(layoutPerp);
-  ps.style.cssText='width:100%;margin-top:2px'; ps.disabled=!!layoutRun;
+  ps.style.cssText='width:100%;margin-top:2px'; ps.disabled=!!layoutRun||!!pending;   // a slider moved after Compute would misdescribe what Apply does
   ps.oninput=()=>{ layoutPerp=Number(ps.value); renderEdgeCtl(); };
   gb.appendChild(ps);
 
   const isel=document.createElement('select');
   isel.style.cssText='width:100%;margin-top:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
-  isel.disabled=!!layoutRun;
+  isel.disabled=!!layoutRun||!!pending;
   for(const [v,t] of [['pca','start from PCA — keeps global shape'],['current','start from current positions']]){
     const o=document.createElement('option'); o.value=v; o.textContent=t; if(v===layoutInit) o.selected=true; isel.appendChild(o); }
   isel.onchange=()=>{ layoutInit=isel.value; renderEdgeCtl(); };
@@ -1303,17 +1371,25 @@ function renderLayoutCtl(box){
 
   // Persisting is its OWN act, available only once a layout is actually on screen and only when served.
   // A control that writes geometry as a side effect of being dragged would be the wrong contract entirely.
-  if(SERVED && undoStack.length && !pending){
+  const fullCover = layoutCoversAll(appliedIds, nodes.map(n=>n.id));
+  if(SERVED && appliedIds && !pending){
     const sb=document.createElement('button');
-    sb.textContent='Save this layout to the graph';
-    sb.style.cssText='width:100%;margin-top:6px;font-size:11px;padding:5px 6px;border-radius:6px;cursor:pointer;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2)';
-    sb.onclick=async ()=>{
+    sb.textContent = fullCover ? 'Save this layout to the graph' : 'Cannot save — layout covered only part of the graph';
+    sb.disabled = !fullCover;
+    sb.style.cssText='width:100%;margin-top:6px;font-size:11px;padding:5px 6px;border-radius:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);cursor:'+(fullCover?'pointer':'default')+(fullCover?'':';opacity:.5');
+    if(fullCover) sb.onclick=async ()=>{
       sb.disabled=true; saveMsg='saving…'; renderEdgeCtl();
       const positions={}; for(const n of nodes) positions[n.id]=[n.x,n.y];
       try{
         const r=await fetch('/layout',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({positions})});
         const j=await r.json().catch(()=>({}));
-        saveMsg = r.ok ? ('saved · '+(j.written!=null?j.written:'?')+' positions written') : ('save failed: '+(j.error||r.status));
+        if(r.ok){
+          // Undo is in-memory and cannot reach the database, so after a save the stack would offer to "revert"
+          // to something the graph no longer holds. Clearing it is the honest option: the screen and the disk
+          // agree again, and nothing pretends to undo a write it cannot undo.
+          saveMsg='saved · '+(j.written!=null?j.written:'?')+' positions · undo history cleared';
+          undoStack.length=0;
+        } else saveMsg='save failed: '+(j.error||r.status);
       }catch(e){ saveMsg='save failed: '+e; }
       renderEdgeCtl();
     };
