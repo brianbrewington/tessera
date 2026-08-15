@@ -313,7 +313,35 @@ function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Mat
 // FADING IS NOT FILTERING, and the distinction is load-bearing. nodeAt() hit-tests on radius and never on
 // alpha, so a faint node stays clickable, hoverable and findable, and returns to full strength as you
 // descend. Nothing is removed from the map; the map just stops shouting.
-const TIER_FLOOR = {continent:0.05, country:0.09, region:0.16, city:0.30, district:0.60, building:1};
+// The usable opacity band for a de-emphasized item, and it is much narrower than intuition suggests.
+//
+// Harrison, Ishii, Vicente & Buxton (CHI '95, pp. 317-324) measured interference from a faded item with a
+// Stroop paradigm and found post-hoc groupings of {100, 50, 20} | 10 | 5 | 0. Aboelsaadat & Balakrishnan
+// (British HCI 2004, pp. 53-67, N=16) independently reproduced the same breakpoints nine years later:
+// {100, 75, 50, 25} | {10, 7.5} | {5}. Two consequences that are counterintuitive and that this code got
+// wrong on its first pass:
+//
+//   1. The curve is FLAT from ~25% to 100%. Fading something from 1.0 to 0.5 buys almost nothing. Any
+//      intermediate alpha above 0.25 is perceptually spent for no return.
+//   2. Alpha near 0.5 is close to the PEAK of the interference curve — the most distracting place to put a
+//      de-emphasized item, not a polite middle. The first version of this table parked the `district` tier
+//      at 0.60 and `city` at 0.30, which is precisely the dead zone: it looked like a fade and did nothing.
+//
+// Bartram & Stone (IEEE TVCG 17(10):1444-1458, 2011) asked the boundary-condition question directly and give
+// ~0.1 for backgrounds that are not too dense, 0.2 universally. They name the top-of-range failure the
+// "fence effect": past a threshold, backgrounded structure stops reading as a layer BEHIND the data and
+// starts reading as a barrier in front of it.
+//
+// EXTRAPOLATION, STATED HONESTLY: every measurement above used thin reference structures (grid lines) or
+// Stroop stimuli. Nobody has run this on de-emphasized CONTENT items in a working display. 0.10-0.20 is the
+// best-grounded number available and it is still being applied outside the setting where it was measured.
+// One boundary is known: Mairena, Gutwin & Cockburn (Information Visualization 21(2), 2022) found opacity
+// de-emphasis fails outright on space-filling layouts (max accuracy 0.56 on a HexbinMap at any magnitude).
+// This viewer draws discrete marks, so that failure mode does not apply here — but it would if a zoom level
+// ever rendered filled regions.
+const BG_LO = 0.10, BG_HI = 0.20;   // ordering stays legible inside the band; 5/10/20 are distinguishable
+const KNEE  = 0.7;                  // where the crossing to "present" begins
+
 // HOW HARD to apply the fade, 0..1, user-adjustable like the edge budget. The right aggressiveness is a
 // property of the GRAPH, not of the renderer: a dense well-connected corpus wants little of this, and one
 // that is 72% singletons wants a lot. Rather than guess a constant per corpus, expose the knob. 0 reproduces
@@ -321,12 +349,18 @@ const TIER_FLOOR = {continent:0.05, country:0.09, region:0.16, city:0.30, distri
 let fadeStrength = 1;
 function nodeAlpha(n, tier){
   if(fadeStrength <= 0) return 1;
-  const floor = TIER_FLOOR[tier.name];
-  if(!(floor < 1)) return 1;                                  // building: nothing is dimmed, ever
+  if(tier.name === 'building') return 1;                      // the ground floor: nothing is dimmed, ever
   // `tier.deg` is the degree at which a node BELONGS at this altitude — the same threshold the label budget
-  // already uses, so opacity and labelling now tell the same story instead of two different ones.
+  // already uses, so opacity and labelling tell the same story instead of two different ones.
   const belong = Math.min(1, (n.deg||0) / Math.max(1, tier.deg));
-  const a = floor + (1-floor)*Math.pow(belong, 1.4);          // exponent >1: the weak fade FASTER than the strong
+  // Two regimes, because the perceptual evidence says there are only two useful states. Below the knee a
+  // node is BACKGROUNDED and lives inside 0.10-0.20, where relative ordering is still readable (so the weak
+  // still fade faster than the strong, which is the behaviour this was built for) without sitting in the
+  // interference peak. Above the knee it CROSSES to present quickly rather than lingering in the 0.25-1.0
+  // band where extra resolution is perceptually wasted.
+  const a = belong < KNEE
+    ? BG_LO + (BG_HI - BG_LO) * Math.pow(belong / KNEE, 0.7)
+    : BG_HI + (1 - BG_HI) * ((belong - KNEE) / (1 - KNEE));
   return 1 - fadeStrength*(1-a);                              // lerp toward "no fade at all"
 }
 
