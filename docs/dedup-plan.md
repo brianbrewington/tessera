@@ -41,12 +41,21 @@ no model at all. **We have never measured the thing the project exists to do.**
 
 ## The architecture
 
-### Layer 1 — deterministic string resolution. Ships now, needs no further evidence.
+### Layer 1 — deterministic string resolution. Ships now, **with one guard it did not originally have.**
 
-`GROUP BY strip(norm(name))` over the entity view. Resolves the 277 jitter pairs and 130 variant pairs
-exactly, with no threshold, no embedding, no model, and no risk. testgraph's entity view goes 1714 → ~1394
-with **no stored row touched**, because the mechanism is the read-time resolution view (B27), not a
-destructive merge.
+**CORRECTION 2026-08-15:** the original text called this "no risk". That was wrong in a direction I did not
+check. Verified: **27 groups that `strip(norm(name))` would union contain a person, place or event** —
+`Mother` [person, concept], `Connector` [..., person], `graphs/big` [file, file, place], `SOURCE`
+[concept, other, place]. Those are exactly the subtypes the experiment protocol *excluded* from labelling
+because a genuine sense-split is plausible there, and unioning them silently is a decision, not a no-op.
+
+So Layer 1 unions everything **except** groups touching person / place / event, which are held out as
+**proposed** and surfaced for judgment rather than resolved. That keeps the deterministic layer genuinely
+deterministic and puts the judgment calls where a human can see them.
+
+`GROUP BY strip(norm(name))` over the entity view, minus the held-out groups above. No threshold, no
+embedding, no model. **No stored row is touched**, because the mechanism is a read-time view (B27) rather
+than a destructive merge — which is what makes a wrong grouping correctable instead of permanent.
 
 The E0–E5 run *strengthens* this rather than weakening it: Layer 1 turned out to be sufficient for the entire
 labeled population, which is exactly why nothing above it can currently be validated.
@@ -70,7 +79,34 @@ Three channels, each cheap and each failing differently:
 
 **Do not fuse these into one score by hand-tuned weights.** Keep them separate through Layer 3.
 
-### Layer 3 — agreement across channels is the confidence signal.
+### Layer 3 — agreement across channels. **RETRACTED 2026-08-15, before anything was built.**
+
+**A Fable-class review of this plan found that its evidence is void, and verification confirmed it.** Three
+failures, mine, in a plan I wrote after documenting the exact discipline that should have caught them:
+
+1. **The numbers were already retracted.** Layer 3 quoted E2's two-tier table (0.754/0 and 0.985/3). The
+   2026-08-09 correction voided that table in these words: *"must not be used to set a policy."* I wrote that
+   sentence and then cited the table anyway.
+2. **The claim was also misquoted.** The plan says *"either alone admitted some"*. Cosine alone admitted
+   **zero**. That was in my own results document.
+3. **And at face value it is dominated.** Conjunction gives 0.754 recall at 0 admissions; cosine alone gives
+   **0.846 at 0 admissions**. Strictly better, on one channel. That fires this plan's own falsifier #2
+   verbatim: *"agreement across the free channels performs no better than the best single channel. Then
+   Layer 3 is ornamentation."*
+
+**The mechanism underneath, verified directly:** all **20** of the pairs cosine missed are strip-identical
+(`contentHash`/`content_hash`, `GraphStore`/`Graph Store`). The string channel's entire measured contribution
+lies **inside Layer 1's territory** — it is doing, statistically and expensively, what a `GROUP BY` does
+deterministically and for free. The channels were never shown to fail independently on anything Layer 1
+does not already resolve.
+
+**Disposition: Layer 3 is NOT BUILT and its evidence is withdrawn.** It may be revived only on numbers
+measured against a label set that does not exist yet, and only if agreement beats the best single channel on
+pairs Layer 1 cannot reach. Multiple embeddings ride with it, for the same reason: the "independent route"
+argument has the same shape as the register claim already retracted, and it has not earned a seat on
+evidence.
+
+### Layer 3 (superseded) — the original text, kept for the record
 
 This is Brian's flip, and it earns its seat on evidence rather than appeal:
 
