@@ -1163,7 +1163,7 @@ function pcaInit(ids){
 
 // t-SNE. Same implementation as the projection tutorial, which was verified headless (rows sum to 1, no
 // collapse). Runs over the nodes that are currently VISIBLE, so hiding provenance changes what is laid out.
-function makeTsne(ids, perp, init){
+function makeTsne(ids, perp, init, attraction){
   const n=ids.length, X=ids.map(id=>EMB[id]);
   const Dsq=new Float64Array(n*n);
   for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){ let s=0; const a=X[i],b=X[j];
@@ -1189,7 +1189,7 @@ function makeTsne(ids, perp, init){
   // scale the init small — t-SNE expects to start compact, and a large spread stalls early exaggeration
   const sc=Math.max(1e-6, Math.max(...init.flat().map(Math.abs)));
   const Y=init.map(p=>[p[0]/sc*1e-2, p[1]/sc*1e-2]);
-  return { n, P:Q, Y, gains:Y.map(()=>[1,1]), vel:Y.map(()=>[0,0]), iter:0,
+  return { n, P:Q, Y, attraction: attraction ?? 1, gains:Y.map(()=>[1,1]), vel:Y.map(()=>[0,0]), iter:0,
     step(){
       const {n,Y}=this; const num=new Float64Array(n*n); let Z=0;
       for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
@@ -1200,7 +1200,15 @@ function makeTsne(ids, perp, init){
       // 1.2e+31 within 250 iterations. Two changes, and the clamp is the important one because it is a
       // guarantee rather than a tuning: no single step may move a point further than STEP_MAX, so the
       // optimiser cannot blow up on a corpus whose distance scale differs from the one it was tuned on.
-      const exag=this.iter<100?12:1, mom=this.iter<250?0.5:0.8, eta=50, STEP_MAX=2;
+      //
+      // THE ATTRACTION KNOB. Böhm, Berens & Kobak (arXiv:2007.08902) showed t-SNE, UMAP and ForceAtlas2 are
+      // ONE family separated by how hard the attractive term pulls relative to the repulsive one. The
+      // mechanism was already sitting here: early exaggeration multiplies attraction by 12 for the first 100
+      // iterations and then releases it to 1. Holding it at a chosen value instead of releasing to 1 IS the
+      // spectrum. So `attraction` is not a new algorithm, it is the parameter that was always there with a
+      // constant written into it. 1 is textbook t-SNE; higher pulls toward the continuous, connected
+      // ForceAtlas2 end; lower gives repulsion the upper hand and scatters into islands.
+      const exag=this.iter<100?12:this.attraction, mom=this.iter<250?0.5:0.8, eta=50, STEP_MAX=2;
       for(let i=0;i<n;i++){
         let gx=0,gy=0;
         for(let j=0;j<n;j++){ if(i===j) continue;
@@ -1235,15 +1243,15 @@ function writeBack(ids, Y){
 let pending = null;    // {ids, t, total, done} — a computed layout awaiting a decision
 const FRAME_MS = 10;   // under one 16ms frame, so panning stays smooth while the optimiser runs
 
-function startLayout(perp, initMode, onTick){
+function startLayout(perp, initMode, attraction, onTick){
   // ALL nodes with vectors, not just the visible ones. Laying out only what is on screen is what made a
   // subset save tear the map, and the stored layout covers every node anyway.
   const ids=nodes.filter(n=>EMB[n.id]).map(n=>n.id);
   if(ids.length<8) return null;
   const init = initMode==='pca' ? pcaInit(ids) : ids.map(id=>{ const n=nodes.find(x=>x.id===id); return [n.x,n.y]; });
-  const t=makeTsne(ids, perp, init);
+  const t=makeTsne(ids, perp, init, attraction);
   const total=500;
-  pending={ids, t, total, done:false, perp, initMode};
+  pending={ids, t, total, done:false, perp, initMode, attraction};
   layoutRun={stop:false};
   const loop=()=>{
     if(!layoutRun || layoutRun.stop) return;
@@ -1287,7 +1295,7 @@ let appliedIds = null;      // the id set the last APPLIED layout actually moved
 function acceptLayout(){
   if(!pending) return;
   if(!layoutIsFinite(pending.t.Y)){ layoutStatus='refused: the run produced unusable coordinates'; pending=null; renderEdgeCtl(); return; }
-  pushUndo('before t-SNE (perplexity '+pending.perp+', '+pending.initMode+' init)');
+  pushUndo('before layout (perplexity '+pending.perp+', attraction '+pending.attraction.toFixed(2)+')');
   writeBack(pending.ids, pending.t.Y);
   appliedIds = pending.ids.slice();
   pending=null;
@@ -1362,7 +1370,7 @@ function renderEdgeCtl(){
 }
 
 // --- LAYOUT group: compute off-screen, apply, poke around, then persist if you like it -------------------
-let layoutOpen=false, layoutPerp=10, layoutInit='pca', layoutStatus='', saveMsg='';
+let layoutOpen=false, layoutPerp=10, layoutInit='pca', layoutAttr=1, layoutStatus='', saveMsg='';
 function renderLayoutCtl(box){
   if(!Object.keys(EMB).length) return;                 // an older bundle carries no vectors
   const g=document.createElement('div'); g.className='grp'+(layoutOpen?'':' closed'); g.style.marginTop='13px';
@@ -1385,6 +1393,27 @@ function renderLayoutCtl(box){
   ps.oninput=()=>{ layoutPerp=Number(ps.value); renderEdgeCtl(); };
   gb.appendChild(ps);
 
+  // Attraction, on a log scale because the interesting range is multiplicative: 0.3x to 8x around 1.
+  const AT=[0.3,0.5,0.7,1,1.5,2,3,4,6,8];
+  const ai=AT.indexOf(layoutAttr)<0?3:AT.indexOf(layoutAttr);
+  // Labels describe what was MEASURED on this corpus, not what the paper's framing implied. The first pass
+  // called high attraction "connected (ForceAtlas2 end)"; measuring it showed the opposite reading is the
+  // useful one — raising attraction collapses each cluster toward a point, so spread-over-median-neighbour
+  // distance climbed from 34 at 0.3x to ~59,000 at 8x. Clusters get tighter and more separated, not more
+  // continuous. Böhm et al.'s spectrum is real; the adjective I hung on its far end was not checked.
+  const label = layoutAttr<0.8 ? 'looser, more evenly spread'
+              : layoutAttr===1 ? 'textbook t-SNE'
+              : layoutAttr>=4  ? 'clusters collapse to tight knots'
+              : 'tighter clusters, wider gaps';
+  line('<div style="display:flex;justify-content:space-between;margin-top:7px"><span>attraction</span><span style="color:var(--faint)">'+layoutAttr+'×</span></div>');
+  const as=document.createElement('input'); as.type='range'; as.min='0'; as.max=String(AT.length-1); as.value=String(ai);
+  as.style.cssText='width:100%;margin-top:2px'; as.disabled=!!layoutRun||!!pending;
+  as.oninput=()=>{ layoutAttr=AT[Number(as.value)]; renderEdgeCtl(); };
+  gb.appendChild(as);
+  const al=document.createElement('div');
+  al.style.cssText='margin-top:2px;color:var(--faint);font-size:10px'; al.textContent=label;
+  gb.appendChild(al);
+
   const isel=document.createElement('select');
   isel.style.cssText='width:100%;margin-top:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
   isel.disabled=!!layoutRun||!!pending;
@@ -1402,7 +1431,7 @@ function renderLayoutCtl(box){
   } else {
     bar.appendChild(btn('Compute', ()=>{
       saveMsg=''; layoutStatus='computing…';
-      const ok=startLayout(layoutPerp, layoutInit, (it,done)=>{
+      const ok=startLayout(layoutPerp, layoutInit, layoutAttr, (it,done)=>{
         layoutStatus = done ? 'ready — nothing moved yet' : ('computing '+Math.round(100*it/500)+'%');
         if(done) renderEdgeCtl();
         else { const el=document.getElementById('lay-stat'); if(el) el.textContent=layoutStatus; }
