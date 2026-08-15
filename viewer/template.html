@@ -770,6 +770,10 @@ function tightestSpacing(pts){
 function recomputeZoomCeiling(){
   const sep = tightestSpacing(NODES.map(n=>[n.x,n.y]));
   maxScale = sep ? Math.min(ZOOM_HARD_MAX, Math.max(ZOOM_FLOOR_MAX, ZOOM_GAP_PX/sep)) : ZOOM_FLOOR_MAX;
+  // If the ceiling just DROPPED below where the camera already is — apply a looser layout while zoomed deep
+  // into a tight one — pull the camera back to the new ceiling rather than leaving it illegally past it until
+  // the next wheel event happens to clamp it.
+  if(scale > maxScale) scale = maxScale;
 }
 
 function fitAll(){

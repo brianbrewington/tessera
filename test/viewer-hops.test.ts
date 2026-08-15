@@ -191,3 +191,79 @@ describe("the adaptive zoom ceiling", () => {
     expect(tightest(pts)).toBeCloseTo(nn[Math.floor(0.02 * (nn.length - 1))]!, 6);
   });
 });
+
+describe("the zoom ceiling on degenerate graphs", () => {
+  const tightest = new Function(
+    `${TPL.match(/function tightestSpacing\(pts\)\{[\s\S]*?\n\}/)![0]}; return tightestSpacing;`,
+  )() as (pts: number[][]) => number | null;
+  // Mirror the ceiling formula so the clamp behaviour is asserted, not assumed.
+  const ceiling = (pts: number[][]): number => {
+    const sep = tightest(pts);
+    return sep ? Math.min(400, Math.max(8, 44 / sep)) : 8;
+  };
+
+  it("falls back to 8x when EVERY node is coincident", () => {
+    // The pathological case the exclusion creates: if all pairs are skipped, there is nothing to measure.
+    // Returning null here rather than Infinity or 0 is what keeps the ceiling finite.
+    const all = Array.from({ length: 20 }, () => [100, 100]);
+    expect(tightest(all)).toBeNull();
+    expect(ceiling(all)).toBe(8);
+  });
+
+  it("never returns a ceiling below the old fixed cap", () => {
+    // A very sparse graph would compute a tiny ceiling; the clamp must stop it, or this "feature" would be a
+    // regression that removes zoom people already had.
+    const sparse = Array.from({ length: 30 }, (_, i) => [i * 100000, 0]);
+    expect(ceiling(sparse)).toBe(8);
+  });
+
+  it("never returns a ceiling above the hard cap, however tight the clump", () => {
+    const clumped = Array.from({ length: 30 }, (_, i) => [i * 1e-9, 0]);
+    const c = ceiling(clumped);
+    expect(Number.isFinite(c)).toBe(true);
+    expect(c).toBeLessThanOrEqual(400);
+  });
+
+  it("survives extreme aspect ratios and a far outlier", () => {
+    // Grid bucketing sizes cells from the bounding span. One point a long way out inflates the span, which
+    // could make every cell enormous and quietly degrade the search to "found nothing".
+    const wide: number[][] = [];
+    for (let i = 0; i < 80; i++) wide.push([i * 3, 0]);
+    wide.push([900000, 0]);
+    const s = tightest(wide);
+    expect(s).not.toBeNull();
+    expect(Number.isFinite(s!)).toBe(true);
+    expect(s!).toBeGreaterThan(0);
+  });
+});
+
+describe("the attraction knob cannot produce an unusable layout", () => {
+  // The slider spans 0.3x to 8x. STEP_MAX bounds a step, not a NaN, so every offered value has to be shown
+  // to terminate finite — an optimiser that diverges at one end of a control is a control that ships a bug.
+  const src =
+    TPL.match(/function makeTsne\(ids, perp, init, attraction\)\{[\s\S]*?\n\}\n/)![0];
+  const make = new Function("EMB", `${src}; return makeTsne;`) as (e: unknown) => unknown;
+
+  const EMB: Record<string, number[]> = {};
+  const ids: string[] = [];
+  for (let i = 0; i < 70; i++) {
+    const id = `n${i}`;
+    ids.push(id);
+    // three loose clumps, so there is real structure for attraction to act on
+    const c = i % 3;
+    EMB[id] = Array.from({ length: 8 }, (_, d) => Math.sin(i * 1.7 + d) * 0.4 + c * 2);
+  }
+
+  for (const attraction of [0.3, 0.5, 1, 2, 4, 8]) {
+    it(`stays finite and spread at attraction ${attraction}x`, () => {
+      const makeTsne = make(EMB) as (i: string[], p: number, init: number[][], a: number) => { Y: number[][]; step: () => void };
+      const init = ids.map((_, i) => [Math.sin(i * 12.9) * 1e-2, Math.cos(i * 78.2) * 1e-2]);
+      const t = makeTsne(ids, 10, init, attraction);
+      for (let i = 0; i < 300; i++) t.step();
+      expect(t.Y.every((p) => Number.isFinite(p[0]!) && Number.isFinite(p[1]!))).toBe(true);
+      const r = Math.max(...t.Y.map((p) => Math.hypot(p[0]!, p[1]!)));
+      expect(r).toBeGreaterThan(1e-6); // not collapsed to a single point
+      expect(r).toBeLessThan(1e6);     // not diverged
+    });
+  }
+});
