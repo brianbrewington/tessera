@@ -40,7 +40,10 @@
   #legend{ position:fixed; bottom:214px; left:14px; background:rgba(13,17,26,.86); border:1px solid var(--line);
     border-radius:10px; padding:9px 11px; font-size:11px; color:var(--dim); }
   /* semantic-zoom chrome — kept on the LEFT so it clears the right-side panel */
-  #altrail{ position:fixed; top:62px; left:14px; width:200px; background:rgba(13,17,26,.72); border:1px solid var(--line);
+  /* #altrail (the left zoom-tier rail) was REMOVED: it listed continent/country/region/... and so does
+     #zcrumb along the top, so the same information was on screen twice and the left column is the scarcer
+     space. The styles are kept dormant below in case the rail earns its way back. */
+  #altrail{ display:none; position:fixed; top:62px; left:14px; width:200px; background:rgba(13,17,26,.72); border:1px solid var(--line);
     border-radius:10px; padding:8px 12px 8px 18px; pointer-events:none; }
   #altrail .r{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:2px 0; opacity:.38; transition:opacity .2s; }
   #altrail .r.on{ opacity:1; }
@@ -92,6 +95,16 @@
   #nowplaying textarea.narr{ font:inherit; font-size:15px; line-height:1.45; color:var(--text); background:transparent; border:none; outline:none; width:100%; resize:none; }
   #nowplaying .exit{ flex:0 0 auto; color:var(--dim); cursor:pointer; font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
   #nowplaying .exit:hover{ color:var(--text); }
+  /* collapsible tool groups — the left column now holds three of them and they do not all need to be open */
+  .grp{ margin-bottom:9px; }
+  .grp > .gh{ display:flex; align-items:center; justify-content:space-between; cursor:pointer;
+    font-family:var(--mono); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint);
+    user-select:none; padding:1px 0; }
+  .grp > .gh:hover{ color:var(--accent); }
+  .grp > .gh .car{ transition:transform .18s; }
+  .grp.closed > .gh .car{ transform:rotate(-90deg); }
+  .grp.closed > .gb{ display:none; }
+  .grp > .gb{ padding-top:6px; }
   #legend .row{ display:flex; align-items:center; gap:7px; margin:3px 0; }
   #legend .dot{ width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   #legend .ln{ width:16px; height:0; border-top:2px solid; flex:0 0 auto; }
@@ -188,7 +201,6 @@
 <canvas id="c"></canvas>
 <div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span><span class="gdirty" id="gdirty"></span></div>
 <div id="zcrumb"></div>
-<div id="altrail"><div class="track"></div><div class="dot" id="altdot"></div></div>
 <div id="tip"></div>
 <div id="legend"></div>
 <div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
@@ -1021,6 +1033,154 @@ function renderScenes(){ const box=$('scenes'); box.innerHTML='';
     exp.onclick=()=>exportScenes(); foot.appendChild(exp); }
   box.appendChild(foot);
 }
+// ═══ LAYOUT ENGINE ═══════════════════════════════════════════════════════════════════════════════════
+// The bundle now carries a 48-d random projection of every node's stored vector (see export-viewer.ts), so
+// the viewer can COMPUTE a layout instead of only displaying the one the CLI wrote.
+//
+// SESSION-SCOPED ON PURPOSE. Nothing here writes to the database. There is no layout endpoint on the server,
+// and inventing one to let a slider overwrite stored geometry would be the wrong order of operations: try
+// layouts freely here, and if one earns it, make persisting it a deliberate separate act.
+const EMB = GRAPH.embed || {};
+let layoutRun = null;                       // the running optimiser, or null
+const undoStack = [];                       // snapshots of {id -> [x,y]}, most recent last
+const MAX_UNDO = 12;
+
+function snapshot(){ const m={}; for(const n of nodes) m[n.id]=[n.x,n.y]; return m; }
+function restore(m){ for(const n of nodes){ const p=m[n.id]; if(p){ n.x=p[0]; n.y=p[1]; } } }
+function pushUndo(label){
+  undoStack.push({label, pos:snapshot()});
+  if(undoStack.length>MAX_UNDO) undoStack.shift();
+}
+
+// PCA to 2-d over the 48-d projection, for INITIALISATION. Kobak & Linderman (Nature Biotechnology 39:156,
+// 2021) is blunt about this: informative initialisation, not the loss function, is what preserves global
+// structure in both t-SNE and UMAP. Starting from noise is why inter-cluster distances usually mean nothing.
+// Cheap here because it runs on 48 dims, not 768.
+function pcaInit(ids){
+  const K=ids.length, Dd=48;
+  const M=ids.map(id=>EMB[id].slice());
+  const mu=new Array(Dd).fill(0);
+  for(const r of M) for(let j=0;j<Dd;j++) mu[j]+=r[j]/K;
+  for(const r of M) for(let j=0;j<Dd;j++) r[j]-=mu[j];
+  const comp=[];
+  for(let c=0;c<2;c++){
+    let w=new Array(Dd).fill(0).map((_,i)=>Math.sin(i*1.7+c)+0.1);
+    for(let it=0;it<80;it++){
+      const nx=new Array(Dd).fill(0);
+      for(const r of M){ let d=0; for(let j=0;j<Dd;j++) d+=r[j]*w[j]; for(let j=0;j<Dd;j++) nx[j]+=r[j]*d; }
+      const nn=Math.hypot(...nx)||1; w=nx.map(x=>x/nn);
+    }
+    const sc=M.map(r=>{ let d=0; for(let j=0;j<Dd;j++) d+=r[j]*w[j]; return d; });
+    comp.push(sc);
+    M.forEach((r,i)=>{ for(let j=0;j<Dd;j++) r[j]-=sc[i]*w[j]; });
+  }
+  return ids.map((_,i)=>[comp[0][i], comp[1][i]]);
+}
+
+// t-SNE. Same implementation as the projection tutorial, which was verified headless (rows sum to 1, no
+// collapse). Runs over the nodes that are currently VISIBLE, so hiding provenance changes what is laid out.
+function makeTsne(ids, perp, init){
+  const n=ids.length, X=ids.map(id=>EMB[id]);
+  const Dsq=new Float64Array(n*n);
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){ let s=0; const a=X[i],b=X[j];
+    for(let d=0;d<a.length;d++){ const t=a[d]-b[d]; s+=t*t; } Dsq[i*n+j]=s; Dsq[j*n+i]=s; }
+  const P=new Float64Array(n*n), logU=Math.log(perp);
+  for(let i=0;i<n;i++){
+    let beta=1, lo=-Infinity, hi=Infinity;
+    for(let t=0;t<50;t++){
+      let sum=0,H=0;
+      for(let j=0;j<n;j++){ if(i===j) continue; const p=Math.exp(-Dsq[i*n+j]*beta); P[i*n+j]=p; sum+=p; }
+      sum=sum||1e-12;
+      for(let j=0;j<n;j++){ if(i!==j) H+=Dsq[i*n+j]*P[i*n+j]; }
+      H=Math.log(sum)+beta*H/sum;
+      if(Math.abs(H-logU)<1e-5) break;
+      if(H>logU){ lo=beta; beta = hi===Infinity ? beta*2 : (beta+hi)/2; }
+      else { hi=beta; beta = lo===-Infinity ? beta/2 : (beta+lo)/2; }
+    }
+    let sum=0; for(let j=0;j<n;j++) if(i!==j) sum+=P[i*n+j]; sum=sum||1e-12;
+    for(let j=0;j<n;j++) if(i!==j) P[i*n+j]/=sum;
+  }
+  const Q=new Float64Array(n*n);
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) Q[i*n+j]=(P[i*n+j]+P[j*n+i])/(2*n);
+  // scale the init small — t-SNE expects to start compact, and a large spread stalls early exaggeration
+  const sc=Math.max(1e-6, Math.max(...init.flat().map(Math.abs)));
+  const Y=init.map(p=>[p[0]/sc*1e-2, p[1]/sc*1e-2]);
+  return { n, P:Q, Y, gains:Y.map(()=>[1,1]), vel:Y.map(()=>[0,0]), iter:0,
+    step(){
+      const {n,Y}=this; const num=new Float64Array(n*n); let Z=0;
+      for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+        const dx=Y[i][0]-Y[j][0], dy=Y[i][1]-Y[j][1], q=1/(1+dx*dx+dy*dy);
+        num[i*n+j]=q; num[j*n+i]=q; Z+=2*q; }
+      Z=Z||1e-12;
+      // eta 200 (the value the tutorial used at n=260) DIVERGES here: measured on the real bundle it ran to
+      // 1.2e+31 within 250 iterations. Two changes, and the clamp is the important one because it is a
+      // guarantee rather than a tuning: no single step may move a point further than STEP_MAX, so the
+      // optimiser cannot blow up on a corpus whose distance scale differs from the one it was tuned on.
+      const exag=this.iter<100?12:1, mom=this.iter<250?0.5:0.8, eta=50, STEP_MAX=2;
+      for(let i=0;i<n;i++){
+        let gx=0,gy=0;
+        for(let j=0;j<n;j++){ if(i===j) continue;
+          const m=4*(this.P[i*n+j]*exag - num[i*n+j]/Z)*num[i*n+j];
+          gx+=m*(Y[i][0]-Y[j][0]); gy+=m*(Y[i][1]-Y[j][1]); }
+        for(const [d,g] of [[0,gx],[1,gy]]){
+          this.gains[i][d]=Math.max(0.01,(Math.sign(g)===Math.sign(this.vel[i][d]))?this.gains[i][d]*0.8:this.gains[i][d]+0.2);
+          let stp=mom*this.vel[i][d]-eta*this.gains[i][d]*g;
+          if(stp>STEP_MAX) stp=STEP_MAX; else if(stp<-STEP_MAX) stp=-STEP_MAX;
+          this.vel[i][d]=stp; Y[i][d]+=stp;
+        }
+      }
+      let mx=0,my=0; for(let i=0;i<n;i++){ mx+=Y[i][0]; my+=Y[i][1]; }
+      mx/=n; my/=n; for(let i=0;i<n;i++){ Y[i][0]-=mx; Y[i][1]-=my; }
+      this.iter++;
+    } };
+}
+// Map optimiser coordinates onto the world at roughly the scale the existing map uses, so switching layouts
+// does not also teleport the camera.
+function writeBack(ids, Y){
+  let mx=0,my=0; for(const p of Y){ mx+=p[0]/Y.length; my+=p[1]/Y.length; }
+  let r=0; for(const p of Y) r=Math.max(r, Math.hypot(p[0]-mx,p[1]-my));
+  const k=(r>1e-9)? 620/r : 1;
+  const byId=new Map(nodes.map(n=>[n.id,n]));
+  ids.forEach((id,i)=>{ const n=byId.get(id); if(n){ n.x=(Y[i][0]-mx)*k; n.y=(Y[i][1]-my)*k; } });
+}
+// COMPUTE OFF-SCREEN, THEN ACCEPT. Brian's call, and it is the right one: a full run over ~2000 nodes is
+// O(n^2) per iteration and takes on the order of a minute, so watching the map thrash for that long is not a
+// preview, it is a distraction — and it destroys the very positions you would want to compare against. So the
+// visible map does not move until you say so. The optimiser runs in requestAnimationFrame slices with a frame
+// budget, which keeps panning and hovering responsive while it works.
+let pending = null;    // {ids, t, total, done} — a computed layout awaiting a decision
+const FRAME_MS = 24;   // work budget per frame; the rest of the frame belongs to the UI
+
+function startLayout(perp, initMode, onTick){
+  const ids=NODES.filter(n=>EMB[n.id]).map(n=>n.id);
+  if(ids.length<8) return null;
+  const init = initMode==='pca' ? pcaInit(ids) : ids.map(id=>{ const n=nodes.find(x=>x.id===id); return [n.x,n.y]; });
+  const t=makeTsne(ids, perp, init);
+  const total=500;
+  pending={ids, t, total, done:false, perp, initMode};
+  layoutRun={stop:false};
+  const loop=()=>{
+    if(!layoutRun || layoutRun.stop) return;
+    const until=performance.now()+FRAME_MS;
+    do { t.step(); } while(t.iter<total && performance.now()<until);
+    if(t.iter>=total){ pending.done=true; layoutRun=null; onTick(t.iter, true); return; }
+    onTick(t.iter, false);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+  return t;
+}
+function acceptLayout(){
+  if(!pending) return;
+  pushUndo('before t-SNE (perplexity '+pending.perp+', '+pending.initMode+' init)');
+  writeBack(pending.ids, pending.t.Y);
+  pending=null; draw();
+}
+function discardLayout(){
+  if(layoutRun){ layoutRun.stop=true; layoutRun=null; }
+  pending=null;
+}
+
 // --- edge budget control
 function renderEdgeCtl(){
   let box=document.getElementById('edgectl');
@@ -1078,6 +1238,101 @@ function renderEdgeCtl(){
   dn.style.cssText='margin-top:4px;color:var(--faint);font-size:10px;line-height:1.35';
   dn.textContent = focusMode==='hops' ? 'opacity comes from distance in the graph' : 'one step: neighbours stay, the rest dims';
   box.appendChild(dn);
+
+  renderLayoutCtl(box);
+}
+
+// --- LAYOUT group: compute off-screen, apply, poke around, then persist if you like it -------------------
+let layoutOpen=false, layoutPerp=10, layoutInit='pca', layoutStatus='', saveMsg='';
+function renderLayoutCtl(box){
+  if(!Object.keys(EMB).length) return;                 // an older bundle carries no vectors
+  const g=document.createElement('div'); g.className='grp'+(layoutOpen?'':' closed'); g.style.marginTop='13px';
+  const gh=document.createElement('div'); gh.className='gh';
+  gh.innerHTML='<span>layout</span><span class="car">▾</span>';
+  gh.onclick=()=>{ layoutOpen=!layoutOpen; renderEdgeCtl(); };
+  g.appendChild(gh);
+  const gb=document.createElement('div'); gb.className='gb';
+  const line=(h)=>{ const d=document.createElement('div'); d.innerHTML=h; gb.appendChild(d); return d; };
+  const btn=(label,fn,primary,disabled)=>{ const b=document.createElement('button');
+    b.textContent=label;
+    b.style.cssText='flex:1;font-size:11px;padding:5px 6px;border-radius:6px;cursor:'+(disabled?'default':'pointer')+';'+
+      'background:'+(primary&&!disabled?'var(--accent)':'var(--surface-3)')+';color:'+(primary&&!disabled?'#0d111a':'var(--text)')+
+      ';border:1px solid var(--line-2)'+(disabled?';opacity:.4':'');
+    if(!disabled) b.onclick=fn; return b; };
+
+  line('<div style="display:flex;justify-content:space-between"><span>perplexity</span><span style="color:var(--faint)">'+layoutPerp+'</span></div>');
+  const ps=document.createElement('input'); ps.type='range'; ps.min='5'; ps.max='50'; ps.value=String(layoutPerp);
+  ps.style.cssText='width:100%;margin-top:2px'; ps.disabled=!!layoutRun;
+  ps.oninput=()=>{ layoutPerp=Number(ps.value); renderEdgeCtl(); };
+  gb.appendChild(ps);
+
+  const isel=document.createElement('select');
+  isel.style.cssText='width:100%;margin-top:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
+  isel.disabled=!!layoutRun;
+  for(const [v,t] of [['pca','start from PCA — keeps global shape'],['current','start from current positions']]){
+    const o=document.createElement('option'); o.value=v; o.textContent=t; if(v===layoutInit) o.selected=true; isel.appendChild(o); }
+  isel.onchange=()=>{ layoutInit=isel.value; renderEdgeCtl(); };
+  gb.appendChild(isel);
+
+  const bar=document.createElement('div'); bar.style.cssText='display:flex;gap:6px;margin-top:7px';
+  if(layoutRun){
+    bar.appendChild(btn('Stop', ()=>{ discardLayout(); layoutStatus='stopped'; renderEdgeCtl(); }, true));
+  } else if(pending && pending.done){
+    bar.appendChild(btn('Apply', ()=>{ acceptLayout(); layoutStatus='applied — pan around, then save or undo'; saveMsg=''; renderEdgeCtl(); }, true));
+    bar.appendChild(btn('Discard', ()=>{ discardLayout(); layoutStatus=''; renderEdgeCtl(); }));
+  } else {
+    bar.appendChild(btn('Compute', ()=>{
+      saveMsg=''; layoutStatus='computing…';
+      const ok=startLayout(layoutPerp, layoutInit, (it,done)=>{
+        layoutStatus = done ? 'ready — nothing moved yet' : ('computing '+Math.round(100*it/500)+'%');
+        if(done) renderEdgeCtl();
+        else { const el=document.getElementById('lay-stat'); if(el) el.textContent=layoutStatus; }
+      });
+      if(!ok) layoutStatus='too few nodes carry vectors';
+      renderEdgeCtl();
+    }, true));
+  }
+  const ub=btn('Undo', ()=>{
+    discardLayout();
+    const u=undoStack.pop();
+    if(u){ restore(u.pos); layoutStatus='reverted: '+u.label; draw(); }
+    renderEdgeCtl();
+  }, false, undoStack.length===0);
+  bar.appendChild(ub);
+  gb.appendChild(bar);
+
+  // Persisting is its OWN act, available only once a layout is actually on screen and only when served.
+  // A control that writes geometry as a side effect of being dragged would be the wrong contract entirely.
+  if(SERVED && undoStack.length && !pending){
+    const sb=document.createElement('button');
+    sb.textContent='Save this layout to the graph';
+    sb.style.cssText='width:100%;margin-top:6px;font-size:11px;padding:5px 6px;border-radius:6px;cursor:pointer;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2)';
+    sb.onclick=async ()=>{
+      sb.disabled=true; saveMsg='saving…'; renderEdgeCtl();
+      const positions={}; for(const n of nodes) positions[n.id]=[n.x,n.y];
+      try{
+        const r=await fetch('/layout',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({positions})});
+        const j=await r.json().catch(()=>({}));
+        saveMsg = r.ok ? ('saved · '+(j.written!=null?j.written:'?')+' positions written') : ('save failed: '+(j.error||r.status));
+      }catch(e){ saveMsg='save failed: '+e; }
+      renderEdgeCtl();
+    };
+    gb.appendChild(sb);
+  }
+
+  const st=document.createElement('div'); st.id='lay-stat';
+  st.style.cssText='margin-top:5px;color:var(--faint);font-size:10px;font-family:var(--mono)';
+  st.textContent = layoutStatus || (undoStack.length ? undoStack.length+' layout(s) to undo' : 'positions as computed by tessera');
+  gb.appendChild(st);
+  if(saveMsg){ const sm=document.createElement('div');
+    sm.style.cssText='margin-top:3px;font-size:10px;font-family:var(--mono);color:'+(saveMsg.startsWith('save failed')?'var(--warn,#f7768e)':'var(--ok,#7ec699)');
+    sm.textContent=saveMsg; gb.appendChild(sm); }
+
+  const note=document.createElement('div');
+  note.style.cssText='margin-top:5px;color:var(--faint);font-size:10px;line-height:1.35';
+  note.textContent = SERVED ? 'applying is local until you save' : 'file:// — layouts are local to this page';
+  gb.appendChild(note);
+  g.appendChild(gb); box.appendChild(g);
 }
 
 // --- DROP TARGET (slice 3). Only active when the page is SERVED — a file:// bundle has no server to post

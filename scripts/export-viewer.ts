@@ -50,6 +50,10 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   // the total alone would promise something no drop is going to do.
   const dirty = store.dirtyCounts(PROMPT_VERSION, FAILING_ATTEMPTS);
   const dirtyChunks = dirty.dirty;
+  // Capture the vector reader before the store closes — the reduction below needs it.
+  const vecOf = (id: string): Float32Array | null => store.vectorOf(id, "quarantine");
+  const vecCache = new Map<string, Float32Array | null>();
+  for (const n of nodes) vecCache.set(n.id, vecOf(n.id));
   store.close();
 
   // Stored layout travels with the bundle (design §3.5). Without this the CLI would write positions to
@@ -58,7 +62,29 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
   const layout: Record<string, [number, number]> = {};
   for (const [id, p] of storedLayout) layout[id] = [p.x, p.y];
 
-  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  // A reduced copy of each node's vector, so the viewer can COMPUTE layouts rather than only display one.
+  // RANDOM PROJECTION, not PCA, and the reason is a hard constraint rather than a preference: serve calls
+  // exportViewer on EVERY page request, and a power-iteration PCA over 1714x768 takes minutes. A random
+  // projection is one pass, deterministic under a fixed seed, and preserves pairwise distances well enough
+  // for a neighbour-embedding to run on (Johnson-Lindenstrauss) — which is exactly and only what t-SNE needs
+  // from its input. The viewer computes its own PCA for INITIALISATION from these 48 dims, which is cheap.
+  const EDIM = 48;
+  const proj: Float32Array[] = [];
+  {
+    let seed = 0x9e3779b9;
+    const rnd = (): number => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296 - 0.5; };
+    for (let k = 0; k < EDIM; k++) { const v = new Float32Array(768); for (let i = 0; i < 768; i++) v[i] = rnd(); proj.push(v); }
+  }
+  const embed: Record<string, number[]> = {};
+  for (const n of nodes) {
+    const v = vecCache.get(n.id);
+    if (!v) continue;
+    const out = new Array<number>(EDIM);
+    for (let k = 0; k < EDIM; k++) { let s2 = 0; const pk = proj[k]!; for (let i = 0; i < v.length; i++) s2 += v[i]! * pk[i]!; out[k] = Number(s2.toFixed(3)); }
+    embed[n.id] = out;
+  }
+
+  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty, embed }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);

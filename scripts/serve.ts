@@ -162,6 +162,30 @@ export function serveDeps(opts: ServeCliOptions): Parameters<typeof createTesser
   };
 
   return {
+      /**
+       * Persist a layout. Validated hard because this is the ONE path where a browser control can overwrite
+       * geometry the CLI computed: every id must exist and every coordinate must be finite, and putLayoutBatch
+       * enforces both again inside one transaction so a partial apply is impossible.
+       */
+      writeLayout: (payload: unknown): { ok: boolean; written?: number; error?: string } => {
+        const p = payload as { positions?: Record<string, [number, number]> } | null;
+        if (!p || typeof p !== "object" || !p.positions || typeof p.positions !== "object") {
+          return { ok: false, error: "expected { positions: { id: [x, y] } }" };
+        }
+        const entries = Object.entries(p.positions).map(([nodeId, xy]) => ({ nodeId, x: Number(xy?.[0]), y: Number(xy?.[1]) }));
+        if (!entries.length) return { ok: false, error: "no positions" };
+        const bad = entries.find((e) => !Number.isFinite(e.x) || !Number.isFinite(e.y));
+        if (bad) return { ok: false, error: `non-finite position for ${bad.nodeId}` };
+        try {
+          const g = Graph.open(opts.name);
+          try {
+            const r = g.store.putLayoutBatch(entries, { actor: "serve", cause: `layout accepted from viewer (${opts.name})` });
+            return { ok: true, written: typeof r === "number" ? r : entries.length };
+          } finally { g.close(); }
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      },
       renderPage: () => {
         exportViewer(opts.db, out, opts.name);
         return readFileSync(out, "utf8");

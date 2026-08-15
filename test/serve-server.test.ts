@@ -61,7 +61,8 @@ beforeAll(async () => {
     },
     readScenes: () => ({ scenes: state.scenes }),
     status: () => state.status,
-    writeScenes: () => (state.writeConflicts.length ? { ok: false, conflicts: state.writeConflicts } : { ok: true }),
+    writeLayout: () => ({ ok: true, written: 0 }),
+  writeScenes: () => (state.writeConflicts.length ? { ok: false, conflicts: state.writeConflicts } : { ok: true }),
     tempDir: temp,
   };
   const s = createTesseraServer({ port: PORT, deps });

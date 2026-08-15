@@ -43,6 +43,8 @@ export interface ServeStatus {
 
 /** Everything the server needs, injected so tests never need a real graph, LLM, or embedder. */
 export interface ServeDeps {
+  /** Persist a layout the user explored and accepted. Explicit act; never a side effect of a control. */
+  writeLayout: (payload: unknown) => { ok: boolean; written?: number; error?: string };
   /** The full exported page, regenerated per request so a drop is visible after reload. */
   renderPage: () => string;
   /** Ingest one file already on disk. Reports progress; resolves with the summary. */
@@ -66,6 +68,7 @@ const ROUTES: Record<string, RouteKind> = {
   "/ingest": "api",
   "/events": "api",
   "/scenes": "api",
+  "/layout": "api",
   "/status": "api",
 };
 
@@ -186,6 +189,23 @@ export function createTesseraServer(opts: ServeOptions): { server: Server; close
           return send(res, 200, JSON.stringify(deps.status()), "application/json");
         }
 
+        if (path === "/layout" && req.method === "PUT") {
+          // Persisting a layout the user explored and liked. Deliberately a SEPARATE, EXPLICIT act from
+          // computing or applying one: a slider must never overwrite stored geometry as a side effect.
+          const body = await readBody(req, MAX_UPLOAD_BYTES).catch((e: Error & { status?: number }) => {
+            send(res, e.status ?? 400, e.message);
+            return null;
+          });
+          if (body === null) return;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(body.toString("utf8"));
+          } catch {
+            return send(res, 400, "layout body is not valid JSON");
+          }
+          const r = deps.writeLayout(parsed);
+          return send(res, r.ok ? 200 : 400, JSON.stringify(r), "application/json");
+        }
         if (path === "/scenes" && req.method === "PUT") {
           // .catch here, not just on /ingest: readBody's rejection carries status 413, and without this it
           // fell through to the generic 500 handler. Same guard, both routes — fix the class, not the

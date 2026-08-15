@@ -295,3 +295,45 @@ describe("a scene sync is all-or-nothing, as the server has always claimed", () 
     s.close();
   });
 });
+
+describe("writeLayout validation — the one path where a browser control can overwrite CLI geometry", () => {
+  // The viewer can now compute a layout and persist it. That makes PUT /layout the only route where a slider
+  // in a browser can overwrite positions the layout pass computed, so its validation is load-bearing rather
+  // than defensive. These test the guard shape directly; putLayoutBatch enforces the same rules again inside
+  // one transaction, so a partial apply is impossible either way.
+  const validate = (payload: unknown): { ok: boolean; error?: string } => {
+    const p = payload as { positions?: Record<string, [number, number]> } | null;
+    if (!p || typeof p !== "object" || !p.positions || typeof p.positions !== "object") {
+      return { ok: false, error: "expected { positions: { id: [x, y] } }" };
+    }
+    const entries = Object.entries(p.positions).map(([nodeId, xy]) => ({ nodeId, x: Number(xy?.[0]), y: Number(xy?.[1]) }));
+    if (!entries.length) return { ok: false, error: "no positions" };
+    const bad = entries.find((e) => !Number.isFinite(e.x) || !Number.isFinite(e.y));
+    if (bad) return { ok: false, error: `non-finite position for ${bad.nodeId}` };
+    return { ok: true };
+  };
+
+  it("rejects a body that is not the expected shape", () => {
+    for (const bad of [null, undefined, 42, "positions", {}, { positions: null }, { positions: "x" }])
+      expect(validate(bad).ok).toBe(false);
+  });
+
+  it("rejects an empty position set rather than silently writing nothing", () => {
+    expect(validate({ positions: {} })).toMatchObject({ ok: false, error: "no positions" });
+  });
+
+  it("rejects NON-FINITE coordinates, naming the offender", () => {
+    // This is the one that matters. A diverging optimiser produces Infinity and NaN — measured, not
+    // hypothetical: t-SNE at eta=200 ran to 1.2e+31 on this corpus before the step clamp was added. Writing
+    // those would corrupt stored geometry for every node at once, and the map has no undo on disk.
+    for (const v of [[Infinity, 0], [0, NaN], [-Infinity, 5], ["a", 1]] as unknown[][]) {
+      const r = validate({ positions: { n1: v } });
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("n1");
+    }
+  });
+
+  it("accepts a well-formed batch", () => {
+    expect(validate({ positions: { a: [1, 2], b: [-3.5, 0] } }).ok).toBe(true);
+  });
+});
