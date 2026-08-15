@@ -852,6 +852,125 @@ disjunction is a candidate set).
   candidate, which raises recall and probably also raises false-merge pressure. The anti-edge rule would need
   to know which description produced a rejected match.
 
+### The flip: agreement ACROSS embeddings as edge evidence (Brian, 2026-08-15)
+
+*"seems there's also merit in multiple embeddings. nodes connected by multiple embeddings and multiple
+descriptions should have a very strong connection, and the edge description/s could be similarly rich."*
+
+This inverts the idea and is the stronger half. The first version treats k descriptions as k chances to
+match. This one treats **the number of independent routes between two nodes as the edge's strength**, which
+is a different and better quantity: an edge asserted by the extractor AND found by the qwen-description
+embedding AND found by the gemma-description embedding is corroborated by three mechanisms that fail
+differently. One asserted by exactly one is not.
+
+Why this is well-founded rather than appealing: it is the same shape as two results already measured here.
+E2 found cosine and shared-string-improbability fail in *different places*, so their conjunction admitted
+zero known-confusable pairs while either alone admitted some. E3 found the verifier's decoy-pick rate was
+0.0% for both families — independent mechanisms agreeing is the signal, not any single mechanism's
+confidence. And `hebbian_weight` already encodes exactly this intuition for *repetition*: 1181 of 1239
+RELATED edges sit at weight 1, so corroboration is currently rare and therefore meaningful. Multi-embedding
+agreement would extend corroboration from "said twice" to "found by different instruments".
+
+**The edge-description half is the part with no precedent here and deserves care.** An edge today carries
+`reason` strings as graded assertions. If several embeddings propose the same edge, each proposal has its own
+rationale, and those are *not* interchangeable: "these co-occur in the same chunk", "these are near in
+qwen-description space", "these share an improbable name fragment" are different kinds of evidence. Storing
+them as one flat bag of reasons would destroy exactly the distinction that makes agreement informative.
+`assertion_sources` is already SET-valued and provenance-carrying, which is the right substrate — but the
+*kind* of evidence needs to be a first-class field, not encoded in prose.
+
+**Cheapest first probe, and it needs no new embeddings at all:** the corpus already has one embedding per
+node plus the extractor's own edges. Measure whether cosine-proximity and extractor-assertion agree more than
+chance on the existing 1239 RELATED edges, and what the agreement rate predicts about edge quality. If those
+two existing instruments turn out to be near-independent (and the tutorial measurement above suggests they
+might be — the force layout preserves only 6.8% of embedding neighbourhoods against a 3.9% chance floor),
+then agreement is carrying real information and the multi-embedding version is worth its cost. If they are
+redundant, adding more embeddings of the same kind buys little and the money goes to *different kinds* of
+evidence instead.
+
 **Disposition: QUEUED as an experiment, not as a build.** The cheap decorrelation measurement above is the
 gate, and it reuses E0's frozen label sets and the existing N-hard control, so it costs one afternoon and no
-new pre-registration beyond its own decision rule. Nothing gets built until that number exists.
+new pre-registration beyond its own decision rule. The agreement probe in this section is cheaper still —
+zero LLM calls, zero new embeddings — and should run first. Nothing gets built until those numbers exist.
+
+---
+
+## A proper RAG over tessera — the plan (Brian, 2026-08-15: *"it'll be insightful to actually build a proper RAG on this. Not yet. But let's plan it."*)
+
+**Status: PLAN ONLY. Nothing built.** Recorded now so the design exists before the appetite does.
+
+### Why this is the sharpest test the project has
+
+Everything built so far is justified by a claim that has never been measured: *that a graph over the corpus
+retrieves better than the corpus alone*. A RAG is the first thing that puts a number on it, because plain
+chunk-vector retrieval is a trivially available baseline and the graph either beats it or it does not.
+
+That reframes the deliverable. **The point is not to have a RAG. The point is to have a comparison.** A RAG
+that ships without a baseline answers nothing, and is the most likely way to spend a week and learn zero.
+
+### What already exists (verified, not assumed)
+
+- **318 chunk nodes** holding raw text, each embedded on that text, each linked `ORIGINATED_FROM` its
+  document. This is a complete conventional vector store already; nothing needs building for the baseline.
+- **1714 entities**, merged across documents by `type + normalized(name)`, each linked `APPEARED_IN` its
+  chunks. That is the entity-to-evidence index a graph retriever needs.
+- **1239 RELATED edges**, each carrying `reason` assertions that are written to *name both endpoints' roles*
+  rather than restate the endpoint names. The README calls those reasons "the primary retrieval signal", and
+  that claim is also unmeasured.
+- `paths` and `common` commands already traverse the graph and are the seed of a graph retriever.
+- Edge prominence measures (betweenness, pagerank product) are computed and stored.
+
+### The three arms, and they must be run together
+
+1. **VECTOR (baseline).** Embed the question, retrieve top-k chunks by cosine, answer from them. Deliberately
+   unglamorous. Everything else must beat this or it does not exist.
+2. **GRAPH-LOCAL.** Resolve question terms to entities, walk 1-2 hops, gather the chunks those entities
+   appear in, and include the edge `reason` strings as context alongside the chunk text. This is the arm
+   that tests whether relation reasons are worth what they cost to extract.
+3. **HYBRID.** Vector retrieval to seed entities, then graph expansion from those seeds, then rank the union.
+   The published systems (GraphRAG local search, LightRAG) converge on roughly this shape, which is weak
+   evidence it is right and strong evidence it is the expected thing to try.
+
+A fourth arm, **GRAPH-GLOBAL** (community summaries answering "what are the themes here?"), is where GraphRAG
+claims its biggest wins. It is deferred: it needs the clustering pass, which is itself gated on the
+resolution view, because summarising communities built from 20%-duplicate entities would summarise the
+duplication.
+
+### The honest obstacles, named up front
+
+- **Extraction quality is the confound.** 346 of 1714 entities have zero semantic links and the median degree
+  is 1. A graph retriever on a graph that thin may lose to the vector baseline *for reasons that have nothing
+  to do with whether graphs help*. Either fix quality first, or report the result as "graphs do not help
+  **at this extraction quality**", which is a weaker but still honest claim.
+- **Identity duplication directly attacks arm 2.** If "Brian" and "Brian Brewington" are two nodes, an
+  entity-seeded walk starts from half the evidence. **This is another arrow pointing at dedup**, and it is
+  the one with a number attached: the resolution view would take the entity view from 1714 to ~1394 with no
+  stored row touched. Run the RAG before that and arm 2 is handicapped by a known, fixable defect.
+- **Evaluation is the hard part, not retrieval.** Retrieval is an afternoon. Knowing which arm won is the
+  project. See below.
+
+### Evaluation, which is where this stands or falls
+
+Pre-register before running anything, per the discipline that produced E0-E4:
+
+- **A question set, written before any arm runs**, ~40 questions across three registers: single-fact
+  (answerable from one chunk), multi-hop (needs two chunks that share an entity), and thematic (needs many).
+  The multi-hop band is where a graph should win; if it does not win *there*, it does not win.
+- **Retrieval-level metrics before answer-level ones.** Whether the right chunk was retrieved is mechanical
+  and cheap; whether the generated answer is good needs a judge, and E3 measured our local judges are not
+  verifier-grade as prompted. So: recall@k of the gold chunk, per band, per arm. Answer quality is a
+  second phase and explicitly not the primary metric.
+- **Gold chunks labelled by hand**, by Brian, once. ~40 questions is roughly the same 15-30 minutes as the
+  E0 audit, and the same rule applies that E0 taught the expensive way: **state the sample size needed for
+  the decision rule BEFORE collecting, or the rule turns out to be unsatisfiable at the size collected.**
+- **The decision rule, frozen in advance:** the graph arm must beat the vector arm on multi-hop recall@5 by a
+  margin exceeding the vector arm's own run-to-run variance. Ties go to the baseline, because the baseline is
+  radically simpler and simplicity is the incumbent.
+
+### Sequencing
+
+Gated on the resolution view (item 15) for arm 2 to be a fair test, and on nothing else. Arms 1 and 3 could
+run today. **Recommended order when the appetite arrives:** write the question set and label gold chunks
+first (it is the long pole and it is human time), build arm 1 while that happens, then arms 2 and 3.
+
+**Disposition: PLANNED, NOT SCHEDULED.** Brian: *"Not yet."*
