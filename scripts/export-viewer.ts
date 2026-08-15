@@ -2,6 +2,7 @@
 // no server). Reusable as exportViewer(db, out); also runnable directly: npx tsx scripts/export-viewer.ts [db] [out]
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { resolveEntities, type ResolveMember } from "../src/resolve/view.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GraphStore } from "../src/store/graphStore.js";
@@ -97,7 +98,23 @@ export function exportViewer(db: string, out: string, name = "graph"): number {
     EMBED_CACHE.set(embedKey, embed);
   }
 
-  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty, embed }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
+  // Layer 1 resolution travels with the bundle so the viewer can COLLAPSE duplicates at read time and, just
+  // as importantly, un-collapse them. Computed here rather than in the page because it is the store's policy,
+  // not a rendering preference — the viewer decides whether to apply it, never what it means.
+  const entities: ResolveMember[] = nodes
+    .filter((n) => n.group !== "chunk" && n.group !== "document")
+    .map((n) => ({ id: n.id, name: n.label, subtype: n.group, strength: n.strength }));
+  const res = resolveEntities(entities);
+  const resolution = {
+    stats: res.stats,
+    canonicalOf: Object.fromEntries(res.canonicalOf),
+    groups: res.groups.map((g) => ({
+      key: g.key, canonical: g.canonical.id, heldOut: g.heldOut, reason: g.reason ?? null,
+      members: g.members.map((m) => ({ id: m.id, name: m.name, subtype: m.subtype })),
+    })),
+  };
+
+  const dataJson = JSON.stringify({ nodes, edges, name, layout, prominence, scenes, dirtyChunks, dirty, embed, resolution }).replace(/</g, "\\u003c"); // so any '</script>' can't break out
   const html = readFileSync(TPL, "utf8").replace("/*__GRAPH_DATA__*/ {nodes:[],edges:[]}", dataJson);
   if (!html.includes(dataJson)) throw new Error("template placeholder not found — did template.html change?");
   writeFileSync(out, html);

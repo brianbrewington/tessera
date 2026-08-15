@@ -263,6 +263,16 @@ const edges = GRAPH.edges.map(e=>({ ...e, a:byId.get(e.from), b:byId.get(e.to) }
 // RAG substrate, not the semantic map. Press 'h' to reveal them (and their APPEARED_IN/ORIGINATED_FROM edges).
 const isProv = n => n.type==='SOURCE' && (n.group==='chunk' || n.group==='document');
 let showProv = false;
+// --- LAYER 1 RESOLUTION (read-time, reversible) ----------------------------------------------------------
+// The bundle carries groups of entities whose names are identical after stripping case and punctuation.
+// Applying them COLLAPSES each group to one node and re-points its edges; turning it off restores the raw
+// graph exactly, because nothing was ever destroyed. That reversibility is the whole design: `AGENT` (other)
+// and `AGENT` (concept) are byte-identical names a human judged NOT the same thing, so any rule here will be
+// wrong sometimes and must be correctable by a toggle rather than a migration.
+const RES = GRAPH.resolution || null;
+let resolveOn = false;
+const canonicalId = id => (resolveOn && RES && RES.canonicalOf[id]) || id;
+
 let NODES=[], EDGES=[], maxDeg=1;
 let edgeEpoch=0;   // bumped by rebuild(); anything caching over EDGES keys on it
 function rebuild(reposition){
@@ -270,6 +280,24 @@ function rebuild(reposition){
   const vis = new Set(nodes.filter(n=>showProv||!isProv(n)));
   NODES = [...vis];
   EDGES = edges.filter(e=>vis.has(e.a)&&vis.has(e.b));
+  if(resolveOn && RES){
+    // Keep only canonicals, then re-point every edge onto them. An edge whose endpoints collapse to the SAME
+    // canonical becomes a self-loop and is dropped — it was only ever an artefact of the duplication.
+    const byId = new Map(nodes.map(n=>[n.id,n]));
+    const absorbed = new Set(Object.keys(RES.canonicalOf).filter(id => RES.canonicalOf[id] !== id));
+    NODES = NODES.filter(n => !absorbed.has(n.id));
+    const seen = new Set();
+    EDGES = EDGES.map(e => {
+      const a = byId.get(canonicalId(e.a.id)) || e.a, b = byId.get(canonicalId(e.b.id)) || e.b;
+      return a === b ? null : Object.assign({}, e, {a, b});
+    }).filter(e => {
+      if(!e) return false;
+      // one edge per (pair, kind) after re-pointing, or a five-way duplicate mints five identical links
+      const k = (e.a.id < e.b.id ? e.a.id+'|'+e.b.id : e.b.id+'|'+e.a.id) + '|' + e.kind;
+      if(seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+  }
   // apply the attention budget: keep the top edgeKeepPct% by the selected measure
   if(edgeMeasure!=='none' && PROM[edgeMeasure] && edgeKeepPct<100){
     const tbl=PROM[edgeMeasure];
@@ -1446,7 +1474,57 @@ function renderEdgeCtl(){
   box.appendChild(dn);
   if(focusMode==='hops') renderHopLadder(box);
 
+  renderResolveCtl(box);
   renderLayoutCtl(box);
+}
+
+// --- DUPLICATES: collapse them, or look at what collapsing would do --------------------------------------
+let heldOpen=false;
+function renderResolveCtl(box){
+  if(!RES) return;                                   // an older bundle carries no resolution
+  const g=document.createElement('div'); g.className='grp'; g.style.marginTop='13px';
+  const gh=document.createElement('div'); gh.className='gh';
+  gh.innerHTML='<span>duplicates</span><span class="car" style="visibility:hidden">▾</span>';
+  g.appendChild(gh);
+  const gb=document.createElement('div'); gb.className='gb';
+
+  const sel=document.createElement('select');
+  sel.style.cssText='width:100%;background:var(--surface-3);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:3px 5px;font-size:11px';
+  for(const [v,t] of [['off','show every node as extracted'],['on','collapse same-name duplicates']]){
+    const o=document.createElement('option'); o.value=v; o.textContent=t; if((v==='on')===resolveOn) o.selected=true; sel.appendChild(o); }
+  sel.onchange=()=>{ resolveOn=(sel.value==='on'); rebuild(false); rerender(); draw(); renderEdgeCtl(); };
+  gb.appendChild(sel);
+
+  const st=document.createElement('div');
+  st.style.cssText='margin-top:5px;color:var(--faint);font-size:10px;line-height:1.4';
+  st.innerHTML = resolveOn
+    ? RES.stats.resolved+' group(s) collapsed · '+RES.stats.entities+' → '+RES.stats.collapsedTo+' entities'
+    : RES.stats.resolved+' group(s) would collapse · '+RES.stats.entities+' → '+RES.stats.collapsedTo;
+  gb.appendChild(st);
+
+  // The held-out groups are the ones a rule REFUSED to decide. Leaving them computed but invisible would be
+  // the worst of both: a judgment quietly deferred and never surfaced to anyone who could make it.
+  if(RES.stats.heldOut){
+    const hh=document.createElement('div');
+    hh.style.cssText='margin-top:6px;cursor:pointer;color:var(--accent);font-size:10px';
+    hh.textContent=(heldOpen?'▾ ':'▸ ')+RES.stats.heldOut+' need a human (person/place/event)';
+    hh.onclick=()=>{ heldOpen=!heldOpen; renderEdgeCtl(); };
+    gb.appendChild(hh);
+    if(heldOpen){
+      const list=document.createElement('div');
+      list.style.cssText='margin-top:4px;max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:2px';
+      for(const grp of RES.groups.filter(x=>x.heldOut)){
+        const row=document.createElement('div');
+        row.style.cssText='font-size:10.5px;color:var(--dim);cursor:pointer;padding:2px 4px;border-radius:4px;background:var(--surface-3)';
+        row.textContent=grp.members[0].name+'  ('+grp.members.map(m=>m.subtype).join(', ')+')';
+        row.title='click to open the first member';
+        row.onclick=()=>{ const n=nodes.find(x=>x.id===grp.canonical); if(n){ walk=[]; openNode(n,false); centerOn(n); } };
+        list.appendChild(row);
+      }
+      gb.appendChild(list);
+    }
+  }
+  g.appendChild(gb); box.appendChild(g);
 }
 
 // --- the hop ladder editor: brightness per hop, draggable ------------------------------------------------
