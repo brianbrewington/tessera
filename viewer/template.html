@@ -314,13 +314,20 @@ function radius(n){ const base = n.type==='PERSON' ? 5 : 4; return base + 10*Mat
 // alpha, so a faint node stays clickable, hoverable and findable, and returns to full strength as you
 // descend. Nothing is removed from the map; the map just stops shouting.
 const TIER_FLOOR = {continent:0.05, country:0.09, region:0.16, city:0.30, district:0.60, building:1};
+// HOW HARD to apply the fade, 0..1, user-adjustable like the edge budget. The right aggressiveness is a
+// property of the GRAPH, not of the renderer: a dense well-connected corpus wants little of this, and one
+// that is 72% singletons wants a lot. Rather than guess a constant per corpus, expose the knob. 0 reproduces
+// the old behaviour exactly (every node at full opacity), 1 is the full curve.
+let fadeStrength = 1;
 function nodeAlpha(n, tier){
+  if(fadeStrength <= 0) return 1;
   const floor = TIER_FLOOR[tier.name];
   if(!(floor < 1)) return 1;                                  // building: nothing is dimmed, ever
   // `tier.deg` is the degree at which a node BELONGS at this altitude — the same threshold the label budget
   // already uses, so opacity and labelling now tell the same story instead of two different ones.
   const belong = Math.min(1, (n.deg||0) / Math.max(1, tier.deg));
-  return floor + (1-floor)*Math.pow(belong, 1.4);             // exponent >1: the weak fade FASTER than the strong
+  const a = floor + (1-floor)*Math.pow(belong, 1.4);          // exponent >1: the weak fade FASTER than the strong
+  return 1 - fadeStrength*(1-a);                              // lerp toward "no fade at all"
 }
 
 function buildLegend(){
@@ -685,15 +692,28 @@ function openNode(n, deep){
   // provenance: in deep mode the chunk rows are BACKLINKS — click to open the source chunk (its raw text). In
   // focus mode, the distinct source documents (not clickable — the chunk layer stays hidden).
   const provN = edges.filter(e=>e.a===n && e.kind==='APPEARED_IN').map(e=>e.b);
-  if(provN.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel', deep?'Provenance — click to open the chunk':'Appears in — click to open the profile'));
+  if(provN.length){ const ap=el('div','section'); ap.appendChild(el('div','slabel','Appears in — click to open the chunk'));
     const card=el('div','appears');
-    if(deep){ provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); }); }
-    // focus mode: the source titles are clickable → walk to the PARENT profile (the persona PERSON node) or the
-    // SOURCE document node. This is the ONLY way off an orphan (a node with 0 semantic links, e.g. "Fertilizer Ratios").
-    // viewer nodes expose `label` + `group` (NOT name/subtype — those live in the store); match on those.
-    else { sourcesOf(n).forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.label===title)||nodes.find(x=>x.group==='document'&&x.label===title);
-      const row=el('div','src'+(target?' src-link':''), title); if(target) row.onclick=()=>revealAndGo(target); card.appendChild(row); }); }
-    ap.appendChild(card); pscroll.appendChild(ap); }
+    // BOTH modes now link to the CHUNK, not the document. The edge has always pointed at the chunk; only the
+    // display collapsed it to a document title, and that threw away the part that carries the meaning. For a
+    // node with zero semantic links the chunk is the ONLY context there is, and "tessera v1 — plan" does not
+    // tell you where in twenty-odd chunks the thing was said. A chunk label carries both ("chunk 5 of X"), so
+    // showing it is strictly more information, not a trade. The chunk's own panel still links onward to its
+    // document, which keeps entity -> chunk -> document as one honest ladder instead of a shortcut that skips
+    // the rung holding the evidence.
+    provN.forEach(cn=>{ const row=el('div','src src-link', cn.label||cn.id); row.onclick=()=>revealAndGo(cn); card.appendChild(row); });
+    ap.appendChild(card);
+    // The documents stay as SECONDARY context: still the fastest way to the parent profile, and still the way
+    // off an orphan, but no longer standing in for the provenance. Titles already carried by a chunk row are
+    // dropped so the panel does not say the same thing twice.
+    const docs=sourcesOf(n).filter(t=>!provN.some(cn=>(cn.label||'').includes(t)));
+    if(docs.length){ const dl=el('div','slabel'); dl.style.marginTop='9px'; dl.textContent='From';
+      ap.appendChild(dl);
+      const dcard=el('div','appears');
+      docs.forEach(title=>{ const target=nodes.find(x=>x.type==='PERSON'&&x.label===title)||nodes.find(x=>x.group==='document'&&x.label===title);
+        const row=el('div','src'+(target?' src-link':''), title); if(target) row.onclick=()=>revealAndGo(target); dcard.appendChild(row); });
+      ap.appendChild(dcard); }
+    pscroll.appendChild(ap); }
 
   pactions.appendChild(mkBtn('Center on map','primary',()=>centerOn(n)));
   pactions.appendChild(mkBtn('Save as scene',null,()=>saveScene(n.label))); // saves the current view, named for this node
@@ -903,6 +923,23 @@ function renderEdgeCtl(){
   sl.style.cssText='width:100%;margin-top:3px'; sl.disabled=(edgeMeasure==='none');
   sl.oninput=()=>{ edgeKeepPct=Number(sl.value); rebuild(false); renderEdgeCtl(); };
   box.appendChild(sl);
+
+  // --- node fade, in the same box because it is the same KIND of control: an attention budget. The edge
+  // slider decides how many edges are worth drawing; this one decides how loudly a node argues for your
+  // attention given how little it is connected to. Note it needs NO rebuild — it is purely a draw filter,
+  // and calling rebuild() here would re-settle the layout and move nodes, which a visual knob must never do.
+  const flab=document.createElement('div'); flab.style.cssText='display:flex;justify-content:space-between;margin-top:9px';
+  const pct=Math.round(fadeStrength*100);
+  flab.innerHTML='<span style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)">node fade</span><span style="color:var(--faint)">'+(pct?pct+'%':'off')+'</span>';
+  box.appendChild(flab);
+  const fnote=document.createElement('div');
+  fnote.style.cssText='margin-top:3px;color:var(--faint);font-size:10px;line-height:1.35';
+  fnote.textContent = pct ? 'weakly-linked nodes dim as you zoom out' : 'every node at full strength';
+  box.appendChild(fnote);
+  const fs=document.createElement('input'); fs.type='range'; fs.min='0'; fs.max='100'; fs.value=String(pct);
+  fs.style.cssText='width:100%;margin-top:3px';
+  fs.oninput=()=>{ fadeStrength=Number(fs.value)/100; draw(); renderEdgeCtl(); };
+  box.appendChild(fs);
 }
 
 // --- DROP TARGET (slice 3). Only active when the page is SERVED — a file:// bundle has no server to post
