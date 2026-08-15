@@ -37,7 +37,7 @@
   #tip{ position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--line-2);
     border-radius:8px; padding:7px 10px; font-size:12.5px; line-height:1.5; color:var(--text); max-width:280px; display:none; z-index:6; box-shadow:0 10px 30px rgba(0,0,0,.5); }
   #tip .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); display:block; margin-bottom:3px; }
-  #legend{ position:fixed; bottom:214px; left:14px; background:rgba(13,17,26,.86); border:1px solid var(--line);
+  #legend{ width:100%; background:rgba(13,17,26,.86); border:1px solid var(--line);
     border-radius:10px; padding:9px 11px; font-size:11px; color:var(--dim); }
   /* semantic-zoom chrome — kept on the LEFT so it clears the right-side panel */
   /* #altrail (the left zoom-tier rail) was REMOVED: it listed continent/country/region/... and so does
@@ -52,7 +52,19 @@
   #altrail .dot{ position:absolute; left:6px; width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); transition:top .25s; }
   #zcrumb{ position:fixed; top:16px; left:50%; transform:translateX(-50%); font-family:var(--mono); font-size:10px; letter-spacing:.1em;
     text-transform:uppercase; color:var(--dim); background:rgba(13,17,26,.7); border:1px solid var(--line); border-radius:99px; padding:5px 13px; pointer-events:none; }
-  #minimap{ position:fixed; bottom:14px; left:14px; width:268px; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  /* ONE SCROLLING COLUMN, not three fixed boxes with hardcoded offsets. The old layout pinned #scenes at
+     top:232/bottom:356, #edgectl at bottom:220 and #minimap at bottom:14 — numbers that only work at one
+     window height. Shorten the window and they overlap, and the scenes list ends up UNDER the edge-budget
+     panel, visible but unclickable. Stacking them in a flex column that scrolls means the failure mode of a
+     short window is a scrollbar rather than buried controls. */
+  #leftcol{ position:fixed; left:14px; top:62px; bottom:14px; width:268px; z-index:6;
+    display:flex; flex-direction:column; gap:9px; overflow-y:auto; overflow-x:hidden;
+    scrollbar-width:thin; pointer-events:none; padding-right:2px; }
+  #leftcol > *{ pointer-events:auto; flex:0 0 auto; }
+  #leftcol::-webkit-scrollbar{ width:6px; }
+  #leftcol::-webkit-scrollbar-thumb{ background:var(--line-2); border-radius:3px; }
+  #minimap{ width:100%; background:rgba(13,17,26,.86); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-top:auto; }
+  #minimap canvas{ display:block; width:100%; height:auto; }
   #minimap .mm-head{ display:flex; justify-content:space-between; align-items:center; padding:6px 10px; font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); border-bottom:1px solid var(--line); }
   #minimap canvas{ display:block; background:#080a0f; cursor:crosshair; }
   /* scenes — saved views. A VERTICAL stack in the left column, between the zoom rail and the edge budget.
@@ -61,10 +73,8 @@
      gives drag-reorder an obvious place to grab. */
   /* top clears #altrail (the zoom-tier rail); bottom clears #edgectl, which sits at bottom:220 and is about
      110px tall. Both neighbours are fixed-position, so this column is a budget, not a flow. */
-  #scenes{ position:fixed; left:14px; top:232px; bottom:356px; width:268px; display:flex; flex-direction:column;
-    gap:6px; z-index:6; pointer-events:none; }
-  #scenes > *{ pointer-events:auto; }
-  #scenes .list{ display:flex; flex-direction:column; gap:4px; overflow-y:auto; overflow-x:hidden; min-height:0; }
+  #scenes{ width:100%; display:flex; flex-direction:column; gap:6px; }
+  #scenes .list{ display:flex; flex-direction:column; gap:4px; }
   #scenes .sc{ display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text);
     background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:5px 9px; cursor:pointer; }
   #scenes .sc .grip{ color:var(--faint); font-size:11px; cursor:grab; flex:0 0 auto; letter-spacing:-1px; }
@@ -202,9 +212,11 @@
 <div id="pill"><span class="dot"></span><span class="gname" id="gname"></span><span class="gcount" id="gcount"></span><span class="gdirty" id="gdirty"></span></div>
 <div id="zcrumb"></div>
 <div id="tip"></div>
+<div id="leftcol">
 <div id="legend"></div>
-<div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
 <div id="scenes"></div>
+<div id="minimap"><div class="mm-head"><span>OVERVIEW</span><span id="mmzoom">1.00×</span></div><canvas id="mmc" width="268" height="168"></canvas></div>
+</div>
 <div id="nowplaying"></div>
 <div id="panel">
   <div class="p-head">
@@ -1363,8 +1375,12 @@ function discardLayout(){
 function renderEdgeCtl(){
   let box=document.getElementById('edgectl');
   if(!box){ box=document.createElement('div'); box.id='edgectl';
-    box.style.cssText='position:fixed;left:14px;bottom:220px;z-index:6;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--dim);min-width:190px';
-    document.body.appendChild(box); }
+    // Lives INSIDE #leftcol now. It used to be fixed at bottom:220px, which collided with #scenes on a short
+    // window and buried the scene list under it.
+    box.style.cssText='width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--dim)';
+    const col=document.getElementById('leftcol');
+    const mm=document.getElementById('minimap');
+    if(col && mm) col.insertBefore(box, mm); else document.body.appendChild(box); }
   if(!PROM_MEASURES.length){ box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase">edge budget</div><div style="margin-top:5px">no prominence computed —<br>run <code>tessera view</code> again</div>'; return; }
   box.innerHTML='<div style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)">edge budget</div>';
   const sel=document.createElement('select');

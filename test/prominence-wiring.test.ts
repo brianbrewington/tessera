@@ -151,11 +151,29 @@ describe("prominence is VISIBLE, not just filterable", () => {
     expect(TEMPLATE).toContain("0.35 + 1.30*p");
   });
 
-  it("the edge control clears the minimap (they collided at bottom:150px)", () => {
-    // The minimap is fixed at bottom:14px and is ~192px tall (24px head + 168px canvas), so it occupies up
-    // to ~206px. Brian hit this on synthpl: the slider was underneath it.
-    expect(TEMPLATE).toMatch(/#minimap\{[^}]*bottom:14px/);
-    expect(TEMPLATE).toMatch(/id='edgectl'[\s\S]{0,220}bottom:220px/);
+  it("the left-hand controls cannot overlap each other at ANY window height", () => {
+    // REWRITTEN 2026-08-15. This used to assert the specific offsets (#minimap at bottom:14px, the edge
+    // control at bottom:220px) that kept those two apart. That tested the MECHANISM, not the property — and
+    // the mechanism was wrong: hand-placed offsets only hold at one window height. Brian shortened the window
+    // and the scenes list ended up underneath the edge-budget box, visible but unclickable.
+    //
+    // The property is now structural rather than arithmetic: every left-hand control lives inside a single
+    // flex column that scrolls. Siblings in a column cannot overlap, so the failure mode of a short window is
+    // a scrollbar instead of buried controls. These assertions pin that structure.
+    expect(TEMPLATE).toMatch(/#leftcol\{[^}]*display:flex/);
+    expect(TEMPLATE).toMatch(/#leftcol\{[^}]*flex-direction:column/);
+    expect(TEMPLATE).toMatch(/#leftcol\{[^}]*overflow-y:auto/);
+
+    // and nothing inside it may re-introduce a hand-placed offset
+    const col = TEMPLATE.slice(TEMPLATE.indexOf('<div id="leftcol">'), TEMPLATE.indexOf("</style>") > 0 ? TEMPLATE.length : 0);
+    for (const id of ["scenes", "legend", "minimap"]) {
+      const rule = TEMPLATE.match(new RegExp(`#${id}\\{[^}]*\\}`))?.[0] ?? "";
+      expect(rule, `#${id} must not be positioned by hand inside the column`).not.toMatch(/position:fixed/);
+    }
+    void col;
+
+    // the edge control is inserted INTO the column, not appended to the body
+    expect(TEMPLATE).toMatch(/id='edgectl'[\s\S]{0,600}insertBefore\(box, mm\)/);
   });
 });
 
