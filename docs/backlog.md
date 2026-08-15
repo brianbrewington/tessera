@@ -756,7 +756,32 @@ is attention, not truth.
   field on its own. If both land, tune the fade *after* the resolution view, or the constants get picked
   against a node population that is about to change.
 
-**Disposition: QUEUED, viewer-only, no dependencies.** Small enough to do between the larger items, and
+**Disposition: BUILT 2026-08-15.** `nodeAlpha(n, tier)` in `viewer/template.html`, keyed off `tier.deg` —
+the same per-altitude degree threshold the label budget already used, so opacity and labelling now tell one
+story instead of two. Option (1) as recommended: `n.deg`, one function, so swapping in a node-level
+prominence later is a body change and not a rewrite.
+
+Measured while building it, and it reframes the report from a lighting complaint into a structural fact:
+**346 of 1714 entities (20%) have zero semantic links, and 882 more have exactly one.** Median degree is 1;
+only 65 nodes reach degree 5. So ~72% of the continent view was degree ≤1 drawing at full opacity with a
+full glow halo. Running the shipped page's own `nodeAlpha` over the real graph: at continent 1671 of 1714
+nodes now fall below 0.2 alpha and 5 stay above 0.8 (the tier's label budget is 4, so that is the design's
+own intent); at building every node is 1.00.
+
+Two decisions worth keeping:
+- **The halo fades quadratically, the core linearly.** The halo is 2.4x the radius and ADDS across
+  overlapping neighbours, so it, not the core, was what turned 1714 nodes into a uniform wash.
+- **The altitude fade applies only when nothing is focused.** Compounding it with the existing focus-dim
+  (0.18) drove background context to ~0.009 and blacked out the map around whatever you clicked. One dimming
+  system at a time.
+
+Still true, and checked rather than assumed: `nodeAt()` hit-tests on `radius`, never on alpha, so a faint
+node is still clickable, hoverable and findable. Fading is not filtering.
+
+**Open, and Brian's call by eye:** the constants. `TIER_FLOOR` and the 1.4 exponent are the knobs; 5 bright
+nodes at continent may read as too austere. Tuning is a one-line change.
+
+**Original disposition, kept for the record: QUEUED, viewer-only, no dependencies.** Small enough to do between the larger items, and
 it wants a real before/after screenshot at the same zoom rather than a test, because the acceptance
 criterion is "do the hubs read at 0.5x" and no assertion captures that. A test can still pin the pure
 function (strength → alpha at a given scale) once it exists.
