@@ -785,3 +785,73 @@ nodes at continent may read as too austere. Tuning is a one-line change.
 it wants a real before/after screenshot at the same zoom rather than a test, because the acceptance
 criterion is "do the hubs read at 0.5x" and no assertion captures that. A test can still pin the pure
 function (strength → alpha at a given scale) once it exists.
+
+---
+
+## Multiple descriptions per node, and therefore multiple embeddings (Brian, 2026-08-15)
+
+**The idea, verbatim:** *"if nodes carry multiple descriptions (and perhaps they should) then they could also
+carry multiple embeddings, which would help with edge proposal. Maybe different models would describe
+differently. I wonder if that'd be interesting."*
+
+**What a node embeds today, verified rather than read off a doc:** `name + ". " + description`, truncated at
+2000 chars. `src/ingest/mapper.ts:37` builds that exact string and passes the vector to `putNode`, which uses
+it rather than re-embedding. Confirmed during E1 by re-embedding a node and getting cosine **1.0000** against
+the stored vector. One description, one vector, one row.
+
+### Why this is more than a nice-to-have: it attacks a measured defect
+
+E1 measured that adding the description to the embedding **hurts** identity matching badly — name-only
+recovers 0.846 of known duplicates at a zero-false-positive floor, name+description recovers 0.169. The
+diagnosis was register homogeneity: one model, one voice, one system, one register, so a large shared
+constant rides on every description and swamps what distinguishes them. Separation between true duplicates
+and confusable non-duplicates collapses from 0.516 to 0.197.
+
+Brian's idea is a direct attack on that constant. **If several different models describe the same node, their
+shared component is no longer a single model's voice.** Whatever survives across a qwen description, a gemma
+description and a phi4 description is more likely to be the thing itself. The shared-voice vector partially
+cancels; the referent does not.
+
+That also connects to the `analogy_maker` instance's batching hypothesis (`docs/notes/`): our extractor emits
+8-20 entities per call, so every description in the corpus is batch-generated, and they measured causally that
+batched generation raises shared vocabulary 1.89x. Multi-model description and one-per-call description are
+two independent ways of decorrelating the same nuisance signal, and the same instrument tests both — N-hard
+mean cosine is the floor among known-unrelated nodes, already measured at 0.420 name-only vs 0.640
+name+description. That 0.22 rise IS the shared component, quantified. Either intervention should move it down.
+
+### What it would buy for edge proposal, which is Brian's stated motive
+
+Today the Connector probes with one vector per node. With k descriptions a node has k probes into the
+neighbourhood, and the interesting signal is not the union but the **agreement**: a neighbour found by every
+description is a different kind of candidate from one found by exactly one. That is a confidence signal
+obtained without a verifier call, and it is the same shape as the two-signal complementarity found in E2
+(cosine and string agreement failing in different places, so their conjunction is trustworthy and their
+disjunction is a candidate set).
+
+### The costs, stated honestly
+
+- **Storage and schema.** `vec_node_*` is keyed one vector per node. Multiple descriptions means either a
+  description table with its own vector rows, or k parallel indexes. This is a real schema change, not a
+  column.
+- **Extraction cost multiplies.** Each additional describing model is another pass over every entity. E4
+  measured that roughly half the per-call cost is fixed, so a second describer is not half price.
+- **Identity must not fork.** A node is still ONE node. Descriptions are attributes of it, not variants of
+  it, and the identity string must keep excluding them or the whole content-addressing scheme splits.
+- **Which description does the viewer show?** The panel shows one. Picking arbitrarily is a lie; showing all
+  is clutter. Probably: a designated primary, others behind the deep-inspect.
+
+### Open questions
+
+- Does multi-model description actually decorrelate, or do models trained on overlapping corpora share the
+  same register anyway? **This is measurable before building anything**, and cheaply: describe ~200 nodes
+  with two different local families, embed both, and compare N-hard mean cosine per family and pooled. If
+  pooled separation beats each family alone, the idea is real. If not, it dies for the price of ~400 calls.
+- Is agreement-across-descriptions actually a better candidate signal than one good description? Same
+  experiment answers it.
+- Does this interact with the resolution view (B27)? A node with k descriptions has k chances to match a
+  candidate, which raises recall and probably also raises false-merge pressure. The anti-edge rule would need
+  to know which description produced a rejected match.
+
+**Disposition: QUEUED as an experiment, not as a build.** The cheap decorrelation measurement above is the
+gate, and it reuses E0's frozen label sets and the existing N-hard control, so it costs one afternoon and no
+new pre-registration beyond its own decision rule. Nothing gets built until that number exists.
