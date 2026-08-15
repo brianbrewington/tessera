@@ -110,7 +110,8 @@ describe("the hop→opacity ladder", () => {
   // detail: the jump from hop 1 to hop 2 skips the 0.25–1.00 interference band in one step rather than ramping
   // through it, and "unreachable" sits below the band entirely because it means DISCONNECTED, not far.
   const f = new Function(
-    `${TPL.match(/const HOP_NONE[^\n]*\n/)![0]}${TPL.match(/const BG_LO[^\n]*\n/)![0]}` +
+    `${TPL.match(/const HOP_LADDER_DEFAULT[^\n]*\n/)![0]}let HOP_LADDER = HOP_LADDER_DEFAULT.slice();\n` +
+      `${TPL.match(/const HOP_NONE_DEFAULT[^\n]*\n/)![0]}let HOP_NONE = HOP_NONE_DEFAULT;\n` +
       `${TPL.match(/function hopAlpha\(h\)\{[\s\S]*?\n\}/)![0]}; return hopAlpha;`,
   )() as (h: number | undefined) => number;
 
@@ -266,4 +267,46 @@ describe("the attraction knob cannot produce an unusable layout", () => {
       expect(r).toBeLessThan(1e6);     // not diverged
     });
   }
+});
+
+describe("the hop ladder is data, and hopAlpha follows it", () => {
+  // Matthew asked for per-hop dimming to be tunable. The risk with any "editable" control is that the editor
+  // and the thing it edits drift apart, so the slider moves and nothing changes. These drive the real
+  // function through a mutated ladder.
+  const build = (): { f: (h: number | undefined) => number; set: (i: number, v: number) => void; setNone: (v: number) => void; len: () => number } =>
+    new Function(
+      `${TPL.match(/const HOP_LADDER_DEFAULT[^\n]*\n/)![0]}let HOP_LADDER = HOP_LADDER_DEFAULT.slice();\n` +
+        `${TPL.match(/const HOP_NONE_DEFAULT[^\n]*\n/)![0]}let HOP_NONE = HOP_NONE_DEFAULT;\n` +
+        `${TPL.match(/function hopAlpha\(h\)\{[\s\S]*?\n\}/)![0]}
+         return { f: hopAlpha, set: (i,v) => { HOP_LADDER[i] = v; }, setNone: v => { HOP_NONE = v; }, len: () => HOP_LADDER.length };`,
+    )() as ReturnType<typeof build>;
+
+  it("an edited rung changes exactly that hop and nothing else", () => {
+    const L = build();
+    const before = [0, 1, 2, 3, 4, 5].map(L.f);
+    L.set(3, 0.9);
+    const after = [0, 1, 2, 3, 4, 5].map(L.f);
+    expect(after[3]).toBe(0.9);
+    for (const i of [0, 1, 2, 4, 5]) expect(after[i]).toBe(before[i]);
+  });
+
+  it("the last rung means 'this far OR FURTHER'", () => {
+    const L = build();
+    const last = L.len() - 1;
+    L.set(last, 0.07);
+    for (const h of [last, last + 1, last + 7, 40]) expect(L.f(h)).toBe(0.07);
+  });
+
+  it("unreachable is edited separately from any hop", () => {
+    const L = build();
+    L.setNone(0.5);
+    expect(L.f(undefined)).toBe(0.5);
+    expect(L.f(5)).not.toBe(0.5);   // the ladder is untouched
+  });
+
+  it("defaults are the evidence-argued values, so 'reset' means something specific", () => {
+    const L = build();
+    expect([0, 1, 2, 3, 4, 5].map(L.f)).toEqual([1, 1, 0.2, 0.167, 0.133, 0.1]);
+    expect(L.f(undefined)).toBeCloseTo(0.02, 5);
+  });
 });

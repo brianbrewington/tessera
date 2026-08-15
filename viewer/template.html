@@ -474,12 +474,20 @@ function computeHops(){
 // distance ramp. It gets its own constant below the backgrounded band: present enough to remain hit-testable
 // (nodeAt() tests radius, never alpha, so it is still clickable and hoverable) and faint enough to read as
 // absent rather than as the far end of the neighbourhood.
-const HOP_NONE = 0.02;
+const HOP_NONE_DEFAULT = 0.02;
+// THE LADDER, now data rather than arithmetic. Matthew asked for per-hop dimming to be tunable, and the
+// honest way to expose a piecewise function is to show the pieces. Index = hop count; the LAST entry covers
+// "that many hops or more". The defaults are the argued-from-evidence values: hops 0-1 fully present, then a
+// jump that skips the 0.25-1.00 interference band entirely, then a ramp inside the usable 0.10-0.20 range.
+// The editor draws that dead band so a value placed inside it is visibly spending contrast for nothing —
+// which teaches the constraint instead of enforcing it. You can still go there; you just get to see it.
+const HOP_LADDER_DEFAULT = [1, 1, 0.20, 0.167, 0.133, 0.10];
+let HOP_LADDER = HOP_LADDER_DEFAULT.slice();
+let HOP_NONE = HOP_NONE_DEFAULT;
 function hopAlpha(h){
   if(h===undefined || h===null) return HOP_NONE;
-  if(h <= 1) return 1;                            // the node and what it touches stay fully present
-  const t = Math.min(1, (h-2)/3);                 // hop 2 -> 0.20, hop 5+ -> 0.10, all inside the usable band
-  return BG_HI - (BG_HI-BG_LO)*t;
+  const i = Math.min(h, HOP_LADDER.length - 1);   // the last rung is "this far or further"
+  return HOP_LADDER[i];
 }
 let focusMode = 'neighbours';                     // 'neighbours' = flat dim (original) | 'hops' = structural
 
@@ -1369,8 +1377,59 @@ function renderEdgeCtl(){
   dn.style.cssText='margin-top:4px;color:var(--faint);font-size:10px;line-height:1.35';
   dn.textContent = focusMode==='hops' ? 'opacity comes from distance in the graph' : 'one step: neighbours stay, the rest dims';
   box.appendChild(dn);
+  if(focusMode==='hops') renderHopLadder(box);
 
   renderLayoutCtl(box);
+}
+
+// --- the hop ladder editor: brightness per hop, draggable ------------------------------------------------
+function renderHopLadder(box){
+  const wrap=document.createElement('div'); wrap.style.cssText='margin-top:8px';
+  const rows=[...HOP_LADDER.map((v,i)=>({label: i===HOP_LADDER.length-1 ? i+'+' : String(i), get:()=>HOP_LADDER[i], set:v=>{HOP_LADDER[i]=v;}})),
+              {label:'∞', get:()=>HOP_NONE, set:v=>{HOP_NONE=v;}}];
+  for(const r of rows){
+    const row=document.createElement('div');
+    row.style.cssText='display:grid;grid-template-columns:18px 1fr 30px;gap:6px;align-items:center;margin-top:3px';
+    const lab=document.createElement('span');
+    lab.style.cssText='font-family:var(--mono);font-size:9px;color:var(--faint);text-align:right';
+    lab.textContent=r.label;
+    const track=document.createElement('div');
+    track.style.cssText='position:relative;height:13px;background:var(--surface-3);border:1px solid var(--line-2);border-radius:3px;cursor:ew-resize;overflow:hidden';
+    // THE DEAD BAND, drawn. 0.25-1.00 is where two labs measured the interference curve to be flat, so a
+    // value in here costs contrast and buys nothing. Showing it is more useful than forbidding it.
+    const dead=document.createElement('div');
+    dead.style.cssText='position:absolute;left:25%;right:0;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(247,118,142,.13) 3px,rgba(247,118,142,.13) 6px);pointer-events:none';
+    track.appendChild(dead);
+    const fill=document.createElement('div');
+    fill.style.cssText='position:absolute;left:0;top:0;bottom:0;background:var(--accent);opacity:.85;pointer-events:none';
+    fill.style.width=(100*r.get())+'%';
+    track.appendChild(fill);
+    const num=document.createElement('span');
+    num.style.cssText='font-family:var(--mono);font-size:9.5px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums';
+    num.textContent=r.get().toFixed(2);
+    const setFrom=ev=>{
+      const b=track.getBoundingClientRect();
+      const v=Math.max(0, Math.min(1, (ev.clientX-b.left)/b.width));
+      r.set(Math.round(v*100)/100);
+      fill.style.width=(100*r.get())+'%'; num.textContent=r.get().toFixed(2);
+      draw();
+    };
+    track.addEventListener('pointerdown', ev=>{ track.setPointerCapture(ev.pointerId); setFrom(ev); });
+    track.addEventListener('pointermove', ev=>{ if(track.hasPointerCapture(ev.pointerId)) setFrom(ev); });
+    row.appendChild(lab); row.appendChild(track); row.appendChild(num);
+    wrap.appendChild(row);
+  }
+  const foot=document.createElement('div');
+  foot.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-top:5px';
+  const key=document.createElement('span');
+  key.style.cssText='color:var(--faint);font-size:9.5px'; key.textContent='hatched = perceptually flat';
+  const rst=document.createElement('button');
+  rst.textContent='reset';
+  rst.style.cssText='font-size:10px;padding:2px 7px;border-radius:5px;background:var(--surface-3);color:var(--dim);border:1px solid var(--line-2);cursor:pointer';
+  rst.onclick=()=>{ HOP_LADDER=HOP_LADDER_DEFAULT.slice(); HOP_NONE=HOP_NONE_DEFAULT; draw(); renderEdgeCtl(); };
+  foot.appendChild(key); foot.appendChild(rst);
+  wrap.appendChild(foot);
+  box.appendChild(wrap);
 }
 
 // --- LAYOUT group: compute off-screen, apply, poke around, then persist if you like it -------------------
