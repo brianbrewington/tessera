@@ -513,6 +513,117 @@ footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--rule);
 </div>
 </section>
 
+<section>
+<div class="col">
+  <div class="shead"><span class="snum">09</span><h2>What the perception literature knows, and mostly doesn't</h2></div>
+
+  <p>Everything above is about what a projection preserves mathematically. None of it says anything about
+  what a <em>person</em> can read off the result. That is a separate literature, and its most important
+  property is how thin it is.</p>
+
+  <p>Ellis &amp; Dix surveyed clutter-reduction techniques and found that <strong>12 of 65</strong> papers
+  reported any evaluation at all. Almost every decluttering method in common use is an untested proposal that
+  spread because it was plausible. Hold that thought while reading the rest of this section — including the
+  parts that support what this project already built.</p>
+
+  <h3>Opacity has a much narrower usable band than intuition suggests</h3>
+
+  <p>This is the finding that changed code in this repository. Harrison, Ishii, Vicente &amp; Buxton
+  (<em>CHI '95</em>, pp. 317–324) measured how much a faded item interferes with the item you are actually
+  attending to, using a Stroop paradigm. Aboelsaadat &amp; Balakrishnan (<em>British HCI 2004</em>,
+  pp. 53–67, N=16) independently reproduced the breakpoints nine years later. Both found the same two things:</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Study</th><th>Interference groupings (post-hoc, α=.05)</th></tr></thead>
+    <tbody>
+      <tr><td>Harrison et al. 1995</td><td class="n">{100, 50, 20} | 10 | 5 | 0</td></tr>
+      <tr><td>Aboelsaadat &amp; Balakrishnan 2004</td><td class="n">{100, 75, 50, 25} | {10, 7.5} | {5}</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <ol>
+    <li><strong>The curve is flat from roughly 25% to 100%.</strong> Fading something from 1.0 to 0.5 buys
+    almost nothing perceptually. Every intermediate alpha above 0.25 is spent for no return.</li>
+    <li><strong>Alpha near 0.5 sits close to the peak of the interference curve</strong> — the most
+    distracting place to put a de-emphasized item, not a polite middle.</li>
+  </ol>
+
+  <p>Bartram &amp; Stone (<em>IEEE TVCG</em> 17(10):1444–1458, 2011) asked the boundary-condition question
+  directly and give <strong>~0.1 for backgrounds that are not too dense, 0.2 universally</strong>. They name
+  the top-of-range failure the <em>fence effect</em>: past a threshold, backgrounded structure stops reading
+  as a layer behind the data and starts reading as a barrier in front of it.</p>
+
+  <div class="callout warn">
+    <p class="eyebrow">This corrected shipped code</p>
+    <p>The node-fade added to this project's viewer originally used tier floors of 0.30 and 0.60. Both sit in
+    the dead zone; the 0.60 tier looked like a fade and did essentially nothing, and mid-degree nodes at one
+    zoom level landed near 0.48, which is close to the worst available value. The mapping now uses two
+    regimes — backgrounded inside 0.10–0.20 where ordering is still legible, then a fast crossing to present
+    — because the evidence says there are only two useful states.</p>
+  </div>
+
+  <p><strong>Stated as extrapolation, because it is one.</strong> Every measurement above used thin reference
+  structures such as grid lines, or Stroop stimuli. Nobody has run this on de-emphasized <em>content items</em>
+  in a working display. And one boundary is known: Mairena, Gutwin &amp; Cockburn
+  (<em>Information Visualization</em> 21(2):95–129, 2022) tested 12 emphasis effects across 6 magnitudes and
+  found opacity de-emphasis <strong>fails outright on space-filling layouts</strong> — maximum accuracy 0.56
+  on a HexbinMap at any magnitude. Discrete marks are fine; filled regions are not.</p>
+
+  <h3>Edge bundling distorts the thing it is used to reveal</h3>
+
+  <p>The folk wisdom is that bundling reveals high-level structure. The evidence says otherwise, and the
+  strongest study is recent. Wallinger, Akbulut, Rufai, Purchase &amp; Archambault (<em>CHI '25</em>) found
+  participants <em>preferred</em> bundled views, <em>followed false connections</em> in tightly bundled
+  diagrams, and — the finding that matters — <strong>bundle routing changed which nodes participants assigned
+  to clusters.</strong> Bundling distorts the cluster reading you would adopt it to produce.</p>
+
+  <p>Bach et al. (<em>IEEE TVCG</em> 23(1):541–550, 2017, N=15) measured shortest-path performance across
+  four edge representations and found bundling significantly the worst: 17.2 s versus 9.3 s for plain
+  graphs, accuracy 77% versus 86% — <em>on graphs of 7 to 15 nodes</em>. It hurts at trivial scale. Holten's
+  original 2006 paper self-describes its evaluation as informal; Force-Directed Edge Bundling (2009) has no
+  user study at all.</p>
+
+  <h3>Structural metrics do not predict what people see</h3>
+
+  <p>Wu, Cao, Archambault, Shen, Qu &amp; Cui (<em>IEEE TVCG</em> 23(1):401–410, 2017) ran three controlled
+  experiments on graph sampling and found that of many computed cluster-quality metrics, <strong>only cluster
+  count matched perceived quality</strong>. Participants also <em>felt</em> one sampling method covered more
+  of the display than another when both covered similar pixel percentages.</p>
+
+  <p>The warning transfers directly to anything in this tutorial: do not tune a decluttering heuristic against
+  a structural graph metric and assume the perceptual result follows. It does not. And relatedly, Holten,
+  Isenberg, van Wijk &amp; Fekete (<em>PacificVis 2011</em>, pp. 195–202) found that <strong>stacking visual
+  cues "did not result in significant performance gains, hinting at possible interference instead of
+  reinforcement"</strong> — combining fade with desaturation with shrink may not compound.</p>
+
+  <h3>Semantic zoom itself has never been evaluated</h3>
+
+  <p>Worth ending on, because it reframes everything above. Semantic zoom has been a named, central concept
+  since Pad (Perlin &amp; Fox, 1993), and is treated as a defining dimension of zoomable interfaces in the
+  field's standard survey (Cockburn, Karlson &amp; Bederson, <em>ACM Computing Surveys</em> 41(1), 2008). Yet
+  that survey's empirical-evaluations section discusses semantic zoom in exactly one study, as a secondary
+  factor, and its summary does not mention it at all. <strong>No controlled study isolates semantic zoom
+  against geometric zoom</strong>, and none exists for zoomable graph interfaces at all.</p>
+
+  <p>The one substantive result to lean on: Hornbæk, Bederson &amp; Plaisant (<em>ACM TOCHI</em>
+  9(4):362–389, 2002, N=32) found that <strong>with semantic zoom enabled, adding an overview made users
+  slower</strong>, apparently because the semantic detail made the overview redundant. Notably, 80% preferred
+  the overview anyway — a clean demonstration that preference and performance dissociate. Treat it as
+  suggestive: the primary text is paywalled and secondary sources disagree about whether semantic zoom was a
+  controlled factor or a property of one of the two test maps.</p>
+
+  <div class="callout">
+    <p class="eyebrow">The honest summary</p>
+    <p>You are designing in a field where the central concepts are thirty years old, universally cited, and
+    largely unevaluated. That is not a reason for paralysis. It is a reason to measure your own system, since
+    there is often nothing to look up — and it means a careful measurement on a real corpus can be worth more
+    than a citation.</p>
+  </div>
+</div>
+</section>
+
 <footer>
   <div class="col">
     <p><b>Sources worth reading directly:</b> van der Maaten &amp; Hinton, <em>Visualizing Data using
