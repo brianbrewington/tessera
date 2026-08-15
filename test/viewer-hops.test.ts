@@ -310,3 +310,55 @@ describe("the hop ladder is data, and hopAlpha follows it", () => {
     expect(L.f(undefined)).toBeCloseTo(0.02, 5);
   });
 });
+
+describe("persisted dimming preferences are validated, not trusted", () => {
+  // Stored JSON is data written by a PREVIOUS version of this page. A ladder of the wrong length, or holding
+  // a string, would make every node's alpha NaN — an invisible map with no error message anywhere. So the
+  // loader validates shape and range before adopting anything.
+  const load = new Function(
+    `${TPL.match(/const HOP_LADDER_DEFAULT[^\n]*\n/)![0]}let HOP_LADDER = HOP_LADDER_DEFAULT.slice();\n` +
+      `${TPL.match(/const HOP_NONE_DEFAULT[^\n]*\n/)![0]}let HOP_NONE = HOP_NONE_DEFAULT;\n` +
+      `let fadeStrength = 1, focusMode = 'neighbours';
+       const GRAPH = { name: 't' };
+       const PREF_KEY = 'tessera-dim-' + (GRAPH.name || 'graph');
+       let STORE = null;
+       const localStorage = { getItem: () => STORE, setItem: () => {} };
+       ${TPL.match(/function loadPrefs\(\)\{[\s\S]*?\n\}/)![0]}
+       return (raw) => { STORE = raw; HOP_LADDER = HOP_LADDER_DEFAULT.slice(); HOP_NONE = HOP_NONE_DEFAULT;
+         fadeStrength = 1; focusMode = 'neighbours'; loadPrefs();
+         return { ladder: HOP_LADDER, none: HOP_NONE, fade: fadeStrength, mode: focusMode }; };`,
+  )() as (raw: string | null) => { ladder: number[]; none: number; fade: number; mode: string };
+
+  const D = [1, 1, 0.2, 0.167, 0.133, 0.1];
+
+  it("adopts a well-formed ladder", () => {
+    const r = load(JSON.stringify({ ladder: [1, 1, 0.33, 0.06, 0.04, 0.02], none: 0.02, fade: 1, mode: "hops" }));
+    expect(r.ladder).toEqual([1, 1, 0.33, 0.06, 0.04, 0.02]);
+    expect(r.mode).toBe("hops");
+  });
+
+  it("rejects a ladder of the wrong LENGTH", () => {
+    expect(load(JSON.stringify({ ladder: [1, 0.5] })).ladder).toEqual(D);
+  });
+
+  it("rejects non-numbers and out-of-range values, which would silently NaN the whole map", () => {
+    for (const bad of [["a", 1, 0.2, 0.1, 0.1, 0.1], [1, 1, NaN, 0.1, 0.1, 0.1], [1, 1, 2, 0.1, 0.1, 0.1], [1, 1, -1, 0.1, 0.1, 0.1]])
+      expect(load(JSON.stringify({ ladder: bad })).ladder).toEqual(D);
+  });
+
+  it("survives absent, empty and corrupt storage", () => {
+    for (const raw of [null, "", "{", "null", "[]", '"x"']) expect(load(raw).ladder).toEqual(D);
+  });
+
+  it("adopts each field independently, so one bad field does not discard a good one", () => {
+    const r = load(JSON.stringify({ ladder: "junk", none: 0.05, fade: 0.4, mode: "hops" }));
+    expect(r.ladder).toEqual(D);   // rejected
+    expect(r.none).toBe(0.05);     // kept
+    expect(r.fade).toBe(0.4);
+    expect(r.mode).toBe("hops");
+  });
+
+  it("rejects an unknown focus mode", () => {
+    expect(load(JSON.stringify({ mode: "wat" })).mode).toBe("neighbours");
+  });
+});

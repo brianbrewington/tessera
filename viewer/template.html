@@ -484,6 +484,27 @@ const HOP_NONE_DEFAULT = 0.02;
 const HOP_LADDER_DEFAULT = [1, 1, 0.20, 0.167, 0.133, 0.10];
 let HOP_LADDER = HOP_LADDER_DEFAULT.slice();
 let HOP_NONE = HOP_NONE_DEFAULT;
+
+// Dimming preferences persist. Tuning a seven-rung ladder by hand and losing it on reload makes the control
+// not worth using twice. Stored per graph, because a corpus with a different shape wants different values.
+// RESET still restores the evidence-argued defaults rather than the last saved state — a reset that returns
+// you to your own previous guess is not a reset.
+const PREF_KEY = 'tessera-dim-' + (GRAPH.name || 'graph');
+function savePrefs(){
+  try{ localStorage.setItem(PREF_KEY, JSON.stringify({ ladder:HOP_LADDER, none:HOP_NONE, fade:fadeStrength, mode:focusMode })); }
+  catch(e){ /* private mode, quota, file:// with storage disabled — a lost preference is not worth throwing over */ }
+}
+function loadPrefs(){
+  let p; try{ p = JSON.parse(localStorage.getItem(PREF_KEY) || 'null'); }catch(e){ return; }
+  if(!p) return;
+  // Validate rather than trust. Stored JSON is data from a previous version of this page, and a ladder of the
+  // wrong length or holding non-numbers would make every node's alpha NaN — an invisible map with no error.
+  if(Array.isArray(p.ladder) && p.ladder.length===HOP_LADDER_DEFAULT.length
+     && p.ladder.every(v=>typeof v==='number' && Number.isFinite(v) && v>=0 && v<=1)) HOP_LADDER=p.ladder.slice();
+  if(typeof p.none==='number' && Number.isFinite(p.none) && p.none>=0 && p.none<=1) HOP_NONE=p.none;
+  if(typeof p.fade==='number' && Number.isFinite(p.fade) && p.fade>=0 && p.fade<=1) fadeStrength=p.fade;
+  if(p.mode==='hops' || p.mode==='neighbours') focusMode=p.mode;
+}
 function hopAlpha(h){
   if(h===undefined || h===null) return HOP_NONE;
   const i = Math.min(h, HOP_LADDER.length - 1);   // the last rung is "this far or further"
@@ -1360,7 +1381,7 @@ function renderEdgeCtl(){
   box.appendChild(fnote);
   const fs=document.createElement('input'); fs.type='range'; fs.min='0'; fs.max='100'; fs.value=String(pct);
   fs.style.cssText='width:100%;margin-top:3px';
-  fs.oninput=()=>{ fadeStrength=Number(fs.value)/100; draw(); renderEdgeCtl(); };
+  fs.oninput=()=>{ fadeStrength=Number(fs.value)/100; savePrefs(); draw(); renderEdgeCtl(); };
   box.appendChild(fs);
 
   // --- focus dimming: what happens to the REST of the map when you select something.
@@ -1371,7 +1392,7 @@ function renderEdgeCtl(){
   for(const [v,label] of [['neighbours','neighbours only'],['hops','by hop distance']]){
     const o=document.createElement('option'); o.value=v; o.textContent=label; if(v===focusMode) o.selected=true; ds.appendChild(o);
   }
-  ds.onchange=()=>{ focusMode=ds.value; draw(); renderEdgeCtl(); };
+  ds.onchange=()=>{ focusMode=ds.value; savePrefs(); draw(); renderEdgeCtl(); };
   box.appendChild(ds);
   const dn=document.createElement('div');
   dn.style.cssText='margin-top:4px;color:var(--faint);font-size:10px;line-height:1.35';
@@ -1412,7 +1433,7 @@ function renderHopLadder(box){
       const v=Math.max(0, Math.min(1, (ev.clientX-b.left)/b.width));
       r.set(Math.round(v*100)/100);
       fill.style.width=(100*r.get())+'%'; num.textContent=r.get().toFixed(2);
-      draw();
+      savePrefs(); draw();
     };
     track.addEventListener('pointerdown', ev=>{ track.setPointerCapture(ev.pointerId); setFrom(ev); });
     track.addEventListener('pointermove', ev=>{ if(track.hasPointerCapture(ev.pointerId)) setFrom(ev); });
@@ -1426,7 +1447,7 @@ function renderHopLadder(box){
   const rst=document.createElement('button');
   rst.textContent='reset';
   rst.style.cssText='font-size:10px;padding:2px 7px;border-radius:5px;background:var(--surface-3);color:var(--dim);border:1px solid var(--line-2);cursor:pointer';
-  rst.onclick=()=>{ HOP_LADDER=HOP_LADDER_DEFAULT.slice(); HOP_NONE=HOP_NONE_DEFAULT; draw(); renderEdgeCtl(); };
+  rst.onclick=()=>{ HOP_LADDER=HOP_LADDER_DEFAULT.slice(); HOP_NONE=HOP_NONE_DEFAULT; savePrefs(); draw(); renderEdgeCtl(); };
   foot.appendChild(key); foot.appendChild(rst);
   wrap.appendChild(foot);
   box.appendChild(wrap);
@@ -1604,7 +1625,7 @@ function pollStatus(){
 }
 if(SERVED) pollStatus();
 
-loadScenes(); renderScenes(); renderEdgeCtl();
+loadPrefs(); loadScenes(); renderScenes(); renderEdgeCtl();
 function dropUI(){
   let el=document.getElementById('dropzone');
   if(!el){ el=document.createElement('div'); el.id='dropzone';
