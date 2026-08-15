@@ -67,7 +67,7 @@ describe("hop-distance dimming", () => {
     expect(h.get("C")).toBe(2);
   });
 
-  it("leaves disconnected nodes out of the map entirely (they take the floor alpha)", () => {
+  it("leaves disconnected nodes out of the map entirely (they take HOP_NONE, not the ramp floor)", () => {
     const n = mk("A", "B", "Z");
     const s = sandbox();
     s.setEdges([{ a: n.A!, b: n.B! }]);
@@ -102,5 +102,40 @@ describe("hop-distance dimming", () => {
     s.select(n.A!);
     s.tick(); s.tick(); s.tick();
     expect(s.computeCount()).toBe(1);
+  });
+});
+
+describe("the hop→opacity ladder", () => {
+  // Pinned because the exact values are a design decision argued from perception data, not an implementation
+  // detail: the jump from hop 1 to hop 2 skips the 0.25–1.00 interference band in one step rather than ramping
+  // through it, and "unreachable" sits below the band entirely because it means DISCONNECTED, not far.
+  const f = new Function(
+    `${TPL.match(/const HOP_NONE[^\n]*\n/)![0]}${TPL.match(/const BG_LO[^\n]*\n/)![0]}` +
+      `${TPL.match(/function hopAlpha\(h\)\{[\s\S]*?\n\}/)![0]}; return hopAlpha;`,
+  )() as (h: number | undefined) => number;
+
+  it("puts unreachable nodes below the backgrounded band", () => {
+    expect(f(undefined)).toBeCloseTo(0.02, 5);
+    expect(f(undefined)).toBeLessThan(f(5)); // fainter than the farthest REACHABLE node
+  });
+
+  it("keeps the selection and its direct neighbours fully present", () => {
+    expect(f(0)).toBe(1);
+    expect(f(1)).toBe(1);
+  });
+
+  it("skips the 0.25–1.00 interference band in one step", () => {
+    // The load-bearing property. Two labs found 0.25 through 1.00 perceptually flat, so any value landing
+    // there costs contrast and buys nothing. Nothing the function returns may fall inside it.
+    for (const h of [0, 1, 2, 3, 4, 5, 9, undefined]) {
+      const a = f(h);
+      expect(a === 1 || a < 0.25).toBe(true);
+    }
+    expect(f(1) - f(2)).toBeCloseTo(0.8, 5); // the jump, stated
+  });
+
+  it("is monotonically non-increasing in hop count", () => {
+    const seq = [0, 1, 2, 3, 4, 5, 6, 10].map(f);
+    for (let i = 1; i < seq.length; i++) expect(seq[i]!).toBeLessThanOrEqual(seq[i - 1]!);
   });
 });

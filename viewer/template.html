@@ -469,8 +469,13 @@ function computeHops(){
 // Harrison et al. and Aboelsaadat & Balakrishnan both found the interference curve is flat — so hop 1 would
 // LOOK dimmed and read as undimmed. Instead the hop index shifts a parameter, and that parameter is mapped
 // through a function whose range is the band that actually carries signal.
+// UNREACHABLE is not "very far", it is "not connected at all", so it does not belong at the bottom of a
+// distance ramp. It gets its own constant below the backgrounded band: present enough to remain hit-testable
+// (nodeAt() tests radius, never alpha, so it is still clickable and hoverable) and faint enough to read as
+// absent rather than as the far end of the neighbourhood.
+const HOP_NONE = 0.02;
 function hopAlpha(h){
-  if(h===undefined || h===null) return BG_LO;     // unreachable: the floor, still present, still clickable
+  if(h===undefined || h===null) return HOP_NONE;
   if(h <= 1) return 1;                            // the node and what it touches stay fully present
   const t = Math.min(1, (h-2)/3);                 // hop 2 -> 0.20, hop 5+ -> 0.10, all inside the usable band
   return BG_HI - (BG_HI-BG_LO)*t;
