@@ -1,0 +1,66 @@
+# .guard/config.toml — corner-cutting guard, tessera opt-in (2026-08-16, Brian's directive after the
+# historian shipped with its loop untested and crashed on its first live question).
+#
+# Seam mapping is DIRECTORY-scoped. Tessera's tests live centrally in test/, so companions are named
+# from the repo root. The invariant the diff tier enforces: a source change in a seam dir with NO
+# companion-test change in the same commit is a hard block.
+schema = 1
+repo_slug = "tessera"
+
+[git]
+protected_branch = "main"
+working_branch_glob = "viewer/*"
+
+# --- SEAMS: where a silent defect corrupts data or publishes falsehood ---
+[[seam]]
+dir = "src/store"                       # identity, dedup, mutation log — the durable substrate
+tests = ["test/edges-and-traversal.test.ts", "test/dedup-noisy-embedder.test.ts", "test/layout-store.test.ts"]
+requires = []
+
+[[seam]]
+dir = "src/extract"                     # the extraction contract; PROMPT_VERSION discipline
+tests = ["test/extract-prompt-version.test.ts", "test/extract-pending.test.ts"]
+requires = []
+
+[[seam]]
+dir = "src/resolve"                     # Layer-1 identity views — wrong merges corrupt every consumer
+tests = ["test/resolve-view.test.ts"]
+requires = []
+
+[[seam]]
+dir = "src/ask"                         # the grounding contract — historian's mouth
+tests = ["test/ask.test.ts", "test/e10-quote-verify.test.ts"]
+requires = []
+
+[[seam]]
+dir = "src/serve"                       # the write surface (PUT /layout, ingest drops)
+tests = ["test/serve-server.test.ts"]
+requires = []
+
+# --- WATCH: owes tests, miss warns ---
+[[watch]]
+dir = "src/ingest"
+tests = ["test/ingest-connect.test.ts", "test/corpus-ingest.test.ts", "test/chicken-and-egg.test.ts"]
+
+[[watch]]
+dir = "scripts"                          # harnesses and the historian — the class that shipped untested
+tests = ["test/dedup-e7-harness.test.ts", "test/dedup-e7-trials.test.ts"]
+
+[[watch]]
+dir = "viewer"
+tests = ["test/viewer-minimap-refresh.test.ts", "test/viewer-layout-guards.test.ts"]
+
+untested_dirs = ["docs"]
+
+[runner]
+default = "exec"
+timeout_seconds = 900
+
+[capabilities]
+ollama = "curl -sf http://localhost:11434/api/tags"
+
+[coverage]
+enabled = false
+
+[judge]
+enabled = false

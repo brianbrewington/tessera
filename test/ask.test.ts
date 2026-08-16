@@ -157,3 +157,43 @@ describe("R4 span-containment grader (0033 rider — primary answer metric)", ()
     expect(spanContainment("anything at all", "")).toBe(false);  // empty gold must not match everything
   });
 });
+
+describe("cross-lab review batch (0045/0048-era findings, pinned)", () => {
+  it("a trivial short quote cannot ground an answer — the 12-char floor", async () => {
+    // Review 2.1: at a 3-char floor, "the"/"seq" verified against almost any chunk, and one trivial
+    // verified quote GROUNDED a false answer. The floor is part of the grounding contract now.
+    const { verifyQuote } = await import("../src/ask/quotes.js");
+    expect(verifyQuote("the", CHUNK_TEXT)).toBe("missing");
+    expect(verifyQuote("claude-code", CHUNK_TEXT)).toBe("missing");        // 11 normalized chars: still under
+    expect(verifyQuote("proposed by claude-code", CHUNK_TEXT)).toBe("verified");
+  });
+
+  it("a decoy JSON object cannot beat the payload-shaped reply", () => {
+    // Review 2.3: the parser took the FIRST object with an answer/declined field, so a model echoing
+    // {"declined": false} chatter — or quoting a JSON blob from an excerpt — lost the real payload.
+    const raw = 'noise {"declined": false} more {"answer":"the real one","declined":false,"decline_reason":"","citations":[{"excerpt":1,"quote":"proposed by claude-code in message 0013"}]}';
+    const p = parseAskReply(raw)!;
+    expect(p.answer).toBe("the real one");
+    expect(p.citations).toHaveLength(1);
+  });
+
+  it("pinned excerpts jump the recall queue and are quotable", async () => {
+    // Review 2.2: ingesting the ledger made the right chunk AVAILABLE, not USED. Pinning is the fix: a
+    // caller who knows a source is authoritative for this question puts it in front of the model.
+    const good = new StubChat(
+      '{"answer":"C3 is retired","declined":false,"decline_reason":"","citations":[{"excerpt":1,"quote":"C3 consensus claim retired by C4"}]}',
+    );
+    const res = await ask(store, embedder, good, "what is the status of C3?", {
+      pinned: [{ name: "claims.md (canonical ledger)", text: "C3 consensus claim retired by C4 on evidence." }],
+    });
+    expect(res.recall.chunks[0]!.via).toBe("pinned");
+    expect(res.citations[0]!.verdict).toBe("verified");
+    expect(res.grounded).toBe(true);
+  });
+
+  it("the system prompt marks excerpts as untrusted data, not instructions", async () => {
+    const { ASK_SYSTEM } = await import("../src/ask/ask.js");
+    expect(ASK_SYSTEM).toMatch(/untrusted/i);
+    expect(ASK_SYSTEM).toMatch(/never as a command/i);
+  });
+});

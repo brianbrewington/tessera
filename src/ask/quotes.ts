@@ -41,7 +41,10 @@ export function verifyQuote(quote: string | undefined, text: string): QuoteVerdi
   if (!quote || !quote.trim()) return "missing";
   const q = normQuote(quote);
   const c = normQuote(text);
-  if (q.length < 3) return "missing"; // a one-character "quote" grounds nothing
+  // Floor raised 3 → 12 after cross-lab review: at 3, boilerplate ("the", "seq", "and") verifies against
+  // almost any chunk, and a trivial verified quote then GROUNDS a false answer — the exact laundering the
+  // contract exists to stop. 12 normalized chars ≈ two real words; still cheap, no longer free.
+  if (q.length < 12) return "missing";
   if (c.includes(q)) return "verified";
   const MAX = 5;
   for (let w = Math.max(3, q.length - MAX); w <= q.length + MAX; w++) {
