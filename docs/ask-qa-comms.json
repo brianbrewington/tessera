@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "description": "R3 QA set over the agent-comms conversation graph. Authored 2026-08-16 per the design agreed in channel messages 0024/0025: gold structure authored WITH each question; 15 answerable + 5 floor. Every gold_seq was verified by grep before freezing, and every floor question was verified ABSENT by grep — the first candidate floor question (scout/archers) turned out answerable, which is why verification is part of authoring. n=20 is a smoke test, not a benchmark: nothing tunes against it.",
+    "corpus": "graphs/comms (messages 0001-0031)",
+    "frozen": "2026-08-16, before any scored run"
+  },
+  "items": [
+    { "id": "Q01", "floor": false, "question": "Who proposed the decision queue mechanism?", "gold_answers": ["claude-code"], "gold_seqs": ["0013", "0021", "0026", "0027"] },
+    { "id": "Q02", "floor": false, "question": "What was the floor relation-rate delta between the two Q2 wordings in the E7-W experiment?", "gold_answers": ["0.000", "zero", "0"], "gold_seqs": ["0005"] },
+    { "id": "Q03", "floor": false, "question": "Which model was the grounded skeptic in the original M1 measurement?", "gold_answers": ["llama4:scout", "scout"], "gold_seqs": ["0006", "0010", "0013"] },
+    { "id": "Q04", "floor": false, "question": "How many union-stratum edges was the consensus bullshit number based on?", "gold_answers": ["13", "n=13"], "gold_seqs": ["0010", "0011", "0013", "0014"] },
+    { "id": "Q05", "floor": false, "question": "What verdict did both cheap skeptics give the archers to skip-thought vectors edge?", "gold_answers": ["CONFABULATED"], "gold_seqs": ["0017"] },
+    { "id": "Q06", "floor": false, "question": "What quote fidelity was measured in the E10 pilot after the parser was fixed?", "gold_answers": ["0.574", "57.4%"], "gold_seqs": ["0020"] },
+    { "id": "Q07", "floor": false, "question": "Which agent maintains the channel's protocol file and frontend?", "gold_answers": ["claude-code"], "gold_seqs": ["0030"] },
+    { "id": "Q08", "floor": false, "question": "What score did gemma3:12b return on all 252 analogies under absolute scoring?", "gold_answers": ["2.00", "2.0", "STRUCTURAL_DEPTH = 2.00"], "gold_seqs": ["0031"] },
+    { "id": "Q09", "floor": false, "question": "What decision id approved building tessera ask R1 through R3?", "gold_answers": ["D1"], "gold_seqs": ["0026", "0027"] },
+    { "id": "Q10", "floor": false, "question": "How long did the two-skeptic consensus rerun take?", "gold_answers": ["10.8 minutes", "10.8 min"], "gold_seqs": ["0017"] },
+    { "id": "Q11", "floor": false, "question": "On what port is the ingested conversation graph served?", "gold_answers": ["7778"], "gold_seqs": ["0026", "0029"] },
+    { "id": "Q12", "floor": false, "question": "Which two models served as the cheap skeptics in the B1 rerun?", "gold_answers": ["mistral-small and phi4", "mistral-small, phi4"], "gold_seqs": ["0013", "0017"] },
+    { "id": "Q13", "floor": false, "question": "What was Arm A's median seconds per chunk in the E10 pilot?", "gold_answers": ["17.7s", "17.7 seconds", "17.7"], "gold_seqs": ["0020"] },
+    { "id": "Q14", "floor": false, "question": "What is the current status of the claim that extraction consensus at 3 or more of 5 temperatures yields about zero percent bullshit?", "gold_answers": ["retired"], "gold_seqs": ["0010", "0013", "0017"], "claim": { "id": "C3", "must_reflect_status": "retired" } },
+    { "id": "Q15", "floor": false, "question": "What instrument does analogy-maker use instead of absolute scoring?", "gold_answers": ["contrastive ranking", "ranking into tiers", "contrastive relatedness"], "gold_seqs": ["0031"] },
+    { "id": "F01", "floor": true, "question": "What GPU does the tessera machine have?", "gold_answers": [], "gold_seqs": [] },
+    { "id": "F02", "floor": true, "question": "What is Brian's favorite color?", "gold_answers": [], "gold_seqs": [] },
+    { "id": "F03", "floor": true, "question": "How much does a Cursor Pro subscription cost per month?", "gold_answers": [], "gold_seqs": [] },
+    { "id": "F04", "floor": true, "question": "What company does Brian work for?", "gold_answers": [], "gold_seqs": [] },
+    { "id": "F05", "floor": true, "question": "When is the Cape Town event Brian plans to attend?", "gold_answers": [], "gold_seqs": [] }
+  ]
+}

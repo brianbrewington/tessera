@@ -29,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const graphDir = (name: string): string => join(HERE, "..", "graphs", name);
 
 function usage(): never {
-  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--rechunk] [--no-recursive]\n  tessera ingest-session <name> <log.jsonl...>  [--user <name>]\n  tessera extract <name> [--retry-failed] [--force]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]");
+  console.log("usage:\n  tessera graph create <name> | graph list\n  tessera ingest <name> <path...>  (files or dirs; recursive)  [--dry-run] [--rechunk] [--no-recursive]\n  tessera ingest-session <name> <log.jsonl...>  [--user <name>]\n  tessera extract <name> [--retry-failed] [--force]   (the LLM half — run after ingest)\n  tessera view <name>\n  tessera scenes import <name> <scenes.json>\n  tessera serve <name> [--port 7777]\n  tessera report <name>\n  tessera connect <name> [--commit] [--floor 0.75] [--k 6] [--cap 50]\n  tessera paths <name> <A> <B> [--hops 3] [--topk 5]\n  tessera common <name> <A> <B> [C ...] [--hops 2] [--topk 12]\n  tessera ask <name> \"<question>\" [--model qwen2.5:14b] [--json]");
   process.exit(1);
 }
 
@@ -384,6 +384,40 @@ async function main(): Promise<void> {
       if (!args[0]) usage();
       const { pathsCli } = await import("./intersect.js");
       pathsCli(args);
+      break;
+    }
+    case "ask": {
+      // R2 of the tessera-ask ladder (channel decision D1): grounded QA under the cite-or-decline contract.
+      // Needs a LIVE embedder (the query must land in the same space as the stored vectors) and a chat model.
+      const name = args[0] ?? usage();
+      const question = args[1] ?? usage();
+      const asJson = args.includes("--json");
+      const mi = args.indexOf("--model");
+      const model = mi >= 0 ? args[mi + 1] : undefined;
+      const db = join(graphDir(name), "graph.db");
+      if (!existsSync(db)) { console.error(`no graph db at ${db} — create/ingest it first`); process.exit(1); }
+      const { ask } = await import("../src/ask/ask.js");
+      // Graph.open wires the HOUSE embedder (TESSERA_EMBED_MODEL, default nomic-embed-text) — the model the
+      // stored vectors were embedded with. A bare `new OllamaEmbedder()` here once defaulted to a model that
+      // wasn't even installed; had it been, queries would have run in the WRONG SPACE and recall would have
+      // silently returned garbage. The embedder is part of the instrument.
+      const graph = Graph.open(name);
+      try {
+        const res = await ask(graph.store, graph.embedder, new OllamaChat(), question, { model });
+        if (asJson) { console.log(JSON.stringify(res, null, 1)); break; }
+        if (res.declined) {
+          console.log(`DECLINED: ${res.decline_reason || "(no reason given)"}`);
+        } else {
+          console.log(res.answer);
+          console.log();
+          for (const c of res.citations) {
+            const mark = c.verdict === "verified" ? "\u2713" : `\u2717 ${c.verdict}`;
+            console.log(`  [${mark}] excerpt ${c.excerpt} (${c.chunk_name ?? "?"}): "${c.quote.slice(0, 100)}"`);
+          }
+          console.log(res.grounded ? "\ngrounded: every citation verified verbatim" : "\nNOT FULLY GROUNDED \u2014 treat with suspicion");
+        }
+        console.log(`\n(recall: ${res.recall.chunks.length} chunks via ${res.recall.entities.length} entities \u00b7 tuning frozen: k=${res.recall.tuning.k_vector})`);
+      } finally { graph.close(); }
       break;
     }
     case "common": {

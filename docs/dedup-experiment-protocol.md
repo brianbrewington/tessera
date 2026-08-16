@@ -684,3 +684,54 @@ has a second datapoint behind it.
 is not the registered 210-trial run and no bar is being called on it. What it does establish is that
 **"bigger model, better answer" is not safe to assume here**, which was registered as the outcome that would
 most change the ingest design.
+
+---
+
+## E10 — span-grounded extraction, and the small-model ladder that rides on it. Pre-registered 2026-08-16, before any run.
+
+*This is Phase A1 of the converged plan agreed with the `embeddings_experiments` session
+(`~/agent_to_agent_comms/messages/0009` and `0011`, approved by Brian in `0012`). It replaces multi-run
+consensus as the DEFAULT cheap gate, on the strength of two measurements: E7/E7-W (an LLM asked to relate a
+pair invents a relation nearly always, so ungated generation cannot be trusted) and the Mercer forensics
+(consensus's published 0.0% rests on n=13/0 events, upper bound ~23%, with a shared-prior confound). Span
+grounding attacks the same confabulation class for near-zero compute: a relation must carry its evidence.*
+
+**Question 1 (E10 proper).** Does requiring a VERBATIM supporting quote per relation — verified mechanically
+against the chunk at parse time — kill confabulated relations without degrading extraction quality?
+
+**Question 2 (the E8 ladder, folded in).** Brian, verbatim: *"I am genuinely curious if small models can do a
+decent job of node extraction and if it's worth it."* The same harness answers it: arms are MODEL × PROMPT,
+so quote-fidelity per model size falls out of the same runs. Registered small ladder: qwen2.5:3b, qwen2.5:7b,
+llama3.2:3b, gemma3:4b (pulled 2026-08-16), against the qwen2.5:14b incumbent.
+
+**Arms.** Per model: **A** = incumbent `EXTRACTION_SYSTEM`; **A′** = identical, fresh run (churn floor, E4's
+spine — every A-vs-S delta is read in units of A-vs-A′); **S** = A plus a required `quote` field per
+relation: a verbatim snippet copied from the chunk that asserts the relationship. Temperature 0.4 (the
+fixture's regime), identical across arms. No graph is written; PROMPT_VERSION is not bumped; sidecars only.
+
+**Quote verification (frozen).** Normalize whitespace and case ONLY (no punctuation stripping — that
+over-matches); require the normalized quote as a substring of the normalized chunk. Near-misses (edit
+distance ≤ 5 after normalization) are counted separately as diagnostics, not survivals. An empty or missing
+quote is a kill, counted as its own category.
+
+**Metrics, per arm.** Parse-failure rate; entities/chunk; relations emitted; relations surviving the quote
+check; **quote-fidelity rate** (relations whose quote verifies ÷ relations emitted — the "can this model
+quote at all" number, and the ladder's headline); template-reason rate (the banned-phrase list); median and
+p90 s/chunk.
+
+**Decision rules (frozen).**
+- **SAFE**: Arm S's parse-failure and entities/chunk deltas within 1.5× the A-vs-A′ churn (E4's bar, reused).
+- **ACTIVE**: quote check kills ≥ 5% of emitted relations. A gate that kills nothing is decoration.
+- **GROUNDED**: on an audited sample of ≥ 20 killed relations, ≥ 70% are judged actually-ungrounded rather
+  than paraphrase failures of true relations. (Kill-rate alone cannot distinguish "killed a confabulation"
+  from "killed a truth the model paraphrased"; this is the check that keeps us honest about which.)
+- **Ship** = SAFE ∧ ACTIVE ∧ GROUNDED, behind a PROMPT_VERSION bump.
+- **Small model VIABLE** = SAFE (vs its own A′) ∧ quote-fidelity within 10 points of the incumbent's.
+  **WORTH IT** = VIABLE ∧ faster than the incumbent by more than 2× the incumbent's timing spread.
+- **Pilot first** (20 chunks, incumbent only, arms A and S, declared non-scoring) to validate mechanics —
+  the E7 pilot caught a leading prompt and a stratum collapse before the scored run; same discipline here.
+
+**What would falsify the approach.** Quote-fidelity so low even at 14B that most TRUE relations die
+(paraphrase-heavy corpora would show this); or a kill-rate near zero (the extractor was already grounded and
+the gate is dead weight); or small models producing verbatim quotes for relations the quote does not actually
+assert — quoting is not grounding, and the audit sample is what catches the difference.
