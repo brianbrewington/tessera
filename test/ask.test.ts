@@ -143,3 +143,17 @@ describe("R2 flag-miscompliance normalization (registered from the first R3 run)
     expect(p!.declined).toBe(false);
   });
 });
+
+describe("R4 span-containment grader (0033 rider — primary answer metric)", () => {
+  it("credits a sentence answer containing the gold fact where EM would not", async () => {
+    const { spanContainment, exactMatch } = await import("../src/ask/graders.js");
+    expect(exactMatch("fidelity 0.574", "0.574")).toBe(false);   // the metric-fit gap, pinned
+    expect(spanContainment("fidelity 0.574", "0.574")).toBe(true);
+    expect(spanContainment("The ingested conversation graph is served on port 7778.", "7778")).toBe(true);
+  });
+  it("does not credit an answer missing the gold, and never credits empty gold", async () => {
+    const { spanContainment } = await import("../src/ask/graders.js");
+    expect(spanContainment("the port is 7777", "7778")).toBe(false);
+    expect(spanContainment("anything at all", "")).toBe(false);  // empty gold must not match everything
+  });
+});

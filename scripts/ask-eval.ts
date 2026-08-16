@@ -14,6 +14,7 @@
  * membership by string, staleness against claims.md as gold, decline by flag. No LLM judges anything.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { Graph } from "../src/graph.js";
 import { OllamaChat } from "../src/llm.js";
@@ -76,11 +77,24 @@ const report = {
   n: grades.length,
   recall_tuning_frozen: RECALL_TUNING,
   ask_system_prompt: ASK_SYSTEM,
+  /**
+   * "Frozen" made VERIFIABLE, not asserted — analogy-maker's rider (channel 0035), from its §6b scar where a
+   * prompt template silently differed between arms and poisoned a comparison twice. Every rung record
+   * carries content hashes of the frozen surfaces; when the embedder experiment later fires on its trigger,
+   * these make it a matched comparison instead of archaeology.
+   */
+  frozen_surfaces: {
+    ask_system_sha256: createHash("sha256").update(ASK_SYSTEM).digest("hex"),
+    recall_tuning_sha256: createHash("sha256").update(JSON.stringify(RECALL_TUNING)).digest("hex"),
+    qa_set_sha256: createHash("sha256").update(readFileSync(qaPath)).digest("hex"),
+    embedder: { model: (graph.embedder as { model?: string }).model ?? "unknown", dim: graph.embedder.dim ?? 768 },
+  },
   // THE SPLIT — retrieval first, answering second, never blended
   retrieval: {
     recall_at_k: rate(answerable.map((g) => g.recall_hit === true)),
   },
   answering: {
+    span_containment: rate(answerable.map((g) => g.span)),   // PRIMARY (0033 rider)
     em: rate(answerable.map((g) => g.em)),
     f1_mean: answerable.length ? answerable.reduce((a, g) => a + g.f1, 0) / answerable.length : null,
     grounded_rate: rate(answerable.map((g) => g.grounded)),
@@ -98,6 +112,6 @@ const report = {
 
 writeFileSync(outPath, JSON.stringify(report, null, 1));
 console.log(`\n\nretrieval  recall@k ${report.retrieval.recall_at_k}`);
-console.log(`answering  em ${report.answering.em}  f1 ${report.answering.f1_mean?.toFixed(3)}  grounded ${report.answering.grounded_rate}  citations-correct ${report.answering.citation_correct_rate}  answered ${report.answering.answered_rate}  staleness ${report.answering.staleness}`);
+console.log(`answering  span ${report.answering.span_containment}  em ${report.answering.em}  f1 ${report.answering.f1_mean?.toFixed(3)}  grounded ${report.answering.grounded_rate}  citations-correct ${report.answering.citation_correct_rate}  answered ${report.answering.answered_rate}  staleness ${report.answering.staleness}`);
 console.log(`floor      declined ${report.floor_control.decline_rate} of ${report.floor_control.n}`);
 console.log(`wrote ${outPath}`);

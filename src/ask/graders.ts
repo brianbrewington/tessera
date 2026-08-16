@@ -17,6 +17,18 @@ export function normalizeAnswer(s: string): string {
   return noArticles.split(/\s+/).filter(Boolean).join(" ");
 }
 
+/**
+ * R4's PRIMARY answer metric (spec rider from channel message 0033): gold span ⊆ normalized answer.
+ * EM assumes short factoid answers and scores "fidelity 0.574" vs gold "0.574" as a miss; under the
+ * cite-or-decline contract answers are sentences, and what matters is that the gold fact appears in them.
+ * Deterministic, directionless about verbosity, reported alongside EM/F1 rather than replacing them.
+ */
+export function spanContainment(prediction: string, groundTruth: string): boolean {
+  const p = normalizeAnswer(prediction);
+  const g = normalizeAnswer(groundTruth);
+  return g.length > 0 && p.includes(g);
+}
+
 export function exactMatch(prediction: string, groundTruth: string): boolean {
   return normalizeAnswer(prediction) === normalizeAnswer(groundTruth);
 }
@@ -66,6 +78,8 @@ export interface QaGrade {
   decline_correct: boolean;
   em: boolean;
   f1: number;
+  /** primary answer metric: any gold answer contained in the normalized answer */
+  span: boolean;
   /** every citation's chunk belongs to a gold seq (vacuously false when no citations) */
   citation_correct: boolean;
   /** answer mentions the claim's current status when the item demands it (string check, claims.md is gold) */
@@ -91,6 +105,7 @@ export function gradeItem(item: QaItem, res: AskLike, claimStatusInLedger?: stri
   const declineCorrect = item.floor ? res.declined : !res.declined;
 
   const em = !item.floor && !res.declined && item.gold_answers.some((g) => exactMatch(res.answer, g));
+  const span = !item.floor && !res.declined && item.gold_answers.some((g) => spanContainment(res.answer, g));
   const f1 = item.floor || res.declined ? 0 : Math.max(0, ...item.gold_answers.map((g) => f1Score(res.answer, g)));
 
   const citationCorrect =
@@ -114,6 +129,7 @@ export function gradeItem(item: QaItem, res: AskLike, claimStatusInLedger?: stri
     decline_correct: declineCorrect,
     em,
     f1,
+    span,
     citation_correct: citationCorrect,
     staleness_correct: stalenessCorrect,
     recall_hit: recallHit,

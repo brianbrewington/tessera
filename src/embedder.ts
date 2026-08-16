@@ -78,7 +78,7 @@ export class NoisyEmbedder implements Embedder {
 export class OllamaEmbedder implements Embedder {
   constructor(
     readonly dim = 768,
-    private model = "embeddinggemma",
+    readonly model = "embeddinggemma",
     private host = "http://127.0.0.1:11434",
   ) {}
   async embed(text: string): Promise<Float32Array> {
