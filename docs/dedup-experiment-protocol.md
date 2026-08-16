@@ -735,3 +735,54 @@ p90 s/chunk.
 (paraphrase-heavy corpora would show this); or a kill-rate near zero (the extractor was already grounded and
 the gate is dead weight); or small models producing verbatim quotes for relations the quote does not actually
 assert — quoting is not grounding, and the audit sample is what catches the difference.
+
+---
+
+## E11 — write-time known-node injection vs read-side resolution. Pre-registered 2026-08-16, before any run.
+
+*Design converged on the agent channel (0050 fork → 0051 claude-code → 0052 analogy-maker), all conditions
+accepted. The moderator's observation that seeded it: post-ingest, tessera attempts NO merge softer than
+exact norm(name)+type — strip-merge is read-side only, and nothing at all handles containment/semantic
+fragmentation. The comms graph is the measured bill: 459 entities, Layer 1 reaches 27 groups, 342
+containment pairs, "consensus"×8.*
+
+**Question.** Does write-time injection of known entity names buy anything ON TOP of read-side resolution —
+and at what conditioning cost? Read-side E7 machinery runs regardless; the experiment prices only the
+increment. A null result is a result.
+
+**Arms, on one frozen chunk set** (the comms messages as of registration; per-chunk is the independent unit;
+frozen surfaces hash-pinned per the 0035 rider):
+- **A** — no injection (control; current production behaviour).
+- **B** — deterministic reuse-only: inject ONLY names whose chunk-surface-form → canonical mapping is
+  deterministic strip normalization (Layer-1 rules). Parse-time normalization, same class as a relation
+  inventory. The 0051 boundary: anything requiring judgment (containment, embedding) stays read-side,
+  because a canonical choice the chunk does not literally contain is a synthesized judgment and the graph
+  would be agreeing with its own earlier decisions.
+- **C** — full known-node injection (all extant entity names offered for reuse).
+
+**Metrics, all frozen now:**
+1. **Fragmentation**: entity count, Layer-1 group count, containment-pair count, fragment-family sizes.
+2. **Unsupported-mention rate**: injected names appearing in relations whose E10 quote check fails —
+   agreement manufactured, caught mechanically. (The E10 gate makes conditioning a measurable kill-rate.)
+3. **Novel-entity suppression**: on chunks known to contain new material, do B/C discover fewer entities
+   absent from the injected list than A? The quiet killer — a graph that stops seeing what it doesn't
+   already contain; no fragmentation metric would show it.
+4. **False-merge rate on a labeled hard-negative set built from THIS corpus's own collisions** (0052's
+   load-bearing addition): E3-the-tessera-experiment vs E3-the-register-experiment, claude-code-the-handle
+   vs Claude-Code-the-product, span-the-metric vs span-the-word. E10 audits PRESENCE, not IDENTITY — this
+   class evades metrics 2 and 3 entirely while destroying evidence of distinctness. Labeled set built and
+   frozen before arms run; scored per arm.
+
+**Storage rule (0052, accepted):** every arm stores the raw observed surface form BESIDE the canonical
+assertion. Fragmentation preserves evidence; assimilation destroys it; an experiment whose injection arms
+write only canonical names cannot even compute metric 4 post hoc. Raw-beside-derived is one column and the
+difference between a reversible experiment and a self-erasing one.
+
+**Scope language (0052, accepted, C8's lesson):** the E10 gate bounds RECRUITMENT (relation-level
+contamination), not ASSIMILATION (identity-level false merges). No result from this experiment may be cited
+as "injection proven safe" beyond the population it measures.
+
+**Decision rule (frozen).** Injection (B or C) earns write-time status only if it beats A on fragmentation
+by a margin that survives per-chunk analysis AND metrics 2-4 come back clean (2: ≤ A's rate; 3: no
+significant suppression; 4: zero false merges on the labeled set). **The default is and remains
+no-injection until metric 4 comes back clean.** Anything less ships read-side resolution alone.
