@@ -345,3 +345,342 @@ the free labels hold. Nothing else has that ratio.
 `src/extract/identity.ts` · `src/connect/connector.ts` · `src/ingest/mapper.ts` · `src/extract/extractor.ts`
 · `docs/clustering-mining-sketch.md` (the form this protocol follows) · the backlog entry "Identity as a
 read-time resolution view (B27)" (the design these experiments gate).
+
+---
+
+# E6–E9, pre-registered 2026-08-16: the ingest overhaul probes
+
+*Registered after E0–E5 and after `docs/dedup-plan.md`. **The goal has widened, in Brian's words:** what this
+teaches "will become the core of the ingest algorithm: a chunk read in should result in (1) entity extraction,
+(2) matching those against the existing corpus with >1 embedding (different blind spots!), (3) edge proposals
+-or- node merge proposals." So these are no longer dedup experiments that happen to touch ingest. They are
+ingest experiments, and dedup is one of their outputs. Same discipline as above: every decision rule below is
+frozen before the scored run, and everything already measured is labelled as such.*
+
+## Two standing decisions this section inherits, and does not re-argue
+
+- **No cosine number merges unattended.** Unchanged.
+- **A positive set built by a string rule can never evaluate a string feature.** This is what the 2026-08-09
+  correction cost, and it is why E6 exists.
+
+## E6 — structural candidate mining. **RUN 2026-08-16.**
+
+**Question.** Do candidate pairs exist that are structurally connected but lexically unrelated — the pairs no
+string rule can reach and no label set currently covers?
+
+**Procedure.** Two channels over `graphs/testgraph/graph.db`, kept separate: chunk co-occurrence
+(`APPEARED_IN`) and shared `RELATED` neighbours. Every pair carries its lexical stratum — `identical`
+(dropped, Layer 1 owns it), `containment`, `token`, `disjoint` — and the strata are never averaged together.
+Zero LLM calls. `scripts/dedup/e6-structural-candidates.ts` → `graphs/testgraph/dedup/e6-candidates.json`.
+
+**Result [measured 2026-08-16].** 11,082 pairs carry a signal, 47 identical pairs dropped to Layer 1.
+By stratum: 116 containment, 450 token, 10,516 disjoint. **The plan's falsifier #1 did not fire.**
+
+| stratum | ≥1 shared chunk | ≥2 | ≥1 shared neighbour | ≥2 |
+|---|---|---|---|---|
+| containment | 74 | 3 | 58 | 1 |
+| token | 431 | 26 | 130 | 3 |
+| disjoint | 8125 | 445 | 3755 | 124 |
+
+**The finding that reshapes the plan, and it was not predicted.** Eyeballing the top of each stratum, the
+`disjoint` population is overwhelmingly **related-but-distinct, not duplicate**: `HYPOTHESIS`/`EVIDENCE`,
+`SUPPORTS`/`REFUTES`, `sqlite-vec`/`WAL`, `Resonator`/`Graph Store`. The duplicate residue lives in
+`containment`: `LlmExtractor`/`Extractor`, `tessera serve`/`serve`, `annotations`/`annotations sidecar` — mixed
+with genuine near-miss negatives (`x`/`vx`, `to_id`/`id`, `Grandmother`/`Mother`), which is what makes it a
+hard set rather than a soft one. **Consequence:** the edge question has more to grade at corpus scale than the
+merge question does, and the plan's ordering (merge first, edges as a by-product) is inverted by the data.
+
+**Also a correction, and it is mine.** A single structural bar of ≥2 across all strata left **four** usable
+containment pairs on this fixture — it would have silently gutted the one stratum where duplicates live. The
+bar is therefore per-stratum and registered here before the scored run: `disjoint` keeps ≥2 (structure is the
+only thing separating it from the floor control), `containment` and `token` use ≥1 (they already carry a
+lexical signal; structure there is corroboration, not the whole case).
+
+## E7 — the merge/edge proposal ladder. **Pilot run; scored run NOT yet run.**
+
+**Question, Brian's.** Given name, inferred type and source context for both ends, (1) "are these nodes the
+same thing?" and (2) if not, "are they related, and if so, how?" — across models of different strength,
+grounded by running Claude Haiku on the same items.
+
+**What is new against E3.** E3 asked same/NONE only and discarded every "no". Question 2 turns a rejection
+into an edge proposal *and* supplies a falsifier E3 lacked: a model that answers "not same" to everything must
+still say what each pair **is**, and a model that is merely refusing cannot.
+
+**What E3 got wrong that this must not repeat.** E3's system prompt said *"Most of the time the correct answer
+is NONE. Prefer NONE whenever you are not sure."* That is a conservatism knob, set arbitrarily by me, along
+which hit-recall and null-abstention trade off directly — which is why E3's verdict says nothing about model
+capability. **The E7 prompt is frozen in the sidecar, states the same/not-same rule in both directions in one
+breath, and expresses no preference for either answer.** A test asserts the banned phrasings are absent
+(`test/dedup-e7-harness.test.ts`).
+
+**Trial set (frozen).** 210 trials, seed recorded, A/B order randomised per trial so position bias is
+measurable:
+
+| stratum | n | what it is |
+|---|---|---|
+| ceiling | 30 | strip-identical pairs whose **raw names differ** (`contentHash`/`content_hash`). Layer 1 resolves these for free. Pure type jitter is excluded: `AGENT`/`AGENT` is the recorded case where Brian judged byte-identical names **not** the same thing, so it is not a ceiling. |
+| containment | 50 | the duplicate residue, with its near-miss negatives |
+| token | 50 | shared token, neither name contains the other |
+| disjoint | 50 | structurally linked, lexically unrelated — the never-measured population |
+| floor | 30 | random pairs, **zero** structural signal, no shared token. E3's decoy discipline: a "same" here is a grab, and this is the one false-positive rate needing no labels and no human. |
+
+**Arms.** gemma3:12b · qwen2.5:14b · phi4 · mistral-small:24b · qwen3-coder:30b · qwen3:32b · llama3.3:70b ·
+claude-haiku-4-5. Local arms via Ollama at temperature 0; the Haiku arm via the `claude` CLI with its system
+prompt replaced and settings, CLAUDE.md and all tools stripped, so the model answers rather than a Claude Code
+session. There is no `ANTHROPIC_API_KEY` on this box and none is introduced: secrets by indirection.
+
+**Standing rules carried in.** No cosines shown to any model (geometry in the prompt is geometry deciding).
+**No confidence field exists in the schema** — every metric is a choice rate. **Parse failures get their own
+counter and are never folded into "no".** JSON is not forced at the decoder on either side, because Ollama can
+force it and the CLI cannot, and forcing it on one arm would confound model strength with decoding mode.
+
+**Metrics.** Per stratum: same-rate, parse failures, relation-rate over *not-same* answers only, distinct
+relation types. Plus the swapped/unswapped same-rate split.
+
+**Decision rules (frozen).**
+- **Merge-proposer grade** = floor same-rate ≤ 2% **and** ceiling same-rate ≥ 90%. Below either bar the model
+  does not propose merges unattended, at any strength.
+- **Edge-proposer grade** = floor relation-rate ≤ 20%. A model that invents a relation for random pairs is a
+  relation generator, not a relation detector, and its edges cannot be trusted anywhere else.
+- **Position bias** ≥ 15 points between swapped and unswapped voids the run and it is reshuffled.
+- **Strength monotonicity is a question, not an assumption.** If the ladder does not order by size, that is
+  the result, and it is the one that most changes the ingest design.
+
+**Ground truth, stated honestly.** Haiku is the **top rung, not the gold standard**. The protocol permits
+verifier-generated labels only after the Layer 4 gate and "only ever audited rather than trusted", so
+agreement-with-Haiku measures ladder position, not correctness. The headline is **Cohen's kappa against Brian
+on a blind subsample, n = 35, fixed in advance** — E0's registered rule was stated on a Wilson upper bound and
+was arithmetically unsatisfiable at n = 15/10, which is the cheapest lesson in this document to reuse.
+
+### E7 pilot [run 2026-08-16, NOT SCORED, and it changed two things]
+
+20 trials (4 per stratum) on gemma3:12b and Haiku, run to validate mechanics before freezing. Declared
+non-scoring in the sidecar so it cannot tune the result.
+
+| arm | parse failures | ceiling same | floor same | floor relation-rate | median |
+|---|---|---|---|---|---|
+| gemma3:12b | 0/20 | 0.75 | **0.00** | **1.00** | 4.2 s |
+| claude-haiku-4-5 | 0/20 | 0.75 | **0.00** | **0.75** | 13.0 s |
+
+**Three things it surfaced, all worth more than the numbers.**
+
+1. **The floor control fires on question 2, hard, and it fires on both arms.** Neither model grabbed a single
+   false merge, exactly reproducing E3's spotless decoy rate — but gemma invented a relation for **4 of 4**
+   random unrelated pairs and Haiku for 3 of 4. gemma's inventions hedge audibly (*"might necessitate"*,
+   *"might reference"*, *"likely provided"*); Haiku's read as grounded and are therefore more dangerous. **An
+   LLM asked "are these related?" will almost always say yes.** The edge-proposer bar above exists because of
+   this, and it is registered before the scored run rather than after seeing it.
+2. **Source context can push a model AWAY from a correct merge.** Haiku's ceiling miss was
+   `recordIngestedSource()` vs `RecordIngestedSource`, and its stated reason was that the two *chunk contexts*
+   discuss different things. The name evidence was overridden by the context evidence. This is E5's question
+   asked from the other side and it is now a registered arm — see E7b.
+3. **One ceiling miss is a genuine sense-split, not a model failure.** gemma refused `harness` (code) vs
+   `HARNESS` (concept) on the grounds that one is a tool and one is an evaluation framework — the same shape
+   as `AGENT`/`AGENT`. So the ceiling is honestly **"agreement with Layer 1"**, not "correctness", and a model
+   disagreeing with Layer 1 there is itself a measurement. Reported under that name.
+
+### E7b — does source context help or hurt? (registered, not run)
+
+Two arms differing by **exactly one ingredient**, per E5's rule: **Arm N** = name + type + description;
+**Arm C** = the same plus the originating chunk text. Same trials, same seed, same models.
+**Decision rule (frozen):** context earns its place iff it raises ceiling same-rate by ≥ 5 points **without**
+raising floor same-rate above 2% or floor relation-rate by more than 5 points. Haiku's pilot miss is the
+hypothesis that motivates it; one datapoint is not a result.
+
+## E8 — can small models extract? (registered, not run)
+
+**Brian's question, verbatim:** *"I am genuinely curious if small models can do a decent job of node
+extraction and if it's worth it."*
+
+**The gap this exposes.** E4 varied the *prompt* on one model (qwen2.5:14b). Nothing has varied the *model*.
+And the installed ladder's smallest rung is 12B, so **as it stands this question cannot be asked** — there is
+no small end. Registered prerequisite: pull genuinely small models (a 1B–7B set) before running, and record
+exactly which.
+
+**Procedure.** E4's harness, unchanged, across the model ladder on the registered 150-chunk stratified
+subsample. Arm A on qwen2.5:14b is the incumbent; A-vs-A' remains the churn floor that every delta is read
+against. Measure: parse-failure rate, entities/chunk, banned-phrase rate, median and p90 seconds per chunk,
+and minted jitter/variant groups.
+
+**Decision rule (frozen).** A small model is **viable** if its parse-failure and entities-per-chunk deltas
+against Arm A sit within 1.5× the A-vs-A' churn. It is **worth it** only if viable **and** its median
+per-chunk time beats Arm A by more than 2× the A-vs-A' timing spread. Faster but not viable is refused —
+that is E4's Arm C verdict reused, and it exists so a speed win cannot be read as a quality win.
+
+## E9 — a second embedder, and it is gated (registered, not run)
+
+Brian wants matching against the corpus with **more than one embedding, "different blind spots!"**. This is
+the one place his stated goal fights a recorded decision, and the fight is worth naming rather than papering
+over.
+
+**What the plan already retracted.** Layer 3 was retracted on 2026-08-15 with multiple embeddings riding
+along, because *"the 'independent route' argument has the same shape as the register claim already retracted,
+and it has not earned a seat on evidence."* E5 measured the related claim directly: All-but-the-Top recovered
+0.185 against name-only's 0.846, so the description defect is a mixing ratio, not a nuisance direction, and no
+subtraction — or second model reading the same text — recovers a signal diluted by volume.
+
+**Why the goal survives anyway.** The retraction is conditional, and its condition is exactly what E6 and E7
+are building: revival is permitted *"only on numbers measured against a label set that does not exist yet, and
+only if agreement beats the best single channel on pairs Layer 1 cannot reach."* E6 produced those pairs; E7
+plus the n=35 audit produces the labels. **So the order is labels first, embeddings second** — and running
+E9 before the labels exist would manufacture another cross-validated 1.000 that means nothing.
+
+**Prerequisite, unglamorous but blocking.** Only `nomic-embed-text` is installed. A second embedder must be
+pulled, and the sidecar must record which — `meta.json` does not, which is why E1's sidecar recorded it
+explicitly and why mixing vectors across embedder eras is registered as invalidating.
+
+**Decision rule (frozen).** A second embedding channel earns a seat iff, on the E7 label set, **agreement
+between the two embedders beats the better single embedder** at zero floor-control admissions. Equal or worse
+means the second model is cost with no signal, and the honest answer is one embedder plus a verifier.
+
+## What would falsify this whole section
+
+- **Every arm fails the floor bar on question 2.** Then edge proposals cannot be generated by asking a model
+  "are these related", at any strength, and the mechanism has to change rather than the prompt.
+- **The ladder does not order by strength.** Then model size is the wrong axis for ingest and something else
+  (prompt, context, channel) is carrying the variance. That would be the most useful negative result here.
+- **The containment stratum turns out to be the whole product.** If merges only ever land where one name
+  contains the other, that is a string rule with a model rubber-stamping it, and the honest move is to say so
+  and ship the string rule.
+
+---
+
+## Review round, 2026-08-16: what the panel changed before anything was scored
+
+*Panel per Brian's standing rule: **Grok 4.6 and Composer 2.5 in parallel, with a Fable-class subagent
+adjudicating disagreements.** Codex was first choice and was unavailable (Cursor Pro usage limit, resets
+2026-09-01). All of the below landed **before** any scored run, which is the only time this is cheap.*
+
+### The finding that cost the most: I repeated E3's mistake in question 2
+
+E7's question 1 was balanced. Question 2 was not. It read *"are they related? If they are, name the relation
+as a short UPPER_SNAKE_CASE type"* — the affirmative branch got a prose instruction and the negative branch
+got only a token in the JSON format template. **That is E3's conservatism knob pointed the other way**, and it
+sits on exactly the axis the two registered edge metrics are defined along.
+
+**Consequence, stated plainly: the E7 pilot's headline is retracted.** "Both arms invented a relation for
+nearly every random floor pair" is not clean evidence of model yes-bias, because it is confounded with my own
+wording. It cannot be decomposed after the fact.
+
+Grok flagged it; **Composer explicitly cleared the prompt**, listing "E3 'prefer NONE' conservatism: removed;
+tests check banned phrases" under *what is not a real problem*. Fable ruled for Grok and diagnosed the miss:
+Composer verified that E3's *literal artifact* was gone rather than reasoning about the *class*. It checked
+the fingerprint, not the shape — and a structural asymmetry contains no banned phrase. **The banned-phrase
+test could never have caught this**, which is why `test/dedup-e7-harness.test.ts` now asserts the both-branches
+*shape* of each question and the comparable weight of each branch, verified against both prior wordings.
+
+The repair itself took two passes. My first rewrite gave the negative branch the vivid clause ("some are
+simply two unconnected things that happen to appear in the same corpus") and the positive branch three words —
+a mild tilt back toward NONE, failing safe (models get failed, not passed) but still not balanced. Q2 now
+mirrors Q1 exactly: one definitional sentence per branch, one instruction sentence per branch.
+
+### E7-W: the wording becomes a measurement rather than an apology
+
+A retraction with nothing in its place is a waste of the mistake. `scripts/dedup/e7b-wording-ab.ts` builds
+**one frozen trial set** and runs each arm twice over the identical pairs, varying nothing but the Q2 string.
+Both wordings are kept in the source for exactly this reason.
+
+*(Note against the temptation to shortcut it: the re-pilot under v2 changed the wording, the structural bar
+and the RNG streams at once, so its delta is uninterpretable. Three variables, one number. The A/B is the
+version that can settle it.)*
+
+**Registered read, frozen before it runs.** Floor relation-rate falls materially v1 → v2: the headline was my
+artifact and stays retracted. It does not move: models really do over-relate, and the finding survives on
+better evidence than it was first published on. Either outcome is worth the GPU minutes.
+
+### Defects fixed, with who found them
+
+| defect | found by | why it was fail-toward-green |
+|---|---|---|
+| A universal refuser passed the edge grade | Grok, Composer | `{"same": false, "relation": "NONE"}` on every trial scores 0% floor relation-rate and reads as "does not hallucinate relations". The edge grade is now a **separation** (disjoint − floor); separating nothing fails. Bars now live in `BARS`/`grade()` in code, not only in this document. |
+| The seed did not identify the trial set | Grok | Floor rejection-sampling consumed a data-dependent number of draws from one shared RNG, so every later stratum shifted with the data. Per-stratum streams; `ORDER BY` on every query. Composer called this "not a correctness bug if the seed is recorded" — Fable ruled for Grok, on the grounds that a recorded seed is *for* rebuilding the set, and this project exists to change the fixture. |
+| `sample()` underfilled silently | Grok, Composer | The ≥2 bar really did leave four containment pairs. A short draw produced a completed-looking run with a gutted headline stratum. It now throws. |
+| The FLOOR filter diverged from `stratumOf` | Grok, Composer | It rejected strip-identical names and shared tokens but not **containment**, so `x`/`vx` and `id`/`to_id` could land in the control that must contain no related pairs. |
+| The FLOOR pool was not deduped | Grok, Composer | One pair could occupy two trial slots in the only label-free control. |
+| `RELATED`-only pairs could miss the candidate file | Grok, Composer | On this fixture all 1239 are covered by co-occurrence, but nothing guaranteed it: a pair joined only by an edge would read as *zero structural signal* and be eligible for the FLOOR, so `SUPPORTS`/`REFUTES` could be scored as random and any model naming their relation charged with inventing edges. |
+| E7's bar then dropped those same pairs | Composer | Minted by E6 with `chunks = neighbours = 0`, and excluded by a bar written per-channel. The bar now admits `related` outright and sums the channels (amended before any scored run: one shared chunk **and** one shared neighbour is two pieces of evidence, and the old form excluded it while admitting two chunks and nothing else). |
+| `score()` missed absent responses | Grok, Composer | A crashed arm looked cleaner than a merely sloppy one, and `n === parsed + parse_failures` did not hold. |
+| A comment promised a control the code never applied | Grok, Composer | "different source documents" was never implemented. |
+| **`PROMPT_VERSION` was not bumped after the rewrite** | **Fable only** | Two materially different prompts under one version string. A future reader comparing the pilot to a scored run *by version* would conclude they used the same prompt. **This corrupts the audit trail itself, which makes it worse than any wrong number in it.** Sidecar filenames now carry the version too. |
+| The header claimed a test that did not exist | **Fable only** | It said the tests "assert the symmetry for both questions". They asserted Q1 only. This file's own standard: a comment promising a control the code does not apply is worse than no comment. |
+| Stream-label reuse *inside* the determinism fix | **Fable only** | `streamFor("floor")` built the floor pool and then shuffled it, restarting the identical sequence — stream reuse inside the fix meant to eliminate stream reuse. Now `"floor:mine"` vs `"floor"`. |
+
+### The hub cutoff: measured, and it is a no-op
+
+Both reviewers flagged E6's `ns.length > 200` skip; Composer called it "a systematic blind spot at exactly the
+high-degree nodes." **Measured on the fixture: RELATED degree is min 1, median 1, p90 3, p99 9, max 35. Zero
+stars skipped, zero pairs dropped.** Composer's severity claim was empirically vacuous and Grok's "fixture
+frequency unverified" was the correct posture. The cutoff stays as future-proofing, but it no longer fails
+silent: `hub_max_related_degree` and `hub_stars_skipped` are in the report, so a future corpus that grows a
+real hub announces itself instead of quietly losing a channel.
+
+**The transferable lesson, and it is about reviews rather than code:** a reviewer reading only a diff will
+assert severity it cannot check. Give the adjudicator the fixture and permission to measure.
+
+### Tests
+
+`test/dedup-lexical.test.ts`, `test/dedup-e7-harness.test.ts` and `test/dedup-e7-trials.test.ts` (433 passing
+overall). Both reviewers ranked "no coverage of the code that decides who gets asked what" as the largest
+hole; `buildTrials` now has integration coverage for determinism, stream independence, underfill, floor
+purity, floor dedup and ceiling composition.
+
+**Every guard here was mutation-proven, and that caught two of my own tests being vacuous** — the parse-failure
+denominator case and the relation-credit case both passed under the mutation they claimed to pin, because I
+had chosen fixtures where the correct and the broken formula give the same answer. Fixed and re-verified. A
+passing test proves nothing until it has been seen to fail.
+
+### E7-W RESULT [ran 2026-08-16]: the wording was not the cause, and the finding survives
+
+50 frozen trials, two arms, both Q2 wordings, 200 calls, zero parse failures. Nothing varied but the string.
+
+| arm | floor relation-rate v1 | v2 | delta |
+|---|---|---|---|
+| gemma3:12b | 1.00 | 1.00 | **0.000** |
+| claude-haiku-4-5 | 0.50 | 0.50 | **0.000** |
+
+Zero delta on every stratum, both arms.
+
+**The instrument was verified before the verdict was believed**, because a wording flag that silently did
+nothing would produce exactly this table. The sidecar records two different Q2 strings; replies are almost
+entirely non-identical (4/50 and 0/50 byte-identical); and the *relation label chosen* changed on 26 and 27 of
+50 trials. So the models unambiguously saw different prompts, and the wording moved **which** relation they
+named while leaving **whether** they named one untouched (same-verdict agreement 50/50 and 49/50).
+
+**Verdict, against the rule registered before the run: the pilot's headline survives.** Models really do
+over-relate; it was not my leading question. The retraction was still the right call at the time — the
+confound was real and could not be decomposed after the fact — but the claim now rests on 200 controlled calls
+instead of 20 confounded ones. **This is why the wording was measured instead of merely apologised for.**
+
+### Two results that fall out of the same run, and both are consequential
+
+**1. The edge question fails its bar on both arms, at every strength tested.**
+
+| arm | disjoint relation-rate | floor relation-rate | separation | edge grade |
+|---|---|---|---|---|
+| gemma3:12b | 1.00 | 1.00 | **0.000** | FAIL |
+| claude-haiku-4-5 | 0.89–1.00 | 0.50 | 0.39–0.50 | FAIL (floor 0.50 > 0.20) |
+
+gemma names a relation for **every** not-same pair it is shown, including pairs drawn at random with no
+structural signal and no lexical overlap: it separates nothing. Haiku is meaningfully better and still
+inventing a relation for half the random pairs. **This fires the section's own falsifier:** asking a model
+"are these related?" does not, on this evidence, generate trustworthy edges at any strength tested — the
+mechanism has to change rather than the prompt. What that means for ingest is that edge proposals need a
+gate the model does not supply, and the floor control is the instrument that measures it.
+
+**2. Strength does not order the merge answers, and the direction is the surprise.**
+
+| arm | ceiling (agreement with Layer 1) | floor same-rate | merge grade |
+|---|---|---|---|
+| gemma3:12b | **0.90** | 0.00 | **PASS** |
+| claude-haiku-4-5 | 0.70 / 0.60 | 0.00 | FAIL (ceiling) |
+
+The 12B local model agrees with Layer 1 more often than Haiku does, and Haiku's misses are *refusals to merge*,
+not grabs — floor same-rate is 0.00 for both, reproducing E3's spotless decoy result on a third and fourth
+model. On the pilot evidence Haiku's refusals were reasoned from **source context** ("Entity B's source context
+discusses migration fidelity with no mention of ingest_sources"), which is E7b's registered question and now
+has a second datapoint behind it.
+
+**Read this cautiously: n = 10 per stratum.** It is four times the first pilot and consistent across it, but it
+is not the registered 210-trial run and no bar is being called on it. What it does establish is that
+**"bigger model, better answer" is not safe to assume here**, which was registered as the outcome that would
+most change the ingest design.
