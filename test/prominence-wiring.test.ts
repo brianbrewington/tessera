@@ -234,7 +234,7 @@ describe("ties share a rank rather than inventing differences (Fable, MEDIUM)", 
 describe("the edge budget must not move nodes (Fable, MEDIUM)", () => {
   it("rebuild(false) skips repositioning entirely", () => {
     const start = TEMPLATE.indexOf("  const complete = NODES.length>0");
-    const end = TEMPLATE.indexOf("computeBounds();", start);
+    const end = TEMPLATE.indexOf("refreshMinimap();", start);
     const src = TEMPLATE.slice(start, end);
     const mk = () => [{ id: "n0", sx: 1, sy: 2, x: 50, y: 60, vx: 7, vy: 8 }];
     let settles = 0;

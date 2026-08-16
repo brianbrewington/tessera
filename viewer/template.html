@@ -343,7 +343,7 @@ function rebuild(reposition){
     if(complete){ for(const n of NODES){ const p=LAYOUT[n.id]; n.x=p[0]; n.y=p[1]; n.vx=0; n.vy=0; } }
     else { for(const n of NODES){ n.x=n.sx; n.y=n.sy; n.vx=0; n.vy=0; } settle(); }
   }
-  computeBounds(); renderMMDots(); buildLegend(); updateCounts();
+  refreshMinimap(); buildLegend(); updateCounts();
 }
 function updateCounts(){
   $('gname').textContent = GRAPH.name || 'graph';
@@ -594,6 +594,11 @@ function renderMMDots(){ mmdx.clearRect(0,0,MMW,MMH);  // node dots are static b
   for(const n of NODES){ const [x,y]=toMM(n.x,n.y); mmdx.fillStyle=colorFor(n); mmdx.globalAlpha=.8; mmdx.beginPath(); mmdx.arc(x,y,n.deg>=10?2:1.2,0,7); mmdx.fill(); }
   mmdx.globalAlpha=1; }
 let lastZ='';
+// THE CACHE HAS A REFRESH, AND MUTATORS MUST CALL IT. mmDots is an offscreen cache and `bounds` is computed
+// once, so any code that moves nodes without calling this leaves the minimap showing the OLD layout while
+// the map shows the new one — which is exactly what happened: rebuild() refreshed, but acceptLayout() and
+// Undo did not, so applying a computed layout (and then saving it) left the minimap frozen in the past.
+function refreshMinimap(){ computeBounds(); renderMMDots(); }
 function drawMinimap(){ mmx.clearRect(0,0,MMW,MMH); mmx.drawImage(mmDots,0,0);
   const [wx0,wy0]=toWorld(0,0), [wx1,wy1]=toWorld(W,H); const [mx0,my0]=toMM(wx0,wy0), [mx1,my1]=toMM(wx1,wy1);
   mmx.fillStyle='rgba(122,162,247,.09)'; mmx.fillRect(mx0,my0,mx1-mx0,my1-my0);
@@ -1400,6 +1405,7 @@ function acceptLayout(){
   if(!layoutIsFinite(pending.t.Y)){ layoutStatus='refused: the run produced unusable coordinates'; pending=null; renderEdgeCtl(); return; }
   pushUndo('before layout (perplexity '+pending.perp+', attraction '+pending.attraction.toFixed(2)+')');
   writeBack(pending.ids, pending.t.Y);
+  refreshMinimap();                // the dots are a cache of positions this line just changed
   appliedIds = pending.ids.slice();
   pending=null;
   recomputeZoomCeiling();          // a new layout means new spacing, and t-SNE's is far tighter
@@ -1688,7 +1694,7 @@ function renderLayoutCtl(box){
   const ub=btn('Undo', ()=>{
     discardLayout();
     const u=undoStack.pop();
-    if(u){ restore(u.pos); layoutStatus='reverted: '+u.label; draw(); }
+    if(u){ restore(u.pos); refreshMinimap(); layoutStatus='reverted: '+u.label; draw(); }
     renderEdgeCtl();
   }, false, undoStack.length===0);
   bar.appendChild(ub);

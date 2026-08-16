@@ -89,7 +89,7 @@ describe("wiring — the viewer's all-or-nothing read path (design §3.4)", () =
   // silently reshuffling everyone's map. No jsdom needed: the branch is pure arithmetic over plain objects.
   function extractBranch(): string {
     const start = TEMPLATE.indexOf("  const complete = NODES.length>0");
-    const end = TEMPLATE.indexOf("computeBounds();", start);
+    const end = TEMPLATE.indexOf("refreshMinimap();", start);
     expect(start).toBeGreaterThan(0);
     return TEMPLATE.slice(start, end);
   }
