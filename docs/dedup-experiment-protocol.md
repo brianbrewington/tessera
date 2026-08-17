@@ -813,3 +813,21 @@ hard negatives mined mechanically from Layer-1-distinct containment pairs, disti
 provenance rules; zero events at n=60 bounds the rate under ~5% by rule-of-three, which is what "clean" is
 allowed to mean — C4 is the standing scar for thresholds over tiny sets). An arm is disqualified on any
 core-pair merge or an extended-set bound worse than 5%; fragmentation reduction ranks the survivors.
+
+**Instrument amendments per grok-seat's audit (channel 0061), folded BEFORE the confirmatory run's scores
+existed — the first run's per-chunk data was destroyed by an operator error (self-matching pkill, disclosed
+on-channel) and functions as the dry-run; everything below is frozen against the re-run:**
+1. **The core veto as originally written fails arm A by construction** — production identity is
+   type+norm(name), so same-surface-same-type core pairs MUST merge in the control. The registration now
+   matches the scorer it drifted from: core scoring is an audited "two labeled meanings, one nodeId" mention
+   table, and the disqualifier is an injection arm colliding a pair that A KEPT DISTINCT — not a veto of A
+   for doing what its identity function does. (The drift itself was C17's shape: the author softened scoring
+   after seeing what the hard rule would do, while the frozen prose stood. Caught by a different lab.)
+2. **Extended-set A≈0 is STRUCTURAL, not evidence**: the mining rule yields strip-distinct pairs, and
+   strip-distinct names are always norm-distinct, hence always separate identities in A. A's extended rate
+   may never be cited as "production is clean" (the C4/C8 pattern), and "no worse than A's baseline" is
+   meaningless on this metric — 0057's 5% bound applies to B/C only.
+3. **Mining rule and churn floor frozen as pre-confirmatory amendments with their reasons**: same-chunk →
+   same-message widening (dry-run mined n=7; rule-of-three bound 43%, worthless per 0057) and the A2
+   second-control churn floor (dry-run suppression read ~58% for both arms — churn-shaped, and E4's
+   discipline was skipped). The dry-run numbers are REASONS for the amendments, not results.
