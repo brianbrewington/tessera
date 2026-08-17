@@ -302,6 +302,28 @@ export class GraphStore {
     return r ? hydrate(r) : null;
   }
 
+  /** Extractor-type -> total strength for every ENTITY node sharing a normalized name (D4 stage-1b
+   *  group lookup). Cross-agent review (Grok/Composer) found the first version's two holes, both
+   *  closed here: the suffix-equality match alone would admit any one-tab non-entity row
+   *  (`source\tfoo` would become a fold target), so rows are also gated on the prefix being a KNOWN
+   *  extractor type — the caller passes the legal set, keeping the store schema-agnostic; and
+   *  strengths are SUMMED per type so the result implements the "majority" its callers reason
+   *  about rather than a strongest-single-row accident. */
+  typeStrengthsByName(normName: string, legalTypes: ReadonlySet<string>): Array<{ extractorType: string; strength: number }> {
+    const rows = this.db
+      .prepare("SELECT text, strength FROM nodes WHERE substr(text, instr(text, char(9)) + 1) = ?")
+      .all(normName) as Array<{ text: string; strength: number }>;
+    const totals = new Map<string, number>();
+    for (const r of rows) {
+      const tab = r.text.indexOf("\t");
+      if (tab <= 0) continue; // no tab / leading tab — not an entity identity
+      const prefix = r.text.slice(0, tab).toUpperCase();
+      if (!legalTypes.has(prefix)) continue; // unknown prefix — not an entity row
+      totals.set(prefix, (totals.get(prefix) ?? 0) + r.strength);
+    }
+    return [...totals].map(([extractorType, strength]) => ({ extractorType, strength }));
+  }
+
   countNodes(): number {
     return (this.db.prepare("SELECT count(*) AS n FROM nodes").get() as { n: number }).n;
   }

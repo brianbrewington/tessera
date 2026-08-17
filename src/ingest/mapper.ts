@@ -10,6 +10,7 @@ import type { Meta, Origin } from "../schema.js";
 import type { Extraction } from "../extract/extractor.js";
 import { toStoreType } from "../extract/typemap.js";
 import { entityIdentity, canonical } from "../extract/identity.js";
+import { foldEntityType } from "./typenorm.js";
 
 const norm = (s: string): string => s.trim().toLowerCase();
 
@@ -33,14 +34,18 @@ export async function mapExtraction(
   for (const e of ex.entities) {
     const key = norm(e.name);
     if (!key) continue;
-    const { type, subtype } = toStoreType(e.type);
+    // D4 stage 1b: a weak-typed mention (OTHER/CODE/PROJECT) of a name the graph already knows under
+    // a strict-majority established type folds to that type BEFORE identity is computed — otherwise
+    // type jitter mints a twin node per type. PERSON<->TECHNOLOGY never auto-folds (see typenorm.ts).
+    const foldedType = foldEntityType(store, e.type, e.name);
+    const { type, subtype } = toStoreType(foldedType);
     const vec = await embedder.embed(`${e.name.trim()}. ${e.description}`.slice(0, 2000)); // embed CONTENT, not identity
     // Always putNode: the store dedups by identity (content_hash of the identity string) and reinforce-merges
     // the richer description each mention. The store's default is identity-only (no cosine near-dup), so similar
     // content never collapses distinct ids (place\tjava vs concept\tjava; source-qualified people). A name that
     // yields two TYPED nodes in one chunk is a homograph — tracked as multiple ids so relations don't miswire.
     const put = await store.putNode(
-      { type, subtype, origin, text: entityIdentity(e.type, e.name), name: e.name.trim(), description: e.description },
+      { type, subtype, origin, text: entityIdentity(foldedType, e.name), name: e.name.trim(), description: e.description },
       meta, vec,
     );
     if (!put.reinforced) entityCount++;

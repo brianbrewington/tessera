@@ -5,6 +5,7 @@
 // can be tested with a canned extraction and the real LLM extractor swaps in for live runs.
 import { z } from "zod";
 import type { Chat } from "../llm.js";
+import { isJunkSurface } from "./junkfilter.js";
 
 export const EntityType = z.enum([
   "PERSON", "ORGANIZATION", "PLACE", "PROJECT", "TECHNOLOGY", "CODE", "FILE",
@@ -101,7 +102,7 @@ In descriptions, use third person and name subjects explicitly (never "this docu
  * whole corpus on the next drop. The pinned test supplies the "can't forget"; the constant keeps the
  * "when" a deliberate decision.
  */
-export const PROMPT_VERSION = "1";
+export const PROMPT_VERSION = "2"; // v2: D4 stage-1a junk filter changes parse output
 
 const norm = (s: string): string => s.trim().toLowerCase();
 
@@ -155,7 +156,10 @@ export function parseExtraction(raw: string): ExtractResult {
   }
   obj ??= fallback;
   if (!obj) return { extraction: { entities: [], relations: [] }, parsed: false };
-  const entities = salvage(obj.entities, Entity);
+  // D4 stage 1a: drop junk-SHAPED surfaces (relative-path prefixes, template placeholders, heading
+  // leftovers) before anything downstream sees them; relations referencing a dropped entity die with
+  // it via the existing endpoint filter below. See src/extract/junkfilter.ts for the rule's bounds.
+  const entities = salvage(obj.entities, Entity).filter((e) => !isJunkSurface(e.name));
   // Keep only relations whose endpoints were actually extracted (drop hallucinated dangling edges). Match on
   // normalized names so a relation citing "de doorns" survives against entity "De Doorns" (the mapper norms too).
   const names = new Set(entities.map((e) => norm(e.name)));
