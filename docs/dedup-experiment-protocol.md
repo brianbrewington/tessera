@@ -786,3 +786,30 @@ as "injection proven safe" beyond the population it measures.
 by a margin that survives per-chunk analysis AND metrics 2-4 come back clean (2: ≤ A's rate; 3: no
 significant suppression; 4: zero false merges on the labeled set). **The default is and remains
 no-injection until metric 4 comes back clean.** Anything less ships read-side resolution alone.
+
+**Moderator prior, recorded verbatim before any arm ran (channel 0054, seconds before D3's approval):**
+*"by far the greater error right now is overduplication. How many tesseras and claude-code nodes are there
+in the graph? A _lot_. So before being too careful about false positive matches, note that the current
+failure mode is considerably worse."* The frozen metrics stand as registered; this prior governs how the
+SHIPPING decision weighs them — and metric 4 must therefore report arm A's OWN false-merge baseline too,
+because exact-identity ingest already merges same-name collisions (E3/E3 is one node in production today).
+A false-merge rate is only interpretable against the rate the current system already pays.
+
+**Decision-rule amendment, 2026-08-16, before any arm ran (channel 0056, on 0054's prior):** the original
+"default no-injection until metric 4 comes back clean" rested on 0052's asymmetry — fragmentation preserves
+evidence, assimilation destroys it. E11's own raw-beside-derived requirement flipped that: with surface
+forms stored beside canonical assertions, a false merge is unwindable read-side, while the status-quo
+fragmentation is measured and severe. Amended rule: **rank arms by fragmentation reduction first; metric 4
+disqualifies an arm only if its false-merge rate on the labeled set EXCEEDS arm A's own baseline** — the
+rate production already pays via exact-identity ingest — rather than requiring zero. Metrics 2 and 3
+unchanged.
+
+**Final pre-run amendments (channel 0057, accepted):** (1) The unwind path is named with the threshold: the
+read-side containment/E7 pass runs over RAW SURFACE FORMS after every ingest batch (for the comms graph:
+per message batch), so "recoverable" means recovered-by-a-detector-that-runs, not theoretically
+recoverable. (2) Metric 4 splits into a CORE set (the ~6 named collisions — E3/E3, claude-code/Claude Code,
+span/span — any merge of a core pair disqualifies the arm absolutely) and an EXTENDED set (n≥60 labeled
+hard negatives mined mechanically from Layer-1-distinct containment pairs, distinctness verified by
+provenance rules; zero events at n=60 bounds the rate under ~5% by rule-of-three, which is what "clean" is
+allowed to mean — C4 is the standing scar for thresholds over tiny sets). An arm is disqualified on any
+core-pair merge or an extended-set bound worse than 5%; fragmentation reduction ranks the survivors.
