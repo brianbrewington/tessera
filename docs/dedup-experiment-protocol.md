@@ -834,3 +834,35 @@ on-channel) and functions as the dry-run; everything below is frozen against the
    same-message widening (dry-run mined n=7; rule-of-three bound 43%, worthless per 0057) and the A2
    second-control churn floor (dry-run suppression read ~58% for both arms — churn-shaped, and E4's
    discipline was skipped). The dry-run numbers are REASONS for the amendments, not results.
+
+**Harness amendments per composer-seat's audit (channel 0069 and 0071), folded 2026-08-16 while the
+confirmatory re-run's arm C was still executing. Metrics 3/4 were unscored at fold time; the run log's
+interim fragmentation lines for arms A and B (raw entity/containment counts) had been seen. None of these
+change a decision threshold — they scope what the numbers are allowed to mean:**
+4. **Chunk processing order was load-bearing but never pinned.** The harness orders chunks by
+   `ORDER BY name`, then re-sorts by parsed message handle and label. The scorer now asserts all arms ran
+   the identical ordered chunk list (per-index metrics are unsound otherwise) and records the sort rule
+   plus a sha256 hash of the ordered list in `e11-score.json`, so any future run's ordering is comparable
+   or loudly not.
+5. **Arm B's offer gate structurally excludes short surfaces.** B offers only names with strip-length ≥ 4
+   found in the chunk's strip-text; core-collision surfaces `E3` and `C4` (strip length 2) can never enter
+   B's injection list even when literally present. Ruling: short-surface cores are OUT OF SCOPE for arm B —
+   the B-vs-A increment is uninformative on those two pairs and may not be cited for them. C is unaffected
+   (offers the full list unconditionally).
+6. **Arm C is not a clean "offer everything" arm.** C's injection block instructs "if something this chunk
+   mentions IS one of them, reuse EXACTLY" — an identity judgment placed in the extraction prompt, while
+   the registration parked identity judgment on the read side. C is measured as OFFER-PLUS-SAMENESS-TEST;
+   its deltas may not be read as the effect of context alone.
+7. **Sequential self-conditioning is deployed-dynamics by design.** Each arm conditions on its own graph's
+   growth, so early errors compound into later offers. The arms measure what a deployed pipeline would do,
+   NOT an injection policy evaluated on a fixed trajectory; fragmentation deltas must be stated with that
+   framing.
+8. **A third assimilation class escapes both metrics.** If injection collapses two strip-distinct entities
+   into a single extraction under an offered surface, metric 4 loses its co-extraction witness (the pair is
+   never co-extracted in that arm) and metric 3 sees no missing strip form (the offered surface is present).
+   Merged-wrong singletons are invisible to the instrument; the raw column is extractor output, not a chunk
+   surface inventory. This is a stated limitation of E11's design, disclosed with any citation of its
+   false-merge rates.
+9. **Sidecar write hygiene (non-semantic):** per-arm `writeFileSync` is merge-on-read but not atomic; a
+   mid-arm kill loses the in-flight arm. Fix (tmp+rename) deferred until the running process exits — the
+   harness file is not edited while a run is live.

@@ -12,11 +12,13 @@
  *   made against evidence rather than asserted. Any core merge disqualifies the arm.
  *   EXTENDED: n≥60 hard negatives mined MECHANICALLY with a provenance rule — a containment pair (strip-
  *   distinct, one contains the other) whose two members were co-extracted as separate entities IN THE SAME
- *   CHUNK by arm A. The extractor's own same-breath witness is the distinctness evidence; no human labels,
+ *   MESSAGE by arm A (0061 widening of the original same-chunk rule). The extractor's own same-breath
+ *   witness is the distinctness evidence; no human labels,
  *   no judgment of mine. An arm false-merges the pair if its records map both members to one nodeId.
  *   Zero events at n≥60 bounds the rate under ~5% (rule of three), which is what "clean" is allowed to mean.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stripName } from "./lexical.js";
 
@@ -29,6 +31,21 @@ const arms: Record<string, ChunkRes[]> = Object.fromEntries(
   Object.entries(d.arms as Record<string, { per_chunk: ChunkRes[] }>).map(([k, v]) => [k, v.per_chunk]),
 );
 const A = arms.A!, B = arms.B, C = arms.C, A2 = arms.A2;
+
+// --- alignment guard (composer-seat 0069 #1/#4): every metric below indexes per_chunk[i] across arms.
+// That is only sound if all arms ran the identical ordered chunk set. Assert it, and emit a hash of the
+// ordered chunk-label list so the sidecar's ordering is pinned in the score output (the registration
+// never froze the sort rule; the hash makes any future re-run's ordering comparable or loudly not).
+{
+  const ref = A.map((r) => r.chunk);
+  for (const [name, rows] of Object.entries(arms)) {
+    if (rows.length !== ref.length) throw new Error(`arm ${name}: ${rows.length} chunks vs A's ${ref.length} — per-index metrics would mis-pair`);
+    rows.forEach((r, i) => {
+      if (r.chunk !== ref[i]) throw new Error(`arm ${name}[${i}]: chunk "${r.chunk}" vs A's "${ref[i]}" — ordering differs, per-index metrics unsound`);
+    });
+  }
+}
+const chunkOrderHash = createHash("sha256").update(A.map((r) => r.chunk).join("\n")).digest("hex").slice(0, 16);
 
 // --- metric 3: suppression -------------------------------------------------------------------------------
 function suppression(target: ChunkRes[]): { mean_rate: number | null; chunks_with_novel: number; suppressed_examples: string[] } {
@@ -121,6 +138,9 @@ const excess = (r: { mean_rate: number | null } | null) =>
   r?.mean_rate != null && floor?.mean_rate != null ? +(r.mean_rate - floor.mean_rate).toFixed(4) : null;
 const supB = B ? suppression(B) : null, supC = C ? suppression(C) : null;
 const report = {
+  // Sort rule the harness applies (0069 fold): chunks loaded ORDER BY name, then re-sorted by parsed
+  // message handle + label. Hash of the resulting ordered chunk-label list, asserted identical across arms.
+  chunk_order: { rule: "ORDER BY name, then sort by (message handle, label)", sha256_16: chunkOrderHash, chunks: A.length },
   metric3_suppression: {
     churn_floor_A_vs_A2: floor,
     B: supB, C: supC,
@@ -128,7 +148,7 @@ const report = {
   },
   metric4_core_mention_tables: { A: coreTable("A", A), B: B ? coreTable("B", B) : null, C: C ? coreTable("C", C) : null },
   metric4_extended: {
-    mining_rule: "containment pair co-extracted as SEPARATE entities in one chunk by arm A (the extractor's same-breath witness)",
+    mining_rule: "containment pair co-extracted as SEPARATE entities in the SAME MESSAGE by arm A (0061 widening of the same-chunk rule; the extractor's same-breath witness)",
     n: extendedSet.length,
     set: extendedSet,
     A: extendedFalseMerges(A, extendedSet),

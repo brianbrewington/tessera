@@ -19,7 +19,7 @@
  * semantics are production's (identity = type+norm(name); reinforce on re-mention), not a reimplementation.
  */
 import Database from "better-sqlite3";
-import { writeFileSync, readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { GraphStore } from "../../src/store/graphStore.js";
 import { StubEmbedder } from "../../src/embedder.js";
@@ -193,7 +193,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       per_chunk: results, // raw-beside-derived: every raw surface form is in here
     };
     console.log(`\n  frag ${JSON.stringify(frag)}  rels ${rels.length}  unsupported-mention ${unsupportedMention}`);
-    writeFileSync(outPath, JSON.stringify(out, null, 1));
+    // atomic per-arm persist (composer-seat 0069 #3): a mid-arm kill must not leave half-written JSON
+    writeFileSync(`${outPath}.tmp`, JSON.stringify(out, null, 1));
+    renameSync(`${outPath}.tmp`, outPath);
     store.close();
   }
   console.log(`\nwrote ${outPath} — metrics 3 (suppression) and 4 (false-merge) are computed by e11-score.ts against this sidecar`);
