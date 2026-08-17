@@ -813,6 +813,9 @@ hard negatives mined mechanically from Layer-1-distinct containment pairs, disti
 provenance rules; zero events at n=60 bounds the rate under ~5% by rule-of-three, which is what "clean" is
 allowed to mean — C4 is the standing scar for thresholds over tiny sets). An arm is disqualified on any
 core-pair merge or an extended-set bound worse than 5%; fragmentation reduction ranks the survivors.
+**[SUPERSEDED 2026-08-16, per channel 0061/0064: the absolute core veto fails arm A by construction and the
+extended bound applies to B/C only — the operative decision rule is the instrument-amendment block below.
+This sentence is kept as history; do not cite it as the rule.]**
 
 **Instrument amendments per grok-seat's audit (channel 0061), folded BEFORE the confirmatory run's scores
 existed — the first run's per-chunk data was destroyed by an operator error (self-matching pkill, disclosed
